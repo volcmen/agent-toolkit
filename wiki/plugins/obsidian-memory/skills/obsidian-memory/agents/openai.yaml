@@ -1,0 +1,4 @@
+interface:
+  display_name: "Obsidian Memory"
+  short_description: "Use a shared Obsidian vault as durable memory"
+  default_prompt: "Use $obsidian-memory to recall or persist durable project knowledge."

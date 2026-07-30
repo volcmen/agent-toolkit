@@ -1,0 +1,26 @@
+{
+  "name": "agent-board",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Autonomous Kanban for coding agents: markdown cards, souls/roles, local-first triage, budget-capped dispatch.",
+  "type": "module",
+  "packageManager": "bun@1.3.14",
+  "bin": {
+    "ab": "./bin/ab.ts"
+  },
+  "scripts": {
+    "ab": "bun run bin/ab.ts",
+    "build:ui": "bun run --cwd web build",
+    "test": "bun test",
+    "test:unit": "bun test ./tests/web-project-selection.test.ts",
+    "test:dom": "bun test --preload ./web/.dom-tests/preload.ts ./web/.dom-tests/App.dom.test.tsx",
+    "test:browser": "bun run build:ui && bun test ./tests/dashboard.browser.test.ts",
+    "typecheck": "bunx tsc --noEmit",
+    "check": "bun run build:ui && bunx tsc --noEmit && bun run test:dom && bun test && bun run scripts/check.ts",
+    "eval:routing": "bun run scripts/routing-eval.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "5.9.2"
+  }
+}

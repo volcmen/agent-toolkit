@@ -1,0 +1,82 @@
+[
+  {
+    "query": "ask codex to challenge my position on where idempotency belongs, and make it check the real callers",
+    "should_trigger": true
+  },
+  {
+    "query": "use a genuinely different model to sanity-check this architecture before i commit to touching fifteen call sites",
+    "should_trigger": true
+  },
+  {
+    "query": "shape this as product lead first: which user outcome should the export work target and what is the smallest experiment?",
+    "should_trigger": true
+  },
+  {
+    "query": "codex plan review ~/.claude/plans/online-backfill.md against the actual migration code",
+    "should_trigger": true
+  },
+  {
+    "query": "put codex in charge of the technical slice; claude should write the code and codex should sign off against its own spec",
+    "should_trigger": true
+  },
+  {
+    "query": "get an independent pre-push review of my uncommitted billing diff, not another pass from the same model",
+    "should_trigger": true
+  },
+  {
+    "query": "we've failed twice to fix the deadlock; offer me a different-model second opinion before attempt three",
+    "should_trigger": true
+  },
+  {
+    "query": "attach codex as lead for this branch until i explicitly detach it",
+    "should_trigger": true
+  },
+  {
+    "query": "show the last codex lead result without spending another run",
+    "should_trigger": true
+  },
+  {
+    "query": "red-team this plan for missing wiring and hidden implementation complexity",
+    "should_trigger": true
+  },
+  {
+    "query": "review PR #4412 on github and post inline comments",
+    "should_trigger": false
+  },
+  {
+    "query": "have codex write the entire importer instead of claude",
+    "should_trigger": false
+  },
+  {
+    "query": "the codex cli is not authenticated; install it and log me in",
+    "should_trigger": false
+  },
+  {
+    "query": "what does this regex on validators.ts line 88 match?",
+    "should_trigger": false
+  },
+  {
+    "query": "rename these three imports and run the unit test",
+    "should_trigger": false
+  },
+  {
+    "query": "should the launch button be blue or green? i only care about my personal taste",
+    "should_trigger": false
+  },
+  {
+    "query": "summarize the existing export endpoint from the source",
+    "should_trigger": false
+  },
+  {
+    "query": "my human reviewer says the transaction boundary is wrong; inspect their comment and fix it",
+    "should_trigger": false
+  },
+  {
+    "query": "add logging around this flaky test so i can capture the next failure",
+    "should_trigger": false
+  },
+  {
+    "query": "run the test suite and tell me which tests fail",
+    "should_trigger": false
+  }
+]

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "packages": [
+    {
+      "name": "@googleworkspace/cli",
+      "version": "0.22.5",
+      "binaries": ["gws"]
+    },
+    {
+      "name": "@openhands/agent-canvas",
+      "version": "1.5.2",
+      "binaries": ["agent-canvas"]
+    },
+    {
+      "name": "@tobilu/qmd",
+      "version": "2.5.3",
+      "binaries": ["qmd"]
+    },
+    {
+      "name": "go-ios",
+      "version": "1.2.0",
+      "binaries": ["ios"],
+      "needs_bun_prefix": true,
+      "trust_package": true
+    }
+  ],
+  "trusted_dependencies": [
+    "better-sqlite3",
+    "go-ios",
+    "node-llama-cpp",
+    "tree-sitter-go",
+    "tree-sitter-javascript",
+    "tree-sitter-python",
+    "tree-sitter-rust",
+    "tree-sitter-typescript"
+  ],
+  "allowed_npm_runtime_packages": [
+    "corepack",
+    "npm"
+  ]
+}

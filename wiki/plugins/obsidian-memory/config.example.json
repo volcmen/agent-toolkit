@@ -1,0 +1,22 @@
+{
+  "vault": "/absolute/path/to/Obsidian Vault",
+  "max_context_chars": 7500,
+  "max_hot_chars": 4800,
+  "max_global_tasks": 10,
+  "max_project_summaries": 12,
+  "auto_commit": false,
+  "commit_paths": [
+    "wiki",
+    "projects",
+    "daily",
+    "inbox"
+  ],
+  "commit_message_prefix": "wiki: agent memory",
+  "qmd_enabled": false,
+  "qmd_collections": [
+    "obsidian-wiki",
+    "obsidian-projects",
+    "obsidian-daily"
+  ],
+  "qmd_top_k": 5
+}

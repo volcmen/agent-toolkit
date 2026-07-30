@@ -1,0 +1,32 @@
+{
+  "description": "Load bounded Obsidian context and safely commit configured vault paths.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/obsidian_memory.py\" session-start",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\obsidian_memory.py\" session-start",
+            "timeout": 10,
+            "statusMessage": "Loading Obsidian memory"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/obsidian_memory.py\" stop",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\obsidian_memory.py\" stop",
+            "timeout": 30,
+            "statusMessage": "Saving Obsidian memory"
+          }
+        ]
+      }
+    ]
+  }
+}

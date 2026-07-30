@@ -1,0 +1,34 @@
+{
+  "name": "codex-pair",
+  "version": "1.0.0",
+  "description": "Codex CLI as Claude Code's independent second model: grounded judgment, product shaping, adversarial plan and diff review, and a technical-lead loop where Codex scopes and signs off while Claude implements.",
+  "author": {
+    "name": "David David"
+  },
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "code-review",
+    "second-opinion",
+    "orchestration",
+    "claude-code",
+    "product-management"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Pair",
+    "shortDescription": "Independent product shaping, technical leadership, and review for Claude Code.",
+    "longDescription": "Runs Codex as a persistent per-branch thread in one of five read-only roles: grounded second opinion, product-and-technical shaping, adversarial plan review, technical lead that authors a bounded slice spec and later reviews the diff against it, and adversarial diff review. Claude Code remains the outer loop and sole code author; Codex supplies independent scope, challenge, and sign-off.",
+    "developerName": "David David",
+    "category": "Productivity",
+    "capabilities": [
+      "Read"
+    ],
+    "defaultPrompt": [
+      "Scope the next slice as tech lead, then review my diff against that spec.",
+      "Shape the smallest product slice worth building before we plan implementation.",
+      "Red-team this implementation plan against the actual code.",
+      "Give me a grounded second opinion \u2014 here is my position, attack it."
+    ]
+  }
+}

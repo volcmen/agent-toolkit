@@ -1,0 +1,107 @@
+{
+  "skill_name": "codex-pair",
+  "schema_version": 1,
+  "evals": [
+    {
+      "id": "ask-grounded-disagreement",
+      "mode": "ask",
+      "prompt": "Ask Codex whether retries belong in the queue or client. My current position is queue; I want it attacked against this repo.",
+      "expected": [
+        "dispatches without another consent question",
+        "states Claude's position in the Codex prompt",
+        "uses ask.md and gpt-5.5/high",
+        "distinguishes verified repository evidence from inference"
+      ]
+    },
+    {
+      "id": "shape-product-direction",
+      "mode": "shape",
+      "prompt": "Use Codex as product lead to decide the smallest export improvement worth building. Compare user value, risk, and reversibility before we plan code.",
+      "expected": [
+        "uses shape.md in the background",
+        "does not write implementation code",
+        "separates repository evidence, assumptions, and user-owned decisions",
+        "returns outcome, options, recommendation, validating slice, and success signals"
+      ]
+    },
+    {
+      "id": "plan-red-team",
+      "mode": "plan",
+      "prompt": "Codex-plan review ~/.claude/plans/export-pagination.md against this repository before I present it.",
+      "expected": [
+        "uses plan.md in the background",
+        "checks named files and symbols against the repository",
+        "returns exactly one verdict",
+        "verifies every requested change before revising the plan"
+      ]
+    },
+    {
+      "id": "lead-spec-review-correction",
+      "mode": "lead",
+      "prompt": "Put Codex in technical-lead mode for one cursor-pagination slice. Claude will implement it, then Codex must review against the same spec.",
+      "expected": [
+        "authors one bounded spec without implementation code",
+        "Claude sanity-checks the spec before editing",
+        "review uses the same topic with review.md",
+        "correction rounds retain the saved spec and review phase",
+        "stops after two correction rounds"
+      ]
+    },
+    {
+      "id": "review-dirty-tree",
+      "mode": "review",
+      "prompt": "Have Codex independently review my uncommitted retry changes before I push. Tests pass.",
+      "expected": [
+        "uses review.md in the background",
+        "inspects tracked and untracked changes",
+        "verifies findings at file:line",
+        "does not represent Claude's own findings as Codex findings"
+      ]
+    },
+    {
+      "id": "one-run-consent-not-attachment",
+      "mode": "ask",
+      "prompt": "Ask Codex for a second opinion on this design.",
+      "expected": [
+        "runs once without asking again",
+        "does not create persistent branch attachment"
+      ]
+    },
+    {
+      "id": "explicit-attachment",
+      "mode": "state",
+      "prompt": "Attach Codex as lead for this branch until I detach it.",
+      "expected": [
+        "uses state.sh attach",
+        "does not spend a Codex run merely to change attachment state"
+      ]
+    },
+    {
+      "id": "nonstale-resume-failure",
+      "mode": "lead",
+      "prompt": "Continue the lead review after Codex returns an authentication or quota error.",
+      "expected": [
+        "preserves the existing thread and phase",
+        "does not start a fresh Codex run",
+        "reports the operational failure plainly"
+      ]
+    },
+    {
+      "id": "missing-cli",
+      "mode": "review",
+      "prompt": "Review this diff with Codex when codex is absent from PATH.",
+      "expected": [
+        "reports exit 69",
+        "does not fabricate a verdict or independent review"
+      ]
+    },
+    {
+      "id": "user-preference-boundary",
+      "mode": "none",
+      "prompt": "Should the product launch in blue or green? This is purely my aesthetic preference.",
+      "expected": [
+        "asks the user rather than calling Codex"
+      ]
+    }
+  ]
+}

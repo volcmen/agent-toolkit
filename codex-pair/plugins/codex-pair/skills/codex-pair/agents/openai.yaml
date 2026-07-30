@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Pair"
+  short_description: "Codex product shaper, second opinion, reviewer, and tech lead"
+  default_prompt: "Use $codex-pair to shape the outcome, scope the next technical slice, then review my diff against that spec."

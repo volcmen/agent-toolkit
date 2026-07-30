@@ -1,0 +1,4 @@
+# Skill-eval workspace: hermetic sandboxes (each containing its own git repo and a
+# full copy of the plugin), agent transcripts, and generated benchmarks. Regenerate
+# with `python3 .skill-evals/harness/setup.py`; nothing here belongs in version control.
+.skill-evals/

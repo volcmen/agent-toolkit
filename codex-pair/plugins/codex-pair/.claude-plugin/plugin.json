@@ -1,0 +1,17 @@
+{
+  "name": "codex-pair",
+  "version": "1.0.0",
+  "description": "Codex CLI as Claude Code's independent second model: grounded judgment, product shaping, adversarial plan and diff review, and a technical-lead loop where Codex scopes and signs off while Claude implements.",
+  "author": {
+    "name": "David David"
+  },
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "code-review",
+    "second-opinion",
+    "orchestration",
+    "claude-code",
+    "product-management"
+  ]
+}

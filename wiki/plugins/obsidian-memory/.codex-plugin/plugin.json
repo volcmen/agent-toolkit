@@ -1,0 +1,33 @@
+{
+  "name": "obsidian-memory",
+  "version": "1.0.0",
+  "description": "Shared, bounded Obsidian vault memory for Codex and Claude Code.",
+  "author": {
+    "name": "David David"
+  },
+  "license": "MIT",
+  "keywords": [
+    "obsidian",
+    "memory",
+    "knowledge-base",
+    "claude-code",
+    "codex"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Obsidian Memory",
+    "shortDescription": "Shared durable memory backed by Obsidian.",
+    "longDescription": "Loads a bounded recent-context view from an Obsidian vault and provides a safe workflow for recalling and persisting durable project knowledge.",
+    "developerName": "David David",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Recall relevant context from my Obsidian memory.",
+      "Persist this decision in my Obsidian vault.",
+      "Show the open tasks related to this project."
+    ]
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "$comment": "Single source of truth for the ai-workspace plugin marketplace. Edit this file, then run `python3 scripts/plugins.py sync` to render the per-agent manifests (.claude-plugin/marketplace.json for Claude Code, .agents/plugins/marketplace.json for Codex). Never hand-edit the rendered files: scripts/plugins.py check fails on drift. `renames` lists marketplaces this one supersedes; the installer retires them (and any plugin installed from them) so a rename never leaves a duplicate.",
+  "marketplace": {
+    "name": "ai-workspace",
+    "description": "David's shared AI workspace: cross-agent plugins that work identically in Claude Code and Codex.",
+    "owner": {
+      "name": "David David"
+    }
+  },
+  "plugins": [
+    {
+      "name": "obsidian-memory",
+      "displayName": "Obsidian Memory",
+      "source": "./wiki/plugins/obsidian-memory",
+      "version": "1.0.0",
+      "description": "Shared, bounded Obsidian vault memory for Codex and Claude Code.",
+      "category": "Productivity",
+      "keywords": [
+        "obsidian",
+        "memory",
+        "knowledge-base",
+        "claude-code",
+        "codex"
+      ],
+      "license": "MIT",
+      "codex": {
+        "shortDescription": "Shared durable memory backed by Obsidian.",
+        "longDescription": "Loads a bounded recent-context view from an Obsidian vault and provides a safe workflow for recalling and persisting durable project knowledge.",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "defaultPrompt": [
+          "Recall relevant context from my Obsidian memory.",
+          "Persist this decision in my Obsidian vault.",
+          "Show the open tasks related to this project."
+        ]
+      }
+    },
+    {
+      "name": "agent-board",
+      "displayName": "Agent Board",
+      "source": "./agent-board/plugins/agent-board",
+      "version": "1.0.0",
+      "description": "Autonomous local Kanban for coding agents: markdown cards, souls/roles, local-first triage, budget-capped dispatch, attachable sessions.",
+      "category": "Productivity",
+      "keywords": [
+        "kanban",
+        "orchestration",
+        "autonomous-agents",
+        "claude-code",
+        "codex"
+      ],
+      "license": "MIT",
+      "codex": {
+        "shortDescription": "Turn goals into routed Kanban cards that agents execute unattended.",
+        "longDescription": "Product-manager control of a local agent board: raw ideas are specified, split, and routed to role souls by a cheap local-first triage model; a dispatcher runs codex/claude/local workers under hard budget ceilings; cards are markdown files you can edit by hand.",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "defaultPrompt": [
+          "Put these goals on the board and route them.",
+          "What are my agents working on, and what did the board spend today?",
+          "This card keeps blocking \u2014 re-spec it and re-route it."
+        ]
+      }
+    },
+    {
+      "name": "codex-pair",
+      "displayName": "Codex Pair",
+      "source": "./codex-pair/plugins/codex-pair",
+      "version": "1.0.0",
+      "description": "Codex CLI as Claude Code's independent second model: grounded judgment, product shaping, adversarial plan and diff review, and a technical-lead loop where Codex scopes and signs off while Claude implements.",
+      "category": "Productivity",
+      "keywords": [
+        "codex",
+        "code-review",
+        "second-opinion",
+        "orchestration",
+        "claude-code",
+        "product-management"
+      ],
+      "license": "MIT",
+      "codex": {
+        "shortDescription": "Independent product shaping, technical leadership, and review for Claude Code.",
+        "longDescription": "Runs Codex as a persistent per-branch thread in one of five read-only roles: grounded second opinion, product-and-technical shaping, adversarial plan review, technical lead that authors a bounded slice spec and later reviews the diff against it, and adversarial diff review. Claude Code remains the outer loop and sole code author; Codex supplies independent scope, challenge, and sign-off.",
+        "capabilities": [
+          "Read"
+        ],
+        "defaultPrompt": [
+          "Scope the next slice as tech lead, then review my diff against that spec.",
+          "Shape the smallest product slice worth building before we plan implementation.",
+          "Red-team this implementation plan against the actual code.",
+          "Give me a grounded second opinion \u2014 here is my position, attack it."
+        ]
+      }
+    }
+  ],
+  "renames": {
+    "personal-wiki": "ai-workspace",
+    "agent-board": "ai-workspace"
+  }
+}
