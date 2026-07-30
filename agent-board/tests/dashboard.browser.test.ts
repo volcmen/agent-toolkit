@@ -64,6 +64,15 @@ async function markByText(
 
 async function openDashboard(): Promise<Bun.WebView> {
   const view = new Bun.WebView({ width: 1440, height: 900 });
+  // Linux WebView instances can share one browser profile. Reset cross-test
+  // preferences before the app boots so a project/theme chosen by one test
+  // cannot change the initial board observed by the next test.
+  await view.navigate(server.url);
+  await view.evaluate(`(() => {
+    localStorage.removeItem("ab-project");
+    localStorage.removeItem("ab-theme");
+    return true;
+  })()`);
   await view.navigate(server.url);
   await view.evaluate(`(() => {
     window.__abTestErrors = [];
