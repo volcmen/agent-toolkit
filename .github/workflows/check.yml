@@ -27,4 +27,6 @@ jobs:
       # The rendered manifests must match plugins.json, every catalogued plugin
       # must be well formed, and each project's own suite must pass.
       - run: python3 scripts/plugins.py sync --check
-      - run: python3 scripts/plugins.py check
+      # Bun.WebView drives a real Chrome-family browser for the dashboard suite.
+      # GitHub's Linux runners need a virtual display for those trusted-input flows.
+      - run: xvfb-run -a python3 scripts/plugins.py check
