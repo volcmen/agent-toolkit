@@ -11,6 +11,9 @@ and local agent tools behind one catalog and one validation workflow.
   role souls, local-first triage, budget-capped dispatch, and a web dashboard.
 - [`codex-pair`](codex-pair/): independent Codex judgment, product shaping,
   technical leadership, and review from inside Claude Code.
+- [`shared-agents`](shared-agents/): one provider-native personal controller and
+  specialist-agent system for Claude Code and Codex, including automatic Alan
+  Wake routing for requested human-facing prose.
 - [`bun-global-tools`](bun-global-tools/): exact-pinned Bun global CLI tools,
   lifecycle trust policy, and npm-global drift detection.
 
@@ -30,12 +33,14 @@ codex plugin marketplace add "$PWD" --json
 codex plugin add obsidian-memory@ai-workspace --json
 codex plugin add agent-board@ai-workspace --json
 codex plugin add codex-pair@ai-workspace --json
+codex plugin add shared-agents@ai-workspace --json
 
 # Claude Code
 claude plugin marketplace add "$PWD" --scope user
 claude plugin install obsidian-memory@ai-workspace --scope user
 claude plugin install agent-board@ai-workspace --scope user
 claude plugin install codex-pair@ai-workspace --scope user
+claude plugin install shared-agents@ai-workspace --scope user
 ```
 
 The workspace helper performs the same registration and installation
@@ -44,6 +49,15 @@ idempotently:
 ```bash
 python3 scripts/plugins.py install
 python3 scripts/plugins.py status
+```
+
+The marketplace cannot install Codex custom-agent TOMLs, controller profiles,
+global policies, or shell aliases. Finish the `shared-agents` native wiring and
+verify it from the repository root:
+
+```bash
+python3 shared-agents/scripts/manage.py install
+python3 shared-agents/scripts/manage.py status
 ```
 
 Start a new Claude Code or Codex session after installing so newly added skills
@@ -64,7 +78,10 @@ plugins.json                            ← edit catalog metadata here
 ├── agent-board/plugins/agent-board/
 │   ├── .claude-plugin/plugin.json      ← generated
 │   └── .codex-plugin/plugin.json       ← generated
-└── codex-pair/plugins/codex-pair/
+├── codex-pair/plugins/codex-pair/
+│   ├── .claude-plugin/plugin.json      ← generated
+│   └── .codex-plugin/plugin.json       ← generated
+└── shared-agents/plugins/shared-agents/
     ├── .claude-plugin/plugin.json      ← generated
     └── .codex-plugin/plugin.json       ← generated
 ```

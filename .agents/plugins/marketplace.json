@@ -54,6 +54,22 @@
         "product-management"
       ],
       "license": "MIT"
+    },
+    {
+      "name": "shared-agents",
+      "source": "./shared-agents/plugins/shared-agents",
+      "description": "Provider-native personal controller and specialist agents shared by Claude Code and Codex, with automatic Alan Wake routing for requested human-facing prose.",
+      "version": "1.0.0",
+      "displayName": "Shared Agents",
+      "category": "Productivity",
+      "keywords": [
+        "agents",
+        "orchestration",
+        "writing",
+        "claude-code",
+        "codex"
+      ],
+      "license": "MIT"
     }
   ]
 }

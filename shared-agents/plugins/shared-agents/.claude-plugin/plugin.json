@@ -1,0 +1,16 @@
+{
+  "name": "shared-agents",
+  "version": "1.0.0",
+  "description": "Provider-native personal controller and specialist agents shared by Claude Code and Codex, with automatic Alan Wake routing for requested human-facing prose.",
+  "author": {
+    "name": "David David"
+  },
+  "license": "MIT",
+  "keywords": [
+    "agents",
+    "orchestration",
+    "writing",
+    "claude-code",
+    "codex"
+  ]
+}

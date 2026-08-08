@@ -1,0 +1,96 @@
+{
+  "$comment": "Canonical agent catalog. Edit this file or prompts/*.md, then run `python3 scripts/render.py`. Provider files are generated.",
+  "agents": [
+    {
+      "id": "controller",
+      "description": "Default Fable main-thread technical lead for repository work. Turns rough intent into a grounded outcome, coordinates specialized workers, integrates changes, and delivers verified results. Run as the main agent; never delegate to controller as a subagent.",
+      "prompt": "prompts/controller.md",
+      "claude": {
+        "model": "fable",
+        "effort": "medium"
+      }
+    },
+    {
+      "id": "alan-wake",
+      "description": "Use automatically whenever a workplace or developer-facing prose artifact must be written, rewritten, shortened, polished, summarized, or formatted. Covers Slack, Jira, pull or merge requests, review comments, emails, technical documentation, status updates, release notes, changelogs, decisions, requests, and handoffs. Produces the final draft; never implements code or publishes externally.",
+      "prompt": "prompts/alan-wake.md",
+      "claude": {
+        "model": "sonnet",
+        "effort": "medium",
+        "maxTurns": 8,
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "WebSearch",
+          "WebFetch"
+        ],
+        "disallowedTools": [
+          "Write",
+          "Edit",
+          "NotebookEdit"
+        ]
+      },
+      "codex": {
+        "name": "alan_wake",
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium",
+        "sandbox_mode": "read-only"
+      }
+    },
+    {
+      "id": "repo-explorer",
+      "description": "Use proactively for focused repository research, architecture discovery, file and symbol location, dependency tracing, behavior analysis, and implementation-context gathering. Answers one bounded question and never modifies files.",
+      "prompt": "prompts/repo-explorer.md",
+      "claude": {
+        "model": "sonnet",
+        "effort": "medium",
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "LSP"
+        ],
+        "disallowedTools": [
+          "Write",
+          "Edit",
+          "NotebookEdit"
+        ]
+      },
+      "codex": {
+        "name": "repo_explorer",
+        "model": "gpt-5.6-terra",
+        "model_reasoning_effort": "medium",
+        "sandbox_mode": "read-only"
+      }
+    },
+    {
+      "id": "task-analyst",
+      "description": "Use proactively before planning or implementation when a request is vague, symptom-based, contradictory, technically uncertain, risky, or proposes a solution without establishing the underlying problem. Produces a grounded execution brief and never modifies files.",
+      "prompt": "prompts/task-analyst.md",
+      "claude": {
+        "model": "sonnet",
+        "effort": "high",
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "LSP",
+          "WebSearch",
+          "WebFetch"
+        ],
+        "disallowedTools": [
+          "Write",
+          "Edit",
+          "NotebookEdit"
+        ]
+      },
+      "codex": {
+        "name": "task_analyst",
+        "model": "gpt-5.6-sol",
+        "model_reasoning_effort": "high",
+        "sandbox_mode": "read-only"
+      }
+    }
+  ]
+}

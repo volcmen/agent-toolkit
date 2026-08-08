@@ -276,6 +276,7 @@ PROJECT_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ("wiki", [sys.executable, "scripts/check.py"]),
     ("agent-board", ["bun", "run", "check"]),
     ("codex-pair", ["bash", "scripts/check.sh"]),
+    ("shared-agents", [sys.executable, "scripts/manage.py", "check"]),
 )
 
 

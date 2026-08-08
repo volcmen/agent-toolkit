@@ -95,6 +95,34 @@
           "Give me a grounded second opinion \u2014 here is my position, attack it."
         ]
       }
+    },
+    {
+      "name": "shared-agents",
+      "displayName": "Shared Agents",
+      "source": "./shared-agents/plugins/shared-agents",
+      "version": "1.0.0",
+      "description": "Provider-native personal controller and specialist agents shared by Claude Code and Codex, with automatic Alan Wake routing for requested human-facing prose.",
+      "category": "Productivity",
+      "keywords": [
+        "agents",
+        "orchestration",
+        "writing",
+        "claude-code",
+        "codex"
+      ],
+      "license": "MIT",
+      "codex": {
+        "shortDescription": "Shared controller, analysis, exploration, and writing-agent routing.",
+        "longDescription": "Maintains one canonical prompt catalog and renders provider-native Claude Markdown and Codex TOML agents. Claude runs a Fable controller with Sonnet workers; Codex keeps its configured primary GPT model and uses GPT-5.6 custom workers. Requested Slack, Jira, PR/MR, email, documentation, release-note, status, decision, and handoff prose is automatically drafted by Alan Wake after facts are verified.",
+        "capabilities": [
+          "Read"
+        ],
+        "defaultPrompt": [
+          "Use the shared controller and specialists for this repository task.",
+          "Draft this merge request description through Alan Wake after verifying the diff.",
+          "Have the task analyst normalize this vague bug report before implementation."
+        ]
+      }
     }
   ],
   "renames": {
