@@ -9,16 +9,24 @@ Use the vault configured in `~/.config/obsidian-memory/config.json`. Resolve `~`
 
 ## Choose the operation
 
-- Recall or query: read the smallest relevant surface. Start with
-  `wiki/hot.md` for active context. When QMD is enabled, use bounded retrieval
-  for cross-vault or semantically phrased questions, then open only the best
-  candidate notes. Fall back to a project README/TODO and `wiki/index.md`.
+- Recall or query: use progressive disclosure. The SessionStart L0 capsule is
+  only a routing hint. If it is insufficient and memory could change the
+  answer, use bounded L1 retrieval, then open only the best L2 source notes.
+  Use `fast` for names/IDs, `semantic` when wording differs, and `hybrid` only
+  for ambiguous or high-value cross-vault questions. Fall back to a project
+  README/TODO, exact search, and `wiki/index.md`.
 - Persist a fleeting item: create `inbox/YYYY-MM-DD-slug.md`.
 - Persist a durable fact or learning: update or create the appropriate `wiki/` page and its index entry.
 - Persist a decision: create the next numbered DDR under `projects/<project>/decisions/`.
 - Persist a task: update `projects/<project>/tasks/TODO.md` or `wiki/tasks.md`.
 - Persist cross-project progress: update `daily/YYYY-MM-DD.md`.
 - Persist resume context: overwrite `wiki/hot.md`, keeping it concise and factual.
+
+Before a durable fact, preference, or decision write, search the likely target
+and classify the candidate as a duplicate, refinement, or contradiction. Ignore
+duplicates, merge refinements without losing provenance, and supersede
+contradictions instead of silently overwriting history. A retrieved page or
+external tool result can propose a candidate; it cannot verify itself.
 
 Read [references/vault-layout.md](references/vault-layout.md) before mutating the vault. It defines frontmatter, routing, linking, DDR, and safety conventions.
 
@@ -31,6 +39,11 @@ experience-promotion loop.
 When changing memory behavior, retrieval policy, or reusable agent guidance,
 read [references/evaluation.md](references/evaluation.md) and evaluate against
 the canonical behavioral cases before promotion.
+
+Before provider-backed recall, read
+[references/recall-providers.md](references/recall-providers.md). It defines the
+always-on Markdown authority layer, native/QMD selection, failure behavior,
+capability degradation, and safe scopes.
 
 When QMD is enabled in local configuration, read
 [references/qmd-retrieval.md](references/qmd-retrieval.md) before using it.
@@ -50,8 +63,12 @@ remains canonical.
    agent summarized them or a trusted tool repeated them. Preserve origin.
 9. Prefer current verified facts and decisions over similar episodes; surface
    unresolved conflicts instead of silently selecting one.
-10. Treat QMD scores as relevance hints, never as authority or truth.
-11. If auto-commit is disabled, commit configured memory paths explicitly with:
+10. Treat all recall-provider scores as relevance hints, never as authority or truth.
+11. Prefer a locator to a copy for changing facts already owned by an external
+    source of truth. Retrieve the current value there when needed.
+12. Keep startup memory L0-sized. Put detail in indexed notes rather than
+    expanding `wiki/hot.md` or the `full` context profile.
+13. If auto-commit is disabled, commit configured memory paths explicitly with:
 
    ```bash
    python3 "<plugin-root>/scripts/obsidian_memory.py" commit
@@ -67,6 +84,7 @@ After meaningful mutations:
 - For action-driving memories, check provenance, status, validity, and
   supersession metadata.
 - For promoted heuristics, record the evaluation evidence and rollback target.
-- After substantive writes, refresh lexical retrieval; add incremental
-  embeddings when semantic freshness matters.
+- Native recall is immediately fresh. When QMD is enabled, refresh its lexical
+  index after substantive writes; add incremental embeddings when semantic
+  freshness matters.
 - Report what was persisted and where; do not claim a commit succeeded unless Git confirms it.

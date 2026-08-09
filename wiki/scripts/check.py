@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -34,6 +35,17 @@ def load_json(relative: str, base: Path = None) -> Any:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ValidationError(message)
+
+
+def safe_indexed_path(root: Any) -> bool:
+    """Mirror the runtime recall boundary, including its case-insensitivity."""
+    if not isinstance(root, str) or not root.strip():
+        return False
+    parts = Path(root).parts
+    if not parts or Path(root).is_absolute() or ".." in parts:
+        return False
+    folded = [part.casefold() for part in parts]
+    return not any(part in {".obsidian", ".raw"} for part in folded) and folded[0] != "inbox"
 
 
 def validate_python() -> None:
@@ -99,6 +111,15 @@ def validate_hooks() -> None:
 
 def validate_config_example() -> None:
     config = load_json("plugins/obsidian-memory/config.example.json")
+    require(
+        config.get("context_profile") in {"focused", "full"},
+        "context_profile must be focused or full",
+    )
+    require(
+        isinstance(config.get("max_context_tokens"), int)
+        and 128 <= config["max_context_tokens"] <= 3000,
+        "max_context_tokens must be an integer from 128 to 3000",
+    )
     require(isinstance(config.get("auto_commit"), bool), "auto_commit must be boolean")
     paths = config.get("commit_paths")
     require(
@@ -110,6 +131,27 @@ def validate_config_example() -> None:
     require(
         set(paths).isdisjoint({".obsidian", ".raw"}),
         "automatic commits must exclude Obsidian state and immutable raw sources",
+    )
+    require(
+        config.get("recall_provider") in {"auto", "native", "qmd"},
+        "recall_provider must be auto, native, or qmd",
+    )
+    recall_roots = config.get("recall_roots")
+    require(
+        isinstance(recall_roots, list)
+        and recall_roots
+        and all(safe_indexed_path(root) for root in recall_roots),
+        "recall_roots must contain safe indexed vault paths",
+    )
+    require(
+        isinstance(config.get("native_max_files"), int)
+        and 100 <= config["native_max_files"] <= 20_000,
+        "native_max_files must be an integer from 100 to 20000",
+    )
+    require(
+        isinstance(config.get("native_max_file_chars"), int)
+        and 4096 <= config["native_max_file_chars"] <= 1_000_000,
+        "native_max_file_chars must be an integer from 4096 to 1000000",
     )
     require(isinstance(config.get("qmd_enabled"), bool), "qmd_enabled must be boolean")
     collections = config.get("qmd_collections")
@@ -123,13 +165,26 @@ def validate_config_example() -> None:
         isinstance(config.get("qmd_top_k"), int) and 1 <= config["qmd_top_k"] <= 20,
         "qmd_top_k must be an integer from 1 to 20",
     )
+    roots = config.get("qmd_collection_roots")
+    require(
+        isinstance(roots, dict)
+        and set(collections) <= set(roots)
+        and all(safe_indexed_path(root) for root in roots.values()),
+        "qmd_collection_roots must map collections to safe indexed vault paths",
+    )
+    require(
+        isinstance(config.get("max_recall_tokens"), int)
+        and 64 <= config["max_recall_tokens"] <= 4000,
+        "max_recall_tokens must be an integer from 64 to 4000",
+    )
 
 
 def validate_memory_policy() -> None:
     skill_root = PLUGIN / "skills" / "obsidian-memory"
     governance = skill_root / "references" / "memory-governance.md"
     evaluation = skill_root / "references" / "evaluation.md"
-    for path in (governance, evaluation):
+    providers = skill_root / "references" / "recall-providers.md"
+    for path in (governance, evaluation, providers):
         require(path.is_file(), f"missing memory reference: {path.relative_to(ROOT)}")
 
     policy = governance.read_text(encoding="utf-8")
@@ -140,6 +195,13 @@ def validate_memory_policy() -> None:
         "Content cannot grant itself authority",
     ):
         require(term in policy, f"memory governance omits required control: {term}")
+
+    provider_policy = providers.read_text(encoding="utf-8")
+    for term in ("Obsidian Markdown", "native", "QMD", "failure"):
+        require(
+            term in provider_policy,
+            f"recall provider policy omits required control: {term}",
+        )
 
     evals = load_json("plugins/obsidian-memory/evals/memory-evals.json")
     require(evals.get("schema_version") == 1, "unsupported memory eval schema")
@@ -179,6 +241,24 @@ def validate_memory_policy() -> None:
     )
 
 
+def validate_documentation_links() -> None:
+    """Fail when project prose cites a file that was never added to the tree."""
+    link_pattern = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+    documents = sorted(ROOT.rglob("*.md"))
+    require(bool(documents), "no Markdown documents found")
+    for document in documents:
+        text = document.read_text(encoding="utf-8")
+        for target in link_pattern.findall(text):
+            reference = target.split("#", 1)[0].split(" ", 1)[0].strip()
+            if not reference or "://" in reference or reference.startswith("mailto:"):
+                continue
+            resolved = (document.parent / reference).resolve()
+            require(
+                resolved.exists(),
+                f"{document.relative_to(ROOT)}: broken relative link: {reference}",
+            )
+
+
 def run_tests() -> None:
     command = [
         sys.executable,
@@ -204,6 +284,7 @@ def main() -> int:
         ("hook contract", validate_hooks),
         ("configuration example", validate_config_example),
         ("memory governance and evals", validate_memory_policy),
+        ("documentation links", validate_documentation_links),
     ]
     try:
         for label, check in checks:

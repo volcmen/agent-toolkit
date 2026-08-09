@@ -204,13 +204,19 @@ def configure(vault: Path, auto_commit: bool, replace: bool) -> None:
         print(f"backed up configuration: {saved}")
     payload = {
         "vault": str(resolved),
+        "context_profile": "focused",
         "max_context_chars": 7500,
-        "max_hot_chars": 4800,
+        "max_context_tokens": 420,
+        "max_hot_chars": 900,
         "max_global_tasks": 10,
         "max_project_summaries": 12,
         "auto_commit": auto_commit,
         "commit_paths": ["wiki", "projects", "daily", "inbox"],
         "commit_message_prefix": "wiki: agent memory",
+        "recall_provider": "auto",
+        "recall_roots": ["wiki", "projects", "daily"],
+        "native_max_files": 2000,
+        "native_max_file_chars": 80000,
         "qmd_enabled": False,
         "qmd_collections": [
             "obsidian-wiki",
@@ -218,6 +224,13 @@ def configure(vault: Path, auto_commit: bool, replace: bool) -> None:
             "obsidian-daily",
         ],
         "qmd_top_k": 5,
+        "qmd_collection_roots": {
+            "obsidian-wiki": "wiki",
+            "obsidian-projects": "projects",
+            "obsidian-daily": "daily",
+        },
+        "max_recall_tokens": 900,
+        "recall_snippet_chars": 280,
     }
     atomic_json(CONFIG, payload)
     CONFIG.chmod(0o600)

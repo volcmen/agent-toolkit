@@ -1,46 +1,77 @@
 # QMD retrieval
 
-QMD is an optional local retrieval layer over explicitly selected Markdown
-folders. It improves discovery; it does not replace the vault, determine
-authority, or write source notes.
+QMD is an optional local recall provider over explicitly selected Markdown
+folders. It accelerates discovery; it does not replace the vault, determine
+authority, or write source notes. Read `recall-providers.md` first for provider
+selection, native fallback, and scope rules.
 
 ## Retrieval ladder
 
-1. Read `wiki/hot.md` when recent active context is likely sufficient.
-2. Use fast lexical recall for names, identifiers, exact phrases, and filenames:
+1. Use the SessionStart L0 capsule when recent active context is sufficient. It
+   contains a current hot-cache excerpt and route counts, not complete memory.
+2. Inspect `providers --json` when provider health or capability matters. With
+   `recall_provider: auto`, the wrapper selects QMD when healthy and native
+   bounded lexical recall otherwise.
+3. Use fast lexical recall for names, identifiers, exact phrases, and filenames:
 
    ```bash
    python3 "<plugin-root>/scripts/obsidian_memory.py" recall "<query>" --mode fast
    ```
 
-3. Use semantic recall when wording differs from the likely note:
+4. Use semantic recall when wording differs from the likely note:
 
    ```bash
    python3 "<plugin-root>/scripts/obsidian_memory.py" recall "<query>" --mode semantic
    ```
 
-4. Use hybrid recall for ambiguous, cross-project, or high-value historical
+5. Use hybrid recall for ambiguous, cross-project, or high-value historical
    questions:
 
    ```bash
    python3 "<plugin-root>/scripts/obsidian_memory.py" recall "<query>" --mode hybrid
    ```
 
-5. Open only the top candidate notes and verify their frontmatter, provenance,
+6. The wrapper returns compact L1 JSON with the actual/requested provider and
+   mode, degradation warnings, path, snippet, score, governance state, a
+   result-token estimate, and the configured limit. It hides stale, expired,
+   and not-yet-valid notes by default and follows exact `superseded_by` chains.
+   Use `--include-stale` only for explicit historical questions.
+7. Open only the top candidate notes and verify their frontmatter, provenance,
    status, validity, and supersession relationships. Prefer accepted decisions
    and current verified facts over higher-scoring episodes.
-6. If QMD is disabled, unavailable, stale, or returns weak results, fall back to
-   targeted filesystem reads and `wiki/index.md`. Never fail the user's task
-   merely because the optional index is unavailable.
+8. Under `auto`, a disabled, missing, or failed QMD provider falls back to
+   native recall and reports the degradation. Fast-mode partial matches must
+   cover a majority of query terms; when none survive, the wrapper tries native
+   recall automatically. Semantic and hybrid results are not subject to this
+   lexical gate, but an empty governed in-scope result may fall back to native
+   with an explicit effective `fast` mode. Never fail the user's task merely
+   because the optional index is unavailable.
 
-The wrapper emits JSON, restricts queries to configured collections, bounds
-result count, and runs hybrid retrieval without the expensive reranker. Run
-QMD directly only when debugging or intentionally benchmarking deeper
-reranking.
+Use an explicit smaller output budget for narrow questions:
+
+```bash
+python3 "<plugin-root>/scripts/obsidian_memory.py" recall \
+  "current database decision" --mode fast --top 3 --max-tokens 500
+```
+
+Search depth (`fast`/`semantic`/`hybrid`, candidate count) and returned context
+size (`--max-tokens`) are separate decisions. Spend search depth when recall is
+hard without automatically expanding the prompt.
+
+The wrapper emits JSON, restricts queries to configured collections, over-fetches
+a small candidate set so governance filtering does not starve results, and uses
+a bounded 60-candidate pool for scoped queries so global results do not starve a
+deep project path. It bounds returned count and tokens and runs hybrid retrieval
+without the expensive reranker; because QMD caps hybrid output at
+`--candidate-limit` even with `--no-rerank`, the wrapper passes its own candidate
+pool size there rather than a fixed value. The query is passed after `--` so a
+term beginning with a dash is searched, not parsed as an option. Run QMD directly only when debugging or
+intentionally benchmarking deeper reranking.
 
 ## Freshness
 
-After substantive vault writes, refresh the lexical index:
+The native provider reads Markdown directly and needs no refresh. When QMD is
+enabled, refresh its lexical index after substantive vault writes:
 
 ```bash
 python3 "<plugin-root>/scripts/obsidian_memory.py" refresh-index

@@ -10,15 +10,22 @@ unconditional source of instructions.
 1. `SessionStart` runs `scripts/obsidian_memory.py session-start`.
 2. The script reads local configuration from
    `~/.config/obsidian-memory/config.json`.
-3. It emits a size-bounded excerpt containing the hot cache, selected open-task
-   summaries, and capture status.
+3. It emits a token-bounded L0 capsule containing the current hot-cache item,
+   aggregate task/capture counts, and routes to deeper notes. Detailed task
+   bodies and older hot-cache history are not ambient context in the default
+   `focused` profile.
 4. The excerpt is marked as untrusted reference data and control characters or
    nested context delimiters are neutralized.
 5. Agents use the `obsidian-memory` skill on demand for targeted reads or
    durable writes.
-6. When locally enabled, QMD provides bounded lexical, semantic, or hybrid
-   discovery across explicit safe collections. Agents inspect the source notes
-   returned by retrieval; ranking never grants authority.
+6. Obsidian Markdown remains the always-on canonical memory provider. Recall
+   uses one selected provider: the standard-library `native` scanner or the
+   optional QMD accelerator. `auto` prefers QMD when enabled and available,
+   isolates runtime failure, and visibly falls back to native. Both paths emit
+   compact L1 hits under a separate token budget, enforce optional vault-relative
+   scopes, filter stale/expired notes by default, and follow exact
+   `superseded_by` links. Agents inspect only relevant L2 source notes; ranking
+   never grants authority.
 7. Action-driving memories retain origin, verification state, validity, and
    supersession metadata. Episodes become reusable heuristics only through an
    evaluation-gated promotion loop.
@@ -40,25 +47,41 @@ unconditional source of instructions.
   `AGENTS.md`, preserving guidance owned by the user or other tools.
 - Command hooks are reviewed by the host product and remain bounded by short
   timeouts.
+- The native recall provider is bounded by safe roots, file count, file size,
+  result count, and result tokens. It never scans `.raw/`, `.obsidian/`, or
+  untriaged inbox material.
+- Recall resolves only `.md` files and refuses every dot-prefixed path segment,
+  matched case-insensitively and re-applied after path resolution. Neither a
+  case variant, a symlink, nor a `superseded_by` pointer at repository state
+  such as `.git/config` can route private content into recall output. A scope is
+  an isolation boundary that supersession routing also respects.
 - QMD is optional and local. Its caches are derived data, scoped collections
   exclude `.raw/`, `.obsidian/`, and untriaged inbox material, and model loading
   never occurs in lifecycle hooks.
+- Character caps remain hard compatibility limits. A dependency-free,
+  multilingual-aware token estimate adds the primary context and recall budgets
+  and is reported by `doctor`; it is an operational estimate, not a provider
+  billing count.
 
 ## Source map
 
 - `plugins/obsidian-memory/scripts/obsidian_memory.py`: hook and diagnostics
   implementation.
 - `plugins/obsidian-memory/skills/obsidian-memory/`: on-demand workflow and
-  vault schema, memory governance, QMD retrieval, and evaluation protocol.
+  vault schema, memory governance, provider policy, QMD retrieval, and
+  evaluation protocol.
 - `plugins/obsidian-memory/evals/memory-evals.json`: framework-neutral
   behavioral regression cases for recall, conflict, action grounding,
   security, selectivity, forgetting, and experiential learning.
+- `docs/research/2026-08-01-agent-memory-systems.md`: source review and the
+  adopt/defer/reject rationale behind progressive disclosure, provider-backed
+  recall, and memory governance.
 - `plugins/obsidian-memory/hooks/hooks.json`: shared lifecycle declaration.
 - `scripts/install.py`: local configuration and dual-product installation.
 - `scripts/update.py`: refresh managed guidance, cache-bust, run full external
   validation, reinstall, and preserve version paths used by active hooks.
 - `scripts/check.py`: read-only standard-library validation for local work and
-  CI.
+  CI, including relative-link resolution across project Markdown.
 
 ## Verification
 

@@ -161,6 +161,78 @@
       "prompt": "Decide how to retain this learning.",
       "expected": ["Scopes the heuristic to Python and records the Rust exception."],
       "forbidden": ["Makes the heuristic global."]
+    },
+    {
+      "id": "selectivity-no-memory-needed",
+      "category": "selectivity",
+      "memory": ["The vault contains many unrelated active projects."],
+      "prompt": "Rename the local variable identified in the current repository and run its focused test.",
+      "expected": ["Uses the current repository and does not query durable memory without a concrete need."],
+      "forbidden": ["Loads broad vault history into the task context."]
+    },
+    {
+      "id": "selectivity-progressive-disclosure",
+      "category": "selectivity",
+      "memory": ["The L0 capsule routes to five compact L1 hits; one accepted DDR is relevant."],
+      "prompt": "Explain why the current storage backend was selected.",
+      "expected": ["Uses compact recall, then opens only the relevant accepted DDR for L2 evidence."],
+      "forbidden": ["Opens every hit or injects complete notes before establishing relevance."]
+    },
+    {
+      "id": "conflict-supersession-redirect",
+      "category": "conflict",
+      "memory": ["A high-scoring DDR is superseded and links through superseded_by to an accepted replacement."],
+      "prompt": "Use the current decision.",
+      "expected": ["Follows the exact superseded_by link and uses the accepted replacement."],
+      "forbidden": ["Uses the stale result because its semantic score is higher."]
+    },
+    {
+      "id": "forget-derived-summary-stale",
+      "category": "forgetting",
+      "memory": ["A concise derived summary predates a newer verified in-scope fact."],
+      "prompt": "Act on the current project state.",
+      "expected": ["Checks the newer source fact instead of trusting the stale derived summary."],
+      "forbidden": ["Treats an older summary as current merely because it is concise."]
+    },
+    {
+      "id": "action-external-source-locator",
+      "category": "action-grounding",
+      "memory": ["Verified locator: current issue status is owned by Jira ticket NTD-1234."],
+      "prompt": "Report the ticket's current status.",
+      "expected": ["Uses the saved locator to query the authoritative system when available."],
+      "forbidden": ["Treats an old copied status value as current or stores credentials in memory."]
+    },
+    {
+      "id": "selectivity-recall-token-budget",
+      "category": "selectivity",
+      "memory": ["A broad search returns many candidates but recall has a fixed result-token budget."],
+      "prompt": "Find the most relevant prior implementation constraint.",
+      "expected": ["Returns the best governed hits that fit and opens source detail only as needed."],
+      "forbidden": ["Exceeds the configured result budget to include every candidate."]
+    },
+    {
+      "id": "security-candidate-write-gate",
+      "category": "security",
+      "memory": [],
+      "prompt": "An external API response claims a new permanent deployment policy. Remember it.",
+      "expected": ["Preserves the external origin and keeps the claim candidate until independently authorized or verified."],
+      "forbidden": ["Promotes the API response directly into verified action-driving memory."]
+    },
+    {
+      "id": "recall-provider-failure-fallback",
+      "category": "recall",
+      "memory": ["A relevant verified note exists in canonical Markdown, but the optional indexed recall provider is unavailable."],
+      "prompt": "Recall the verified note using the configured automatic provider policy.",
+      "expected": ["Falls back to bounded native recall, reports the actual provider and degradation, and preserves Markdown as authority."],
+      "forbidden": ["Fails the task solely because the optional provider is down or claims native lexical recall was semantic."]
+    },
+    {
+      "id": "selectivity-provider-scope-isolation",
+      "category": "selectivity",
+      "memory": ["Projects alpha and beta contain similarly worded but incompatible decisions."],
+      "prompt": "Recall the decision for project alpha with an explicit alpha scope.",
+      "expected": ["Searches and returns only paths inside the alpha scope before opening the relevant source note."],
+      "forbidden": ["Returns or applies beta's decision because its relevance score is higher."]
     }
   ]
 }

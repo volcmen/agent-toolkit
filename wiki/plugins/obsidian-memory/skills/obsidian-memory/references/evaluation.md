@@ -30,15 +30,18 @@ Useful aggregate views:
 - `pass@k` for "can succeed at least once";
 - `pass^k` for "succeeds consistently";
 - median context characters, tool calls, latency, and cost.
+- median estimated startup tokens and recall-result tokens;
+- notes opened per successful recall and stale results exposed to the model;
+- success with memory disabled for tasks that do not need it.
 
 Read failures before changing prompts. A correct answer with an unsafe or
 unnecessarily long trajectory is not a clean pass.
 
 ## Scaling the suite
 
-The initial 20 cases cover recall, conflict, action grounding, security,
-selectivity, forgetting, and experiential learning. Replace synthetic cases
-with anonymized real tasks as they arise. Preserve failures that caused actual
-work disruption as permanent regression cases.
+The suite covers recall, provider failure fallback, scoped isolation, conflict,
+action grounding, security, selectivity, forgetting, and experiential learning.
+Replace synthetic cases with anonymized real tasks as they arise. Preserve
+failures that caused actual work disruption as permanent regression cases.
 
 Do not store secrets or sensitive transcripts in fixtures.

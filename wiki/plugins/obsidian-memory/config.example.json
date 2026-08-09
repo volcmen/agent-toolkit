@@ -1,7 +1,9 @@
 {
   "vault": "/absolute/path/to/Obsidian Vault",
+  "context_profile": "focused",
   "max_context_chars": 7500,
-  "max_hot_chars": 4800,
+  "max_context_tokens": 420,
+  "max_hot_chars": 900,
   "max_global_tasks": 10,
   "max_project_summaries": 12,
   "auto_commit": false,
@@ -12,11 +14,26 @@
     "inbox"
   ],
   "commit_message_prefix": "wiki: agent memory",
+  "recall_provider": "auto",
+  "recall_roots": [
+    "wiki",
+    "projects",
+    "daily"
+  ],
+  "native_max_files": 2000,
+  "native_max_file_chars": 80000,
   "qmd_enabled": false,
   "qmd_collections": [
     "obsidian-wiki",
     "obsidian-projects",
     "obsidian-daily"
   ],
-  "qmd_top_k": 5
+  "qmd_top_k": 5,
+  "qmd_collection_roots": {
+    "obsidian-wiki": "wiki",
+    "obsidian-projects": "projects",
+    "obsidian-daily": "daily"
+  },
+  "max_recall_tokens": 900,
+  "recall_snippet_chars": 280
 }

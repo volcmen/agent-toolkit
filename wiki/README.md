@@ -60,32 +60,87 @@ python3 scripts/check.py
 
 It checks Python syntax, manifests, marketplace metadata, the shared hook
 contract, safe configuration defaults, memory-governance invariants, the
-20-case behavioral evaluation schema, and the unit suite using only the Python
-standard library. CI runs the same command.
+behavioral evaluation *schema*, relative documentation links, and the unit suite
+using only the Python standard library. CI runs the same command. The behavioral
+eval cases in `plugins/obsidian-memory/evals/memory-evals.json` are validated for
+shape, never executed; running them is a manual review activity described in
+[the evaluation reference](plugins/obsidian-memory/skills/obsidian-memory/references/evaluation.md).
 
-The plugin deliberately keeps Markdown as the auditable source of truth.
-Action-driving memories carry provenance and validity, while raw episodes must
-pass evaluation before becoming reusable guidance. Optional QMD integration
-adds local BM25, vector, and hybrid discovery over explicitly scoped Markdown
-collections. It is invoked on demand through the shared lifecycle script; no
-QMD server or model work runs in hooks.
+The plugin deliberately keeps Obsidian Markdown as the always-on, auditable
+memory provider. Action-driving memories carry provenance and validity, while
+raw episodes must pass evaluation before becoming reusable guidance. Recall is
+provider-backed: dependency-free `native` lexical search is always available;
+optional QMD adds local BM25, vector, and hybrid discovery. `auto` prefers QMD
+when enabled and available, isolates query failures, and reports its fallback
+to native rather than making memory unavailable. No QMD server or model work
+runs in hooks.
+
+Memory is progressively disclosed:
+
+1. **L0 — session capsule:** the current hot-cache item, aggregate task/capture
+   counts, and routes to deeper memory. The default `focused` profile does not
+   inject task bodies or historical `Prior:` paragraphs.
+2. **L1 — recall hits:** compact snippets, paths, scores, and governance state,
+   bounded by `max_recall_tokens`. Superseded hits follow a bounded,
+   cycle-checked chain to their first current successor; stale, expired, and
+   not-yet-valid notes stay hidden unless `--include-stale` is explicit.
+3. **L2 — source notes:** agents open only relevant Markdown files and verify
+   provenance before acting.
+
+The default provider works without setup. Restrict a query to a known project
+when possible:
+
+```bash
+python3 plugins/obsidian-memory/scripts/obsidian_memory.py recall \
+  "current database decision" --scope projects/acme --mode fast \
+  --max-tokens 600
+```
+
+Inspect the canonical store, provider selection, capabilities, and health:
+
+```bash
+python3 plugins/obsidian-memory/scripts/obsidian_memory.py providers --json
+```
 
 Enable QMD in the local configuration after creating safe collections:
 
 ```json
 {
+  "context_profile": "focused",
+  "max_context_tokens": 420,
+  "recall_provider": "auto",
+  "recall_roots": ["wiki", "projects", "daily"],
   "qmd_enabled": true,
   "qmd_collections": ["obsidian-wiki", "obsidian-projects", "obsidian-daily"],
-  "qmd_top_k": 5
+  "qmd_top_k": 5,
+  "max_recall_tokens": 900
 }
 ```
 
-Then inspect health or refresh the index:
+Then inspect overall health or refresh QMD's derived index:
 
 ```bash
 python3 plugins/obsidian-memory/scripts/obsidian_memory.py doctor
 python3 plugins/obsidian-memory/scripts/obsidian_memory.py refresh-index --embed
 ```
+
+`doctor --json` reports the focused and comparable full-context token
+estimates plus the reduction percentage. The portable estimate uses a
+conservative ASCII/non-ASCII heuristic and has no tokenizer dependency; the
+character limit remains a second hard cap. Recall has its own result budget;
+native scans are additionally bounded by file count and per-file characters.
+Each JSON response names the requested and actual provider/mode, any
+degradation, scope, governance filtering, and scan diagnostics.
+
+The `full` compatibility profile is intentionally opt-in; raise
+`max_context_tokens` explicitly when selecting it because the focused default
+budget otherwise still applies.
+
+See [the 2026-08-01 research review](docs/research/2026-08-01-agent-memory-systems.md)
+for the Hermes Agent provider architecture, Hindsight, OpenViking, and other
+systems that informed the design. Their concepts were adapted to the existing
+local-first Markdown trust model; no external runtime or database became
+canonical.
 
 ## Update
 
