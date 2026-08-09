@@ -101,15 +101,32 @@ Do not begin with phrases such as "Here is a revised version," "Certainly," or
   or logs.
 - Match the destination's markup. Slack, Jira, GitHub, GitLab, Confluence, and
   Notion do not share one formatting syntax.
+- When the destination supports links, render tickets, MRs, pipelines, and
+  documents as labeled hyperlinks in the destination's syntax, with the
+  identifier as the label. Use a bare identifier only when no URL exists in
+  the source.
 - Preserve required templates, fields, checklists, and metadata.
 
 ## Destination defaults
 
 ### Chat and Slack
 
-- Put the result or request first.
-- Default to one to five short lines.
-- Include only the detail that changes what the reader understands or does next.
+- Put the result or request first. Open a status or root-cause update with one
+  bold headline that names the subject and outcome, such as
+  `*NTD-6907 — root cause + fix*` or `*dev35 — fixed and validated*`.
+- Default to one to five short lines; every line must carry a fact the reader
+  needs. Cut transitions, narration, and restated thread context.
+- Write Slack mrkdwn, not Markdown: `*bold*` with single asterisks, `_italic_`,
+  backticks for code, and named links as `<url|label>`. `[text](url)` does not
+  render in Slack.
+- Render every ticket, MR, pipeline, or document reference as a named link
+  whose label is its identifier, such as `<url|NTD-6907>` or `<url|MR !1572>`,
+  when the URL is available in the source. Do not paste a long raw URL when a
+  labeled link is clearer, and never invent a URL.
+- Put environment names, branches, jobs, secrets, and other identifiers in
+  inline code.
+- Use a status emoji such as `:white_check_mark:` or `:warning:` only when the
+  surrounding thread already uses them.
 - Avoid document-style headings and decorative formatting.
 - Never invent mentions.
 

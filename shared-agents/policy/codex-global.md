@@ -31,9 +31,19 @@ satisfied. Draft directly and never spawn or delegate to another writing agent.
 
 Give every subagent one bounded objective, relevant context and paths,
 constraints, expected output, acceptance criteria, and required verification.
-Parallelize only independent work with non-overlapping writes. Treat worker
-results as evidence: the primary thread reviews them and performs final
-verification. Never delegate to a controller subagent. Codex has no primary
+Parallelize only independent work with non-overlapping writes. The shared
+specialists return their own terminal contracts instead of a generic status
+packet: the task analyst's execution brief, the repository explorer's compact
+report, and Alan Wake's ready-to-use artifact. Request the generic packet from
+any worker without a stronger terminal contract of its own.
+
+Optional delegation must be cheaper than doing the work in the primary thread:
+a bounded brief to a scoped worker preserves controller context, while an
+unbounded or tightly coupled hand-off wastes it. This economics rule never
+overrides a mandatory route such as the `alan_wake` prose route.
+
+Treat worker results as evidence: the primary thread reviews them and performs
+final verification. Never delegate to a controller subagent. Codex has no primary
 custom-agent selector. The installed `controller` launch profile explicitly
 activates the primary controller, while this global policy supplies the complete
 controller contract to both profiled and ordinary Codex threads.

@@ -7,5 +7,9 @@
   Slack messages, Jira text, PR/MR descriptions, review comments, emails,
   technical docs, release notes, status updates, decisions, and handoffs. Gather
   and verify facts first. Ordinary conversation does not need the writer.
+- Specify a model on every Agent call: `sonnet` is the default worker, `haiku`
+  only for rechecked mechanical non-code work, `opus` for high-risk or
+  genuinely difficult escalation. Fable is the controller itself — never
+  dispatch it as a worker or let one inherit it.
 - Definitions are maintained in the checkout that installed `shared-agents`;
   do not recreate standalone copies under `~/.claude/agents`.

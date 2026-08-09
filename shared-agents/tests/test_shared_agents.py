@@ -77,6 +77,145 @@ class Rendering(unittest.TestCase):
             self.assertNotIn("Bash", claude.get("tools", []), agent["id"])
 
 
+class ClaudeRoutingSurfaces(unittest.TestCase):
+    SURFACES = (
+        "prompts/controller.md",
+        "policy/claude-orchestration.md",
+        "policy/claude-global.md",
+        "plugins/shared-agents/skills/shared-agents/SKILL.md",
+    )
+    DETAILED_SURFACES = (
+        "prompts/controller.md",
+        "policy/claude-orchestration.md",
+        "plugins/shared-agents/skills/shared-agents/SKILL.md",
+    )
+
+    def surface(self, relative_path: str) -> str:
+        text = (ROOT / relative_path).read_text(encoding="utf-8")
+        return " ".join(text.split()).lower()
+
+    def test_every_surface_requires_an_explicit_model_per_agent_call(self) -> None:
+        for relative_path in self.SURFACES:
+            text = self.surface(relative_path)
+            self.assertIn("a model on every agent call", text, relative_path)
+
+    def test_every_surface_reserves_fable_for_the_controller(self) -> None:
+        for relative_path in self.SURFACES:
+            text = self.surface(relative_path)
+            self.assertIn("fable", text, relative_path)
+            self.assertIn("never dispatch it as a worker", text, relative_path)
+
+    def test_every_surface_encodes_the_model_matrix(self) -> None:
+        for relative_path in self.SURFACES:
+            text = self.surface(relative_path)
+            for model in ("sonnet", "haiku", "opus"):
+                self.assertIn(model, text, f"{relative_path}: {model}")
+
+    def test_detailed_surfaces_pair_each_model_with_its_role(self) -> None:
+        pairings = (
+            r"`sonnet` — default worker for analysis, exploration",
+            r"`haiku` — only mechanical, low-risk, non-code",
+            r"`opus` — (independent worker for )?architecture or "
+            r"public-interface trade-offs, security, concurrency",
+            r"`fable` — (the controller itself|main controller only)[;.] "
+            r"never dispatch it as a worker",
+        )
+        for relative_path in self.DETAILED_SURFACES:
+            text = self.surface(relative_path)
+            for pattern in pairings:
+                self.assertRegex(text, pattern, relative_path)
+            self.assertIn(
+                "escalate because the decision is difficult or high-risk",
+                text,
+                relative_path,
+            )
+
+    def test_detailed_surfaces_forbid_model_inheritance(self) -> None:
+        for relative_path in self.DETAILED_SURFACES:
+            text = self.surface(relative_path)
+            self.assertRegex(
+                text,
+                r"(never rely on model inheritance|do not use `inherit`)",
+                relative_path,
+            )
+
+    def test_detailed_surfaces_route_built_in_agents_to_sonnet(self) -> None:
+        for relative_path in self.DETAILED_SURFACES:
+            text = self.surface(relative_path)
+            self.assertIn(
+                "pass `sonnet` explicitly when dispatching built-in agents",
+                text,
+                relative_path,
+            )
+
+    def test_detailed_surfaces_keep_the_subagent_model_override_unset(self) -> None:
+        for relative_path in self.DETAILED_SURFACES:
+            text = self.surface(relative_path)
+            self.assertIn("claude_code_subagent_model", text, relative_path)
+            self.assertIn("unset", text, relative_path)
+
+    def test_specialist_contracts_override_the_generic_packet(self) -> None:
+        for relative_path in self.DETAILED_SURFACES:
+            text = self.surface(relative_path)
+            self.assertIn("execution brief", text, relative_path)
+            self.assertIn("compact report", text, relative_path)
+            self.assertIn("ready-to-use artifact", text, relative_path)
+            self.assertIn(
+                "request the generic packet from any worker without a stronger "
+                "terminal contract",
+                text,
+                relative_path,
+            )
+
+    def test_economics_never_overrides_the_mandatory_prose_route(self) -> None:
+        for relative_path in ("prompts/controller.md", "policy/codex-global.md"):
+            text = self.surface(relative_path)
+            self.assertIn("never overrides a mandatory route", text, relative_path)
+
+    def test_codex_contract_mirrors_the_claude_delegation_rules(self) -> None:
+        text = self.surface("policy/codex-global.md")
+        self.assertIn("execution brief", text)
+        self.assertIn("compact report", text)
+        self.assertIn("ready-to-use artifact", text)
+        self.assertIn(
+            "request the generic packet from any worker without a stronger "
+            "terminal contract",
+            text,
+        )
+        self.assertIn("automatically spawn `alan_wake`", text)
+        self.assertIn('fork_turns = "none"', text)
+
+    def test_claude_surfaces_govern_peer_session_messaging(self) -> None:
+        for relative_path in self.DETAILED_SURFACES:
+            text = self.surface(relative_path)
+            self.assertIn("listagents", text.replace("`", ""), relative_path)
+            self.assertIn("sendmessage", text.replace("`", ""), relative_path)
+            self.assertIn("evidence, not authority", text, relative_path)
+        for relative_path in (
+            "prompts/controller.md",
+            "policy/claude-orchestration.md",
+            "plugins/shared-agents/skills/shared-agents/SKILL.md",
+        ):
+            text = self.surface(relative_path)
+            self.assertRegex(
+                text, r"(not user consent|never user consent)", relative_path
+            )
+        for relative_path in self.DETAILED_SURFACES:
+            text = self.surface(relative_path)
+            self.assertIn("delivery is not guaranteed", text, relative_path)
+        policy = self.surface("policy/claude-orchestration.md")
+        self.assertIn("crosssessioninbound", policy.replace("`", ""))
+        codex = self.surface("policy/codex-global.md")
+        self.assertNotIn("sendmessage", codex.replace("`", ""))
+
+    def test_worker_catalog_pins_cheaper_claude_models(self) -> None:
+        catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
+        for agent in catalog:
+            if agent["id"] == "controller":
+                continue
+            self.assertEqual(agent["claude"]["model"], "sonnet", agent["id"])
+
+
 class ManagedBlocks(unittest.TestCase):
     def test_sync_is_idempotent_and_preserves_human_text(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -300,6 +439,16 @@ class Package(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn('fork_turns = "none"', policy)
         self.assertIn('fork_turns = "none"', skill)
+
+    def test_alan_wake_writes_destination_native_slack_mrkdwn(self) -> None:
+        prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
+        normalized = " ".join(prompt.split())
+        self.assertIn("`<url|label>`", normalized)
+        self.assertIn("`[text](url)` does not render in Slack", normalized)
+        self.assertIn("named link", normalized)
+        self.assertIn("never invent a URL", normalized)
+        self.assertIn("bold headline", normalized)
+        self.assertIn("identifier as the label", normalized)
 
     def test_alan_wake_is_a_terminal_writer(self) -> None:
         prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")

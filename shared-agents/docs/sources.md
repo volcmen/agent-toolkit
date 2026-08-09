@@ -12,6 +12,10 @@ Design verified on 2026-08-08 against current primary documentation.
   agent schema, routing, and model frontmatter.
 - [Claude Code: model configuration](https://code.claude.com/docs/en/model-config)
   — current Fable, Sonnet, Opus, and Haiku aliases and effort behavior.
+- [Claude Code: cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging)
+  — `ListAgents`/`SendMessage` between local sessions, inbound controls
+  (`crossSessionInbound`, `isolatePeerMachines`), consent boundaries, and
+  plain-text-only delivery (verified 2026-08-09).
 - [Codex: AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
   — global and project instruction discovery and precedence.
 - [Codex: config basics](https://learn.chatgpt.com/docs/config-file/config-basic)
