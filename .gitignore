@@ -26,3 +26,4 @@ node_modules/
 
 # Recoverable local-only material removed from public product paths
 /.local-backup/
+/.worktrees/
