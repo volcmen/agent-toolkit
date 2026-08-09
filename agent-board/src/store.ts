@@ -17,7 +17,6 @@ export type NewCard = {
   root?: string | null;
   skills?: string[];
   workspace?: Card["workspace"];
-  budgetUsd?: number | null;
   maxTurns?: number | null;
   goal?: boolean;
   priority?: number;
@@ -81,7 +80,6 @@ export function cardFromDocument(path: string, text: string): Card {
     invalid.push("workspace must be repo, worktree, or scratch");
   }
   for (const [key, value, options] of [
-    ["budget_usd", data.budget_usd, { min: 0, integer: false }],
     ["max_turns", data.max_turns, { min: 1, integer: true }],
     ["priority", data.priority, { min: -Infinity, integer: false }],
   ] as const) {
@@ -110,7 +108,6 @@ export function cardFromDocument(path: string, text: string): Card {
     handoff: asString(data.handoff),
     skills: asList(data.skills),
     workspace: invalid.length ? "scratch" : asWorkspace(data.workspace),
-    budgetUsd: asNumber(data.budget_usd),
     maxTurns: asNumber(data.max_turns),
     goal: data.goal === true,
     priority: asNumber(data.priority) ?? 0,
@@ -134,7 +131,6 @@ export function documentFromCard(card: Card): string {
     root: card.root,
     skills: card.skills,
     workspace: card.workspace,
-    budget_usd: card.budgetUsd,
     max_turns: card.maxTurns,
     goal: card.goal ? true : null,
     priority: card.priority || null,
@@ -258,7 +254,6 @@ export class Store {
       handoff: null,
       skills: input.skills ?? [],
       workspace: input.workspace ?? "repo",
-      budgetUsd: input.budgetUsd ?? null,
       maxTurns: input.maxTurns ?? null,
       goal: input.goal ?? false,
       priority: input.priority ?? 0,

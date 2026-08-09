@@ -16,14 +16,13 @@ One call, walked down a chain that is cheapest-first:
 
 ```json
 "triageChain": [
-  { "kind": "local", "model": "llama3.2:3b", "maxUsd": 0, "baseUrl": "http://127.0.0.1:11434/v1" },
-  { "kind": "codex", "model": "gpt-5.6-sol", "maxUsd": 0.05 }
+  { "kind": "local", "model": "llama3.2:3b", "baseUrl": "http://127.0.0.1:11434/v1" },
+  { "kind": "codex", "model": "gpt-5.6-sol" }
 ]
 ```
 
 Escalation happens only on: unreachable provider, unparseable JSON, or
-`confidence` below the bar (default 0.6). A provider whose `maxUsd` exceeds the
-remaining budget is *skipped, not attempted*. Codex gets `--output-schema` so the
+`confidence` below the bar (default 0.6). Codex gets `--output-schema` so the
 plan is structurally validated by the CLI; every provider's output also goes
 through a lenient extractor (fences, prose, nested braces) so a small model's
 sloppy formatting does not force a paid retry.

@@ -21,7 +21,7 @@ import { inspectRoles, loadRoles, roster, seedRoles } from "../src/roles.ts";
 import { findPrompt, loadPrompts, render, seedPrompts } from "../src/prompts.ts";
 import { tick } from "../src/dispatcher.ts";
 import { triageCard } from "../src/triage.ts";
-import { effectiveSkills, logPathFor, previewArgv } from "../src/runners.ts";
+import { effectiveSkills, logPathFor, previewArgv, readLogTail } from "../src/runners.ts";
 import { workerPrompt } from "../src/context.ts";
 import { resolveWorkspace } from "../src/workspace.ts";
 import { attach, attachPlan } from "../src/attach.ts";
@@ -33,7 +33,7 @@ import {
   unregisterProject,
 } from "../src/projects.ts";
 import { cardsById } from "../src/dispatcher.ts";
-import * as budget from "../src/budget.ts";
+import * as limits from "../src/limits.ts";
 import { RUNTIMES, STATUSES, type Card, type Runtime, type Status } from "../src/types.ts";
 import {
   finiteNumber,
@@ -227,7 +227,6 @@ async function cmdAdd(positional: string[], flags: Flags): Promise<void> {
     model: str(flags, "model") ?? roleDef?.model ?? null,
     parents,
     workspace: workspace as Card["workspace"],
-    budgetUsd: finiteFlag(flags, "budget", { min: 0 }) ?? roleDef?.budgetUsd ?? null,
     maxTurns: finiteFlag(flags, "max-turns", { min: 1, integer: true }) ?? roleDef?.maxTurns ?? null,
     priority: finiteFlag(flags, "priority") ?? 0,
     goal: bool(flags, "goal"),
@@ -271,9 +270,7 @@ function cmdLs(_positional: string[], flags: Flags): void {
       for (const card of archived) out(cardLine(card));
     }
   }
-  const spentToday = db.spentToday();
-  const config = loadConfig(root);
-  out(`tracked metered spend (${today()} UTC): $${spentToday.toFixed(4)} / $${config.budget.perDayUsd.toFixed(2)} admission cap`);
+  out(`tracked usage (${today()} UTC): $${db.spentToday().toFixed(4)}, ${db.tokensToday()} tokens`);
   db.close();
 }
 
@@ -291,9 +288,7 @@ function cmdShow(positional: string[], flags: Flags): void {
   out(`status:   ${card.status}${card.blockedReason ? `  (${card.blockedReason})` : ""}`);
   out(`role:     ${card.role ?? "-"}    runtime: ${card.runtime ?? "-"}    model: ${card.model ?? "(role default)"}`);
   out(`parents:  ${card.parents.length ? card.parents.join(", ") : "-"}    root: ${card.root ?? "-"}`);
-  out(
-    `spent:    $${db.spentOnCard(card.id).toFixed(4)} of $${budget.cardCeiling(card, loadConfig(root)).toFixed(2)}  (${db.tokensOnCard(card.id)} tokens)`,
-  );
+  out(`usage:    $${db.spentOnCard(card.id).toFixed(4)}, ${db.tokensOnCard(card.id)} tokens`);
   if (card.sessionId) out(`session:  ${card.sessionId}  (ab attach ${shortId(card.id)})`);
   out(`file:     ${card.path}`);
   if (card.handoff) out(`\nhandoff:\n${card.handoff}`);
@@ -334,13 +329,7 @@ async function cmdTriage(positional: string[], flags: Flags): Promise<void> {
       out(`${card.id}: only cards in triage may be triaged`);
       continue;
     }
-    const verdict = budget.check(db, card, config);
-    if (!verdict.allowed) {
-      out(`${card.id}: ${verdict.reason}`);
-      continue;
-    }
     const outcome = await triageCard(store, db, config, roles, card, {
-      remainingUsd: Math.min(verdict.remainingCardUsd, verdict.remainingDayUsd),
       minConfidence: num(flags, "min-confidence") ?? config.triageMinConfidence,
       log: (line) => out(`  ${line}`),
     });
@@ -539,11 +528,6 @@ function cmdSet(positional: string[], flags: Flags): void {
     }
     patch.workspace = workspace as Card["workspace"];
   }
-  const budgetFlag = finiteFlag(flags, "budget", { min: 0 });
-  if (budgetFlag !== undefined) {
-    if (budgetFlag < db.spentOnCard(card.id)) die("--budget cannot be below already-spent amount");
-    patch.budgetUsd = budgetFlag;
-  }
   const maxTurnsFlag = finiteFlag(flags, "max-turns", { min: 1, integer: true });
   if (maxTurnsFlag !== undefined) patch.maxTurns = maxTurnsFlag;
   const priorityFlag = finiteFlag(flags, "priority");
@@ -597,9 +581,8 @@ function cmdLog(positional: string[], flags: Flags): void {
     out(`no log yet for ${card.id}`);
     return;
   }
-  const lines = readFileSync(path, "utf8").split("\n");
-  const tail = num(flags, "tail") ?? 40;
-  out(lines.slice(-tail).join("\n"));
+  const tail = finiteFlag(flags, "tail", { min: 1, integer: true }) ?? 40;
+  out(readLogTail(path, tail).join("\n"));
 }
 
 async function cmdPlan(positional: string[], _flags: Flags): Promise<void> {
@@ -618,7 +601,7 @@ async function cmdPlan(positional: string[], _flags: Flags): Promise<void> {
     system,
     prompt,
     cwd: workspace.cwd,
-    maxTurns: budget.turnCap(card, config),
+    maxTurns: limits.turnCap(card, config),
     readOnly: role?.readOnly ?? false,
     skills: card.skills,
     resumeSessionId: card.sessionId,
@@ -627,9 +610,9 @@ async function cmdPlan(positional: string[], _flags: Flags): Promise<void> {
   });
   out(`# argv`);
   out(argv.join(" "));
-  out(`\n# system (${system.length} chars, ~${budget.estimateTokens(system)} tokens)`);
+  out(`\n# system (${system.length} chars, ~${limits.estimateTokens(system)} tokens)`);
   out(system || "(none)");
-  out(`\n# prompt (${prompt.length} chars, ~${budget.estimateTokens(prompt)} tokens)`);
+  out(`\n# prompt (${prompt.length} chars, ~${limits.estimateTokens(prompt)} tokens)`);
   out(prompt);
 }
 
@@ -713,7 +696,6 @@ function cmdStats(_positional: string[], flags: Flags): void {
       tokens: db.tokensToday(),
       byKind: db.ledgerByKind(),
       day: today(),
-      capUsd: config.budget.perDayUsd,
     },
   };
   if (bool(flags, "json")) {
@@ -726,7 +708,7 @@ function cmdStats(_positional: string[], flags: Flags): void {
   out(`roles:  ${Object.entries(byRole).map(([k, v]) => `${k}=${v}`).join(" ") || "-"}`);
   out(`leases: ${payload.leases.length ? payload.leases.join(", ") : "none"}`);
   out(
-    `tracked spend (${payload.spend.day} UTC): $${payload.spend.today.toFixed(4)} of $${config.budget.perDayUsd.toFixed(2)} admission cap, ${payload.spend.tokens} tokens — ${
+    `tracked usage (${payload.spend.day} UTC): $${payload.spend.today.toFixed(4)}, ${payload.spend.tokens} tokens — ${
       Object.entries(payload.spend.byKind)
         .map(([kind, usd]) => `${kind}=$${Number(usd).toFixed(4)}`)
         .join(" ") || "nothing yet"
@@ -939,7 +921,7 @@ function cmdDoctor(): void {
       out(`    fix ${problem.path}, or run \`ab roles --reseed --yes\` to restore the shipped version`);
     }
     out(`triage chain: ${config.triageChain.map((p) => `${p.kind}/${p.model}`).join(" → ")}  (parks below confidence ${config.triageMinConfidence})`);
-    out(`caps: ${config.maxRunning} running, ${config.maxRunningPerRole}/role, $${config.budget.perCardUsd}/card, $${config.budget.perDayUsd}/UTC day tracked-spend admission`);
+    out(`caps: ${config.maxRunning} running, ${config.maxRunningPerRole}/role, ${config.maxTurns} turns/run`);
   }
   for (const binary of ["codex", "claude", "bun"]) {
     const path = Bun.which(binary);
@@ -957,7 +939,7 @@ function usage(): void {
   ab add "<goal>" [--role <r>] [--runtime codex|claude|local] [--model <m>]
                   [--workspace repo|worktree|scratch]   (default repo)
                   [--prompt <name> --<var> <value> …] [--body <text>] [--body-file <f>]
-                  [--parent <ids>] [--budget <usd>] [--max-turns <n>] [--priority <n>]
+                  [--parent <ids>] [--max-turns <n>] [--priority <n>]
                   [--no-triage]
   ab ls [--status <s>] [--all] [--json]
   ab show <id> [--json]
@@ -965,7 +947,7 @@ function usage(): void {
   ab dispatch [--dry-run] [--max-triage <n>] [--json]
   ab daemon [--interval <s>] [--ticks <n>]
   ab set <id> [--action <name> | --status <s>] [--role <r>] [--runtime <rt>] [--model <m>]
-              [--workspace repo|worktree|scratch] [--budget <usd>] [--max-turns <n>]
+              [--workspace repo|worktree|scratch] [--max-turns <n>]
               [--priority <n>] [--parent <ids>] [--title <t>] [--body <text>]
               [--body-file <f>] [--handoff <text>]
   ab archive <id>…                         archive the cards you name
@@ -988,8 +970,8 @@ Any command works from anywhere inside a project: the board is found by walking 
 to the nearest board/, then by matching a registered board's workdir. Override with
 "ab --board <root> <command>" or AB_BOARD=<root>.  See: ab where
 
-Flow: add → triage (cheap model specs, splits, routes) → dispatch/daemon (workers run,
-budget-capped) → ls/show/log → archive. Cards are files under board/cards/ — edit them by
+Flow: add → triage (local-first model specs, splits, routes) → dispatch/daemon
+(workers run) → ls/show/log → archive. Cards are files under board/cards/ — edit them by
 hand. Archived cards move to board/archive/ and stop loading with the live board.`);
 }
 

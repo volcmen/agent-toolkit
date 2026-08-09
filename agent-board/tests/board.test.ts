@@ -13,6 +13,7 @@ import {
   claudeArgv,
   codexArgv,
   effectiveSkills,
+  logPathFor,
   ProcessGroupTerminationError,
   previewArgv,
   promptWithSkills,
@@ -21,7 +22,7 @@ import {
 } from "../src/runners.ts";
 import { attachPlan } from "../src/attach.ts";
 import { resolveWorkspace } from "../src/workspace.ts";
-import * as budget from "../src/budget.ts";
+import * as limits from "../src/limits.ts";
 import { triageCard } from "../src/triage.ts";
 import type { BoardConfig, Card } from "../src/types.ts";
 import {
@@ -46,7 +47,6 @@ afterEach(() => {
 });
 
 async function concurrentClaims(
-  operation: "claim" | "reserve",
   inputs: Record<string, unknown>[],
 ): Promise<(string | null)[]> {
   const modulePath = new URL("../src/lease.ts", import.meta.url).pathname;
@@ -54,20 +54,18 @@ async function concurrentClaims(
   writeFileSync(
     script,
     `import { LeaseDb } from ${JSON.stringify(modulePath)};
-const [root, operation, raw] = process.argv.slice(2);
+const [root, raw] = process.argv.slice(2);
 await Bun.stdin.text();
 const db = new LeaseDb(root);
 const input = JSON.parse(raw);
-const result = operation === "claim"
-  ? db.claimWithReservation(input)
-  : db.reserve(input.cardId, input.kind, input.amount, input.cardMax, input.dayMax);
+const result = db.claimCapacity(input);
 db.close();
 console.log(JSON.stringify(result));
 `,
     "utf8",
   );
   const children = inputs.map((input) => Bun.spawn(
-    ["bun", script, root, operation, JSON.stringify(input)],
+    ["bun", script, root, JSON.stringify(input)],
     { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
   ));
   for (const child of children) child.stdin.end();
@@ -126,13 +124,24 @@ describe("persisted config", () => {
       name: "strict",
       workdir: root,
       maxRunning: 4,
-      budget: { perDayUsd: 3 },
+      maxTurns: 12,
     }));
     const config = loadConfig(root);
     expect(config.name).toBe("strict");
     expect(config.maxRunning).toBe(4);
-    expect(config.budget.perDayUsd).toBe(3);
-    expect(config.budget.perCardTurns).toBe(24);
+    expect(config.maxTurns).toBe(12);
+  });
+
+  test("loads old money config without preserving dollar admission", () => {
+    writeFileSync(join(root, CONFIG_FILE), JSON.stringify({
+      workdir: root,
+      budget: { perCardUsd: 1.5, perDayUsd: 10, perCardTurns: 7, perRunReserveUsd: 1.5 },
+      triageChain: [{ kind: "codex", model: "gpt-5.6-sol", maxUsd: 0.05 }],
+    }));
+    const config = loadConfig(root);
+    expect(config.maxTurns).toBe(7);
+    expect(config.triageChain).toEqual([{ kind: "codex", model: "gpt-5.6-sol" }]);
+    expect(config).not.toHaveProperty("budget");
   });
 
   test("fails closed with field-specific errors for unsafe values and shapes", () => {
@@ -146,21 +155,17 @@ describe("persisted config", () => {
       [{ defaultRuntime: "shell" }, /defaultRuntime must be one of/],
       [{ workdir: "relative" }, /workdir must be an absolute path/],
       [{ workdir: join(root, "missing") }, /workdir must name an existing directory/],
-      [{ budget: { perCardUsd: -1 } }, /budget\.perCardUsd must be a finite number >= 0/],
-      [{ budget: { perCardTurns: 1.5 } }, /budget\.perCardTurns must be an integer/],
+      [{ maxTurns: 1.5 }, /maxTurns must be an integer/],
       [{ context: { bodyChars: 0 } }, /context\.bodyChars must be a finite number >= 1/],
       [{ triageChain: [] }, /triageChain must be a non-empty array/],
-      [{ triageChain: [{ kind: "shell", model: "x", maxUsd: 0 }] }, /triageChain\[0\]\.kind/],
-      [{ triageChain: [{ kind: "codex", model: "x", maxUsd: 0, baseUrl: "http:\/\/x" }] }, /baseUrl is only supported/],
+      [{ triageChain: [{ kind: "shell", model: "x" }] }, /triageChain\[0\]\.kind/],
+      [{ triageChain: [{ kind: "codex", model: "x", baseUrl: "http:\/\/x" }] }, /baseUrl is only supported/],
       [{ surprise: true }, /surprise is not supported/],
-      [{ budget: { mystery: 1 } }, /budget\.mystery is not supported/],
     ];
     for (const [patch, expected] of cases) {
       writeFileSync(join(root, CONFIG_FILE), JSON.stringify(patch));
       expect(() => loadConfig(root)).toThrow(expected);
     }
-    writeFileSync(join(root, CONFIG_FILE), '{"budget":{"perDayUsd":1e309}}');
-    expect(() => loadConfig(root)).toThrow(/budget\.perDayUsd must be a finite number/);
   });
 });
 
@@ -181,15 +186,13 @@ describe("leases", () => {
     const before = readFileSync(card.path, "utf8");
     const changed = db.mutateUnleased(card.id, () => store.update(card.id, { body: "new" }));
     expect(changed.ok).toBe(true);
-    const claim = db.claimWithReservation({
+    const claim = db.claimCapacity({
       cardId: card.id, owner: "dispatcher", role: "backend", pid: null,
       maxRunning: 1, maxRunningPerRole: 1,
-      reserveUsd: 0.25, cardMaxUsd: 1, dayMaxUsd: 1,
       snapshotValid: () => readFileSync(card.path, "utf8") === before,
     });
     expect(claim).toBeNull();
     expect(db.lease(card.id)).toBeNull();
-    expect(db.reservedOnCard(card.id)).toBe(0);
 
     const admitted = db.claim(card.id, "worker", null, "backend");
     expect(admitted).not.toBeNull();
@@ -225,6 +228,24 @@ describe("leases", () => {
     expect(db.tokensOnCard("c_1")).toBe(2000);
     expect(db.spentToday()).toBeCloseTo(0.25);
     expect(db.ledgerByKind()["run:claude"]).toBeCloseTo(0.25);
+    db.close();
+  });
+
+  test("arbitrarily large recorded usage never blocks worker admission", async () => {
+    seedRoles(root);
+    const db = new LeaseDb(root);
+    const card = store.create({ title: "unmetered admission", role: "backend", status: "ready" });
+    db.spend(card.id, "historical", 1_000_000, 1_000_000_000);
+
+    const report = await tick(store, db, defaultConfig(root), {
+      runner: async () => successfulRun({ handoff: "usage remained telemetry-only" }),
+    });
+
+    expect(report.started).toEqual([card.id]);
+    expect(report.finished).toContainEqual({ cardId: card.id, ok: true, usd: 0, status: "review" });
+    expect(store.requireById(card.id).status).toBe("review");
+    expect(db.spentOnCard(card.id)).toBe(1_000_000);
+    expect(db.tokensOnCard(card.id)).toBe(1_000_000_010);
     db.close();
   });
 });
@@ -408,7 +429,7 @@ describe("process-group shutdown", () => {
     db.close();
   });
 
-  test("an unconfirmed runner shutdown retains its lease and reservation", async () => {
+  test("an unconfirmed runner shutdown retains its lease", async () => {
     seedRoles(root);
     const card = store.create({ title: "timeout survivor", role: "backend", status: "ready" });
     const db = new LeaseDb(root);
@@ -417,18 +438,15 @@ describe("process-group shutdown", () => {
     });
     expect(report.started).toContain(card.id);
     expect(db.lease(card.id)).not.toBeNull();
-    expect(db.reservedOnCard(card.id)).toBeGreaterThan(0);
     expect(store.requireById(card.id).status).toBe("running");
     db.close();
   });
 });
 
-describe("cross-process reservations and owner fencing", () => {
+describe("cross-process capacity and owner fencing", () => {
   test("simultaneous dispatcher processes cannot exceed global or per-role caps", async () => {
-    const base = {
-      pid: null, reserveUsd: 0.25, cardMaxUsd: 1, dayMaxUsd: 10,
-    };
-    const global = await concurrentClaims("claim", [
+    const base = { pid: null };
+    const global = await concurrentClaims([
       { ...base, cardId: "c_global_a", owner: "dispatcher-a", role: "backend", maxRunning: 1, maxRunningPerRole: 1 },
       { ...base, cardId: "c_global_b", owner: "dispatcher-b", role: "qa", maxRunning: 1, maxRunningPerRole: 1 },
     ]);
@@ -436,11 +454,9 @@ describe("cross-process reservations and owner fencing", () => {
 
     const db = new LeaseDb(root);
     for (const lease of db.activeLeases()) db.release(lease.cardId, lease.runId);
-    db.cancelReservationsForCard("c_global_a");
-    db.cancelReservationsForCard("c_global_b");
     db.close();
 
-    const perRole = await concurrentClaims("claim", [
+    const perRole = await concurrentClaims([
       { ...base, cardId: "c_role_a", owner: "dispatcher-a", role: "backend", maxRunning: 2, maxRunningPerRole: 1 },
       { ...base, cardId: "c_role_b", owner: "dispatcher-b", role: "backend", maxRunning: 2, maxRunningPerRole: 1 },
     ]);
@@ -450,21 +466,18 @@ describe("cross-process reservations and owner fencing", () => {
   test("two database handles cannot exceed global or per-role capacity", () => {
     const first = new LeaseDb(root);
     const second = new LeaseDb(root);
-    const one = first.claimWithReservation({
+    const one = first.claimCapacity({
       cardId: "c_one", owner: "d1", role: "backend", pid: 1,
       maxRunning: 2, maxRunningPerRole: 1,
-      reserveUsd: 0.25, cardMaxUsd: 1, dayMaxUsd: 10,
     });
     expect(one).not.toBeNull();
-    expect(second.claimWithReservation({
+    expect(second.claimCapacity({
       cardId: "c_two", owner: "d2", role: "backend", pid: 2,
       maxRunning: 2, maxRunningPerRole: 1,
-      reserveUsd: 0.25, cardMaxUsd: 1, dayMaxUsd: 10,
     })).toBeNull();
-    expect(second.claimWithReservation({
+    expect(second.claimCapacity({
       cardId: "c_three", owner: "d2", role: "qa", pid: 2,
       maxRunning: 1, maxRunningPerRole: 1,
-      reserveUsd: 0.25, cardMaxUsd: 1, dayMaxUsd: 10,
     })).toBeNull();
     first.close();
     second.close();
@@ -510,8 +523,6 @@ describe("cross-process reservations and owner fencing", () => {
     const oldLease = first.lease(card.id);
     expect(oldLease).not.toBeNull();
     expect(first.release(card.id, oldLease?.runId)).toBe(true);
-    first.cancelReservationsForCard(card.id);
-
     const replacementDb = new LeaseDb(root);
     const replacement = replacementDb.claim(card.id, "replacement", 2, "backend");
     expect(replacement).not.toBeNull();
@@ -532,37 +543,7 @@ describe("cross-process reservations and owner fencing", () => {
     first.close();
   });
 
-  test("budget is reserved atomically and reconciled to actual spend", () => {
-    const first = new LeaseDb(root);
-    const second = new LeaseDb(root);
-    const reserved = first.reserve("c_a", "run:claude", 0.75, 1, 1);
-    expect(reserved).not.toBeNull();
-    expect(second.reserve("c_b", "run:claude", 0.5, 1, 1)).toBeNull();
-    expect(first.reconcile(reserved as string, "c_a", "run:claude", 0.2, 10)).toBe(true);
-    expect(first.reservedToday()).toBe(0);
-    expect(first.spentToday()).toBeCloseTo(0.2);
-    first.close();
-    second.close();
-  });
-
-  test("simultaneous card and daily budget admissions allow only one reservation", async () => {
-    const cardRace = await concurrentClaims("reserve", [
-      { cardId: "c_same", kind: "run:claude", amount: 0.6, cardMax: 1, dayMax: 10 },
-      { cardId: "c_same", kind: "run:claude", amount: 0.6, cardMax: 1, dayMax: 10 },
-    ]);
-    expect(cardRace.filter(Boolean)).toHaveLength(1);
-    const cleanup = new LeaseDb(root);
-    cleanup.cancelReservationsForCard("c_same");
-    cleanup.close();
-
-    const dayRace = await concurrentClaims("reserve", [
-      { cardId: "c_day_a", kind: "run:claude", amount: 0.6, cardMax: 1, dayMax: 1 },
-      { cardId: "c_day_b", kind: "run:claude", amount: 0.6, cardMax: 1, dayMax: 1 },
-    ]);
-    expect(dayRace.filter(Boolean)).toHaveLength(1);
-  });
-
-  test("failed workspace setup and runner crashes roll back reservations", async () => {
+  test("failed workspace setup and runner crashes release leases without recording usage", async () => {
     seedRoles(root);
     const brokenWorkspace = store.create({
       title: "bad workspace", body: "must not launch", role: "backend",
@@ -577,7 +558,6 @@ describe("cross-process reservations and owner fencing", () => {
       },
     });
     expect(launched).toBe(false);
-    expect(db.reservedOnCard(brokenWorkspace.id)).toBe(0);
     expect(db.lease(brokenWorkspace.id)).toBeNull();
 
     const crash = store.create({
@@ -586,7 +566,6 @@ describe("cross-process reservations and owner fencing", () => {
     await tick(store, db, defaultConfig(root), {
       runner: async () => { throw new Error("deterministic crash"); },
     });
-    expect(db.reservedOnCard(crash.id)).toBe(0);
     expect(db.spentOnCard(crash.id)).toBe(0);
     expect(db.lease(crash.id)).toBeNull();
     db.close();
@@ -612,8 +591,6 @@ describe("cross-process reservations and owner fencing", () => {
     const db = new LeaseDb(root);
     const expectedRevision = cardRevision(card);
     const claim = db.claimTriage(card.id, "triager", card.updatedAt);
-    const reservation = db.reserveTriage(card.id, claim as string, 0.5, 1, 1);
-    expect(reservation).not.toBeNull();
 
     let release!: () => void;
     const interrupted = new Promise<void>((resolve) => { release = resolve; });
@@ -622,7 +599,6 @@ describe("cross-process reservations and owner fencing", () => {
       return db.completeTriage(
         card.id,
         claim as string,
-        reservation as string,
         { kind: "triage:test", usd: 0.2, tokens: 20 },
         () => store.update(card.id, { title: "stale model", status: "ready" }),
         () => cardRevision(store.requireById(card.id)) === expectedRevision
@@ -636,121 +612,25 @@ describe("cross-process reservations and owner fencing", () => {
     release();
     expect(await completion).toBeNull();
     expect(store.requireById(card.id).title).toBe("direct replacement");
-    expect(db.reservedOnCard(card.id)).toBe(0);
     expect(db.spentOnCard(card.id)).toBe(0.2);
     expect(db.hasActiveTriage(card.id)).toBe(false);
     db.close();
   });
 
-  test("reservation denial atomically blocks and completes the current triage owner", async () => {
-    seedRoles(root);
-    const card = store.create({ title: "over budget", budgetUsd: 0 });
-    const db = new LeaseDb(root);
-    const outcome = await triageCard(store, db, defaultConfig(root), loadRoles(root), card);
-
-    expect(outcome.error).toBe("budget reservation unavailable");
-    expect(store.requireById(card.id)).toMatchObject({
-      status: "blocked",
-      blockedReason: "budget reservation unavailable",
-    });
-    expect(db.triageState(card.id)).toEqual({ state: "done", result: outcome });
-    expect(db.reservedOnCard(card.id)).toBe(0);
-    db.close();
-  });
-
-  test("reservation denial cannot mutate or complete after stale triage takeover", async () => {
-    seedRoles(root);
-    const card = store.create({ title: "original", budgetUsd: 0 });
-    const replacement = new LeaseDb(root);
-    let oldClaim: string | null = null;
-    let replacementClaim: string | null = null;
-
-    class PausedOldOwnerDb extends LeaseDb {
-      override claimTriage(
-        cardId: string,
-        owner: string,
-        idempotencyKey = cardId,
-        staleSeconds = Number.POSITIVE_INFINITY,
-        _at?: number,
-        snapshotValid?: () => boolean,
-      ): string | null {
-        oldClaim = super.claimTriage(cardId, owner, idempotencyKey, staleSeconds, 100, snapshotValid);
-        return oldClaim;
-      }
-
-      override reserveTriage(
-        cardId: string,
-        claimId: string,
-        amount: number,
-        cardMax: number,
-        dayMax: number,
-        at?: number,
-      ): string | null {
-        replacementClaim = replacement.claimTriage(
-          cardId,
-          "replacement",
-          card.updatedAt,
-          60,
-          161,
-          () => store.requireById(cardId).status === "triage",
-        );
-        expect(replacementClaim).not.toBeNull();
-        store.update(cardId, { title: "replacement update" });
-        return super.reserveTriage(cardId, claimId, amount, cardMax, dayMax, at);
-      }
-    }
-
-    const oldOwner = new PausedOldOwnerDb(root);
-    const outcome = await triageCard(
-      store,
-      oldOwner,
-      defaultConfig(root),
-      loadRoles(root),
-      card,
-      { owner: "old-owner" },
-    );
-    const requireClaim = (claim: string | null): string => {
-      if (claim === null) throw new Error("expected triage claim");
-      return claim;
-    };
-
-    expect(outcome.error).toBe("triage ownership or card revision lost");
-    expect(store.requireById(card.id)).toMatchObject({
-      title: "replacement update",
-      status: "triage",
-      blockedReason: null,
-    });
-    expect(replacement.triageState(card.id)).toEqual({ state: "running", result: null });
-    expect(replacement.heartbeatTriage(card.id, requireClaim(replacementClaim), 162)).toBe(true);
-    expect(oldOwner.finishTriage(card.id, requireClaim(oldClaim), { ok: false })).toBe(false);
-    expect(replacement.reservedOnCard(card.id)).toBe(0);
-    oldOwner.close();
-    replacement.close();
-  });
-
-  test("a restarted owner reclaims a stale triage claim and its reservation", () => {
+  test("a restarted owner reclaims a stale triage claim", () => {
     const crashed = new LeaseDb(root);
     const restarted = new LeaseDb(root);
     const oldClaim = crashed.claimTriage("c_restart", "old-process", "same-input", 60, 100);
     expect(oldClaim).not.toBeNull();
-    const oldReservation = crashed.reserveTriage("c_restart", oldClaim as string, 0.5, 1, 1, 100);
-    expect(oldReservation).not.toBeNull();
 
     expect(restarted.claimTriage("c_restart", "competitor", "same-input", 60, 160)).toBeNull();
-    expect(restarted.reservedOnCard("c_restart")).toBe(0.5);
     const replacement = restarted.claimTriage("c_restart", "restarted", "same-input", 60, 161);
     expect(replacement).not.toBeNull();
-    expect(restarted.reservedOnCard("c_restart")).toBe(0);
-    const replacementReservation = restarted.reserveTriage(
-      "c_restart", replacement as string, 0.5, 1, 1, 161,
-    );
-    expect(replacementReservation).not.toBeNull();
 
     let staleMutation = false;
     expect(crashed.completeTriage(
       "c_restart",
       oldClaim as string,
-      oldReservation as string,
       { kind: "triage:old", usd: 0.4, tokens: 40 },
       () => { staleMutation = true; return { ok: true, owner: "old" }; },
     )).toBeNull();
@@ -764,7 +644,6 @@ describe("cross-process reservations and owner fencing", () => {
     expect(restarted.completeTriage(
       "c_restart",
       replacement as string,
-      replacementReservation as string,
       { kind: "triage:new", usd: 0.2, tokens: 20 },
       () => {
         replacementMutations += 1;
@@ -772,7 +651,6 @@ describe("cross-process reservations and owner fencing", () => {
       },
     )).toEqual({ ok: true, owner: "restarted" });
     expect(replacementMutations).toBe(1);
-    expect(restarted.reservedOnCard("c_restart")).toBe(0);
     expect(restarted.spentOnCard("c_restart")).toBe(0.2);
     expect(restarted.claimTriage("c_restart", "late", "same-input", 60, 500)).toBeNull();
     expect(restarted.triageState("c_restart")).toEqual({
@@ -783,36 +661,27 @@ describe("cross-process reservations and owner fencing", () => {
     restarted.close();
   });
 
-  test("only the current triage owner can release a claim and reservation", () => {
+  test("only the current triage owner can release a claim", () => {
     const db = new LeaseDb(root);
     const claim = db.claimTriage("c_release", "owner", "input", 60, 100);
-    const reservation = db.reserveTriage("c_release", claim as string, 0.5, 1, 1, 100);
-    expect(reservation).not.toBeNull();
     expect(db.releaseTriage("c_release", "t_not-owner")).toBe(false);
-    expect(db.reservedOnCard("c_release")).toBe(0.5);
     expect(db.releaseTriage("c_release", claim as string)).toBe(true);
-    expect(db.reservedOnCard("c_release")).toBe(0);
     expect(db.triageState("c_release")).toBeNull();
     db.close();
   });
 
-  test("dispatcher restart reclaims before budget admission without a second triage result", async () => {
+  test("dispatcher restart reclaims stale triage without a second result", async () => {
     seedRoles(root);
-    const card = store.create({ title: "resume abandoned triage", budgetUsd: 0.5 });
+    const card = store.create({ title: "resume abandoned triage" });
     const crashed = new LeaseDb(root);
     const oldClaim = crashed.claimTriage(card.id, "crashed", card.updatedAt, 60, 100);
-    expect(crashed.reserveTriage(card.id, oldClaim as string, 0.5, 0.5, 1, 100)).not.toBeNull();
     crashed.close();
 
     const restarted = new LeaseDb(root);
     const report = await tick(
       store,
       restarted,
-      { ...defaultConfig(root), staleSeconds: 60, triageChain: [], budget: {
-        ...defaultConfig(root).budget,
-        perCardUsd: 0.5,
-        perDayUsd: 1,
-      } },
+      { ...defaultConfig(root), staleSeconds: 60, triageChain: [] },
       { owner: "restarted" },
     );
     expect(report.triaged).toEqual([{
@@ -822,7 +691,6 @@ describe("cross-process reservations and owner fencing", () => {
       usd: 0,
       ok: false,
     }]);
-    expect(restarted.reservedOnCard(card.id)).toBe(0);
     expect(restarted.triageState(card.id)?.state).toBe("done");
     expect(store.requireById(card.id).blockedReason).toBe("triage failed: no triage provider configured");
     restarted.close();
@@ -841,7 +709,6 @@ describe("cross-process reservations and owner fencing", () => {
     expect(outcomes.filter((outcome) => outcome.error === "triage already in progress")).toHaveLength(2);
     expect(outcomes.filter((outcome) => outcome.error === "no triage provider configured")).toHaveLength(1);
     expect(databases[0]?.triageState(card.id)?.state).toBe("done");
-    expect(databases[0]?.reservedOnCard(card.id)).toBe(0);
     for (const db of databases) db.close();
   });
 });
@@ -851,7 +718,7 @@ describe("malformed persisted cards", () => {
     seedRoles(root);
     writeFileSync(
       join(root, "board", "roles", "backend", "SOUL.md"),
-      "---\nname: backend\ndescription: broken\nruntime: shell\nmax_turns: 1.5\nbudget_usd: -1\n---\nunsafe",
+      "---\nname: backend\ndescription: broken\nruntime: shell\nmax_turns: 1.5\n---\nunsafe",
       "utf8",
     );
     const card = store.create({ title: "unsafe role", role: "backend", status: "ready" });
@@ -864,7 +731,7 @@ describe("malformed persisted cards", () => {
     seedRoles(root);
     writeFileSync(
       join(store.cardsDir, "bad.md"),
-      "---\nid: c_bad\ntitle: bad\nstatus: scheduled\nrole: backend\nruntime: shell\nworkspace: host\nbudget_usd: -1\nmax_turns: 1.5\n---\nunsafe",
+      "---\nid: c_bad\ntitle: bad\nstatus: scheduled\nrole: backend\nruntime: shell\nworkspace: host\nmax_turns: 1.5\n---\nunsafe",
       "utf8",
     );
     const card = store.requireById("c_bad");
@@ -872,7 +739,6 @@ describe("malformed persisted cards", () => {
     expect(card.invalidReason).toContain("status");
     expect(card.invalidReason).toContain("runtime");
     expect(card.invalidReason).toContain("workspace");
-    expect(card.invalidReason).toContain("budget_usd");
     expect(card.invalidReason).toContain("max_turns");
     const db = new LeaseDb(root);
     const report = await tick(store, db, defaultConfig(root), {
@@ -884,34 +750,12 @@ describe("malformed persisted cards", () => {
   });
 });
 
-describe("budget", () => {
-  test("a card over its ceiling is refused", () => {
-    const db = new LeaseDb(root);
-    const config = defaultConfig(root);
-    const card = store.create({ title: "t", budgetUsd: 0.1 });
-    db.spend(card.id, "run:claude", 0.2);
-    const verdict = budget.check(db, store.requireById(card.id), config);
-    expect(verdict.allowed).toBe(false);
-    if (!verdict.allowed) expect(verdict.reason).toContain("card budget");
-    db.close();
-  });
-
-  test("the daily ceiling refuses a fresh card too", () => {
-    const db = new LeaseDb(root);
-    const config = { ...defaultConfig(root), budget: { perCardUsd: 5, perDayUsd: 0.5, perCardTurns: 4 } };
-    db.spend("other", "run:claude", 0.6);
-    const card = store.create({ title: "t" });
-    const verdict = budget.check(db, card, config);
-    expect(verdict.allowed).toBe(false);
-    if (!verdict.allowed) expect(verdict.reason).toContain("daily budget");
-    db.close();
-  });
-
+describe("execution limits", () => {
   test("card override beats the board default for the turn cap", () => {
     const config = defaultConfig(root);
     const card = store.create({ title: "t", maxTurns: 3 });
-    expect(budget.turnCap(card, config)).toBe(3);
-    expect(budget.turnCap(store.create({ title: "u" }), config)).toBe(config.budget.perCardTurns);
+    expect(limits.turnCap(card, config)).toBe(3);
+    expect(limits.turnCap(store.create({ title: "u" }), config)).toBe(config.maxTurns);
   });
 });
 
@@ -1061,7 +905,6 @@ describe("dispatcher scheduling", () => {
     handoff: null,
     skills: [],
     workspace: "scratch",
-    budgetUsd: null,
     maxTurns: null,
     goal: false,
     priority: 0,
@@ -1147,17 +990,6 @@ describe("dry-run tick", () => {
     db.close();
   });
 
-  test("a card over budget is reported but not mutated", async () => {
-    seedRoles(root);
-    const db = new LeaseDb(root);
-    const config = { ...defaultConfig(root), budget: { perCardUsd: 0.01, perDayUsd: 10, perCardTurns: 4 } };
-    const card = store.create({ title: "t", role: "backend", status: "ready" });
-    db.spend(card.id, "run:claude", 0.5);
-    const report = await tick(store, db, config, { dryRun: true });
-    expect(store.byId(card.id)?.status).toBe("ready");
-    expect(report.skipped.some((skip) => skip.reason.includes("card budget"))).toBe(true);
-    db.close();
-  });
 });
 
 describe("goal roots", () => {
@@ -1256,6 +1088,22 @@ describe("CLI mutation invariants", () => {
     expect(triageEdit.exitCode).toBe(1);
     expect(triageEdit.stderr).toContain("being worked");
     db.close();
+  });
+
+  test("log output bounds oversized single-line worker events", async () => {
+    writeFileSync(join(root, CONFIG_FILE), JSON.stringify(defaultConfig(root)), "utf8");
+    const card = store.create({ title: "large log", role: "reviewer", status: "ready" });
+    writeFileSync(
+      logPathFor(root, card.id),
+      `${JSON.stringify({ type: "item.completed", output: "x".repeat(100_000) })}\nfinal verdict\n`,
+      "utf8",
+    );
+
+    const result = await cli("log", card.id, "--tail", "40");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("chars omitted");
+    expect(result.stdout).toContain("final verdict");
+    expect(result.stdout.length).toBeLessThan(21_000);
   });
 });
 
@@ -1645,7 +1493,7 @@ describe("triage confidence gate", () => {
     });
     const config: BoardConfig = {
       ...defaultConfig(root),
-      triageChain: [{ kind: "local", model: "stub", maxUsd: 0, baseUrl: `${server.url}v1` }],
+      triageChain: [{ kind: "local", model: "stub", baseUrl: `${server.url}v1` }],
     };
     return { config, stop: () => void server.stop(true) };
   }
@@ -1730,7 +1578,7 @@ describe("triage confidence gate", () => {
     }
   });
 
-  test("a single card inherits its role's own budget and turn ceilings", async () => {
+  test("a single card inherits its role's turn ceiling and skills", async () => {
     seedRoles(root);
     mkdirSync(join(root, "board", "roles", "cheap"), { recursive: true });
     writeFileSync(
@@ -1738,9 +1586,8 @@ describe("triage confidence gate", () => {
       [
         "---",
         "name: cheap",
-        "description: A deliberately capped role used to prove role ceilings reach single cards.",
+        "description: A deliberately capped role used to prove role settings reach single cards.",
         "runtime: codex",
-        "budget_usd: 0.25",
         "max_turns: 3",
         "skills:",
         "  - defuddle",
@@ -1759,10 +1606,8 @@ describe("triage confidence gate", () => {
       const routed = store.requireById(target.id);
       expect(routed.role).toBe("cheap");
       expect(routed.status).toBe("ready");
-      expect(routed.budgetUsd).toBe(0.25);
       expect(routed.maxTurns).toBe(3);
       expect(routed.skills).toEqual(["defuddle"]);
-      expect(budget.cardCeiling(routed, config)).toBe(0.25);
     } finally {
       db.close();
       stop();

@@ -257,7 +257,7 @@ describe("multi-line frontmatter values", () => {
 
 describe("roster completeness", () => {
   function role(name: string, description: string): Role {
-    return { name, description, soul: "", runtime: "codex", model: null, readOnly: false, skills: [], maxTurns: null, budgetUsd: null };
+    return { name, description, soul: "", runtime: "codex", model: null, readOnly: false, skills: [], maxTurns: null };
   }
 
   test("no role is ever dropped, however tight the budget", () => {
@@ -301,8 +301,8 @@ describe("roster completeness", () => {
 
 describe("roster", () => {
   const roles: Role[] = [
-    { name: "backend", description: "APIs and services", soul: "", runtime: "codex", model: null, readOnly: false, skills: [], maxTurns: null, budgetUsd: null },
-    { name: "docs", description: "READMEs and runbooks", soul: "", runtime: "codex", model: null, readOnly: false, skills: [], maxTurns: null, budgetUsd: null },
+    { name: "backend", description: "APIs and services", soul: "", runtime: "codex", model: null, readOnly: false, skills: [], maxTurns: null },
+    { name: "docs", description: "READMEs and runbooks", soul: "", runtime: "codex", model: null, readOnly: false, skills: [], maxTurns: null },
   ];
 
   test("lists name and description", () => {
@@ -321,9 +321,9 @@ describe("roster", () => {
 
 describe("config", () => {
   test("merges one level of nesting instead of replacing it", () => {
-    const merged = mergeConfig(defaultConfig("/tmp/x"), { budget: { perDayUsd: 3 }, maxRunning: 5 });
-    expect(merged.budget.perDayUsd).toBe(3);
-    expect(merged.budget.perCardUsd).toBe(defaultConfig("/tmp/x").budget.perCardUsd);
+    const merged = mergeConfig(defaultConfig("/tmp/x"), { context: { bodyChars: 100 }, maxRunning: 5 });
+    expect(merged.context.bodyChars).toBe(100);
+    expect(merged.context.handoffChars).toBe(defaultConfig("/tmp/x").context.handoffChars);
     expect(merged.maxRunning).toBe(5);
   });
 
@@ -331,8 +331,7 @@ describe("config", () => {
     expect(mergeConfig(defaultConfig("/tmp/x"), null).maxRunning).toBe(2);
   });
 
-  test("the default triage chain starts free", () => {
+  test("the default triage chain starts local", () => {
     expect(defaultConfig("/tmp/x").triageChain[0]?.kind).toBe("local");
-    expect(defaultConfig("/tmp/x").triageChain[0]?.maxUsd).toBe(0);
   });
 });

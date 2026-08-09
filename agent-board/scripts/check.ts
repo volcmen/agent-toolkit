@@ -40,6 +40,11 @@ function checkManifests(): void {
 
   const pkg = readJson("package.json");
   require_(pkg.version === claude.version, "package.json version must match the plugin manifests");
+  const bins = pkg.bin as Record<string, unknown> | undefined;
+  require_(
+    bins?.ab === "./bin/ab.ts" && bins?.["agent-board"] === "./bin/ab.ts",
+    "package.json must expose both the short ab alias and unambiguous agent-board binary",
+  );
   require_(
     typeof pkg.packageManager === "string" && (pkg.packageManager as string).startsWith("bun@"),
     "packageManager must pin bun",
@@ -91,7 +96,7 @@ function checkSkill(): void {
     "ab attach",
     "ab plan",
     "ab serve",
-    "budget",
+    "maxTurns",
     "read-only",
     "BLOCKED",
     "reviewer",

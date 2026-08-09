@@ -23,6 +23,9 @@ async function command(cwd: string, ...args: string[]) {
     cwd,
     stdout: "pipe",
     stderr: "pipe",
+    // `ab init` registers by default. Keep E2E state inside the disposable
+    // fixture so a successful test can never pollute the user's real registry.
+    env: { ...process.env, AB_PROJECTS_FILE: join(cwd, "projects.json") },
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(child.stdout).text(),
@@ -92,6 +95,7 @@ describe("complete LLM-managed workflow", () => {
     expect(initialized.stderr).toBe("");
     expect(initialized.stdout).toContain("board ready");
     expect(existsSync(join(root, CONFIG_FILE))).toBe(true);
+    expect(existsSync(join(root, "projects.json"))).toBe(true);
     expect(loadRoles(root).length).toBeGreaterThanOrEqual(10);
 
     const store = new Store(root);

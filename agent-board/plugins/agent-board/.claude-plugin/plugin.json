@@ -1,7 +1,7 @@
 {
   "name": "agent-board",
   "version": "1.0.0",
-  "description": "Autonomous local Kanban for coding agents: markdown cards, souls/roles, local-first triage, budget-capped dispatch, attachable sessions.",
+  "description": "Autonomous local Kanban for coding agents: markdown cards, souls/roles, local-first triage, capacity-safe dispatch, attachable sessions.",
   "author": {
     "name": "David David"
   },

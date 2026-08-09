@@ -2,10 +2,10 @@
  * Dispatcher. One tick does five things, in order:
  *
  *   1. reclaim leases whose worker went quiet
- *   2. triage cards sitting in `triage` (cheap model, budget-capped)
+ *   2. triage cards sitting in `triage`
  *   3. promote `todo` cards whose parents are all done
  *   4. spawn workers for `ready` cards, up to the concurrency caps
- *   5. record cost, handoffs, and failures
+ *   5. record usage, handoffs, and failures
  *
  * The claim is a conditional INSERT in SQLite, so two dispatchers can run
  * against the same board without stepping on each other.
@@ -24,7 +24,7 @@ import {
   type RunnerOutput,
 } from "./runners.ts";
 import { triageCard } from "./triage.ts";
-import * as budget from "./budget.ts";
+import * as limits from "./limits.ts";
 import type { LeaseDb } from "./lease.ts";
 import { cardRevision, type Store } from "./store.ts";
 import type { BoardConfig, Card, Role } from "./types.ts";
@@ -95,7 +95,7 @@ export type TickOptions = {
   log?: (line: string) => void;
   /** Skip the model calls — used by tests and `ab dispatch --dry-run`. */
   dryRun?: boolean;
-  /** Cap how many triage calls one tick makes, so intake bursts stay cheap. */
+  /** Cap how many triage calls one tick makes. */
   maxTriagePerTick?: number;
   timeoutMs?: number;
   /** Deterministic runner seam for lifecycle integration tests. */
@@ -116,11 +116,9 @@ export type DispatchPreview = {
     runtime: string;
     model: string | null;
     workspace: Card["workspace"];
-    remainingCardUsd: number;
     dependenciesSatisfied: boolean;
   }[];
   skipped: { cardId: string; reason: string }[];
-  remainingDayUsd: number;
   activeSlots: number;
   maxSlots: number;
 };
@@ -142,15 +140,13 @@ export function dispatchPreview(
     .filter((card) => card.status === "running" && !leased.has(card.id))
     .map((card) => card.id)
     .sort();
-  const triage: string[] = [];
+  const triage = cards
+    .filter((card) => card.status === "triage")
+    .slice(0, options.maxTriagePerTick ?? 2)
+    .map((card) => card.id);
   const promote: string[] = [];
   const skipped: { cardId: string; reason: string }[] = [];
 
-  for (const card of cards.filter((item) => item.status === "triage").slice(0, options.maxTriagePerTick ?? 2)) {
-    const verdict = budget.check(db, card, config);
-    if (verdict.allowed) triage.push(card.id);
-    else skipped.push({ cardId: card.id, reason: verdict.reason });
-  }
   for (const card of cards) {
     if (card.status !== "todo") continue;
     if (parentsSatisfied(card, all)) promote.push(card.id);
@@ -182,15 +178,6 @@ export function dispatchPreview(
   const candidates = pickReady(virtual, virtualAll, config, runningByRole);
   const start: DispatchPreview["start"] = [];
   for (const card of candidates) {
-    const reserveUsd = Math.min(
-      config.budget.perRunReserveUsd ?? budget.cardCeiling(card, config),
-      budget.cardCeiling(card, config),
-    );
-    const verdict = budget.check(db, card, config, reserveUsd);
-    if (!verdict.allowed) {
-      skipped.push({ cardId: card.id, reason: verdict.reason });
-      continue;
-    }
     const role = findRole(roles, card.role ?? config.defaultRole);
     start.push({
       cardId: card.id,
@@ -198,7 +185,6 @@ export function dispatchPreview(
       runtime: card.runtime ?? role?.runtime ?? config.defaultRuntime,
       model: card.model ?? role?.model ?? null,
       workspace: card.workspace,
-      remainingCardUsd: verdict.remainingCardUsd,
       dependenciesSatisfied: parentsSatisfied(card, virtualAll),
     });
   }
@@ -213,14 +199,12 @@ export function dispatchPreview(
       parents: card.parents,
       priority: card.priority,
       workspace: card.workspace,
-      budgetUsd: card.budgetUsd,
       maxTurns: card.maxTurns,
       updatedAt: card.updatedAt,
     })),
     leases: leases.map((lease) => lease.cardId).sort(),
     decisions: { triage, promote, reclaim, recover, start: start.map((item) => item.cardId) },
-    spend: db.spentToday(),
-    caps: [config.maxRunning, config.maxRunningPerRole, config.budget.perDayUsd],
+    caps: [config.maxRunning, config.maxRunningPerRole],
   };
   const fingerprint = new Bun.CryptoHasher("sha256").update(JSON.stringify(stable)).digest("hex");
   return {
@@ -231,7 +215,6 @@ export function dispatchPreview(
     recover,
     start,
     skipped,
-    remainingDayUsd: Math.max(0, config.budget.perDayUsd - db.spentToday()),
     activeSlots: leases.filter((lease) => !reclaim.includes(lease.cardId)).length,
     maxSlots: config.maxRunning,
   };
@@ -289,7 +272,6 @@ export async function tick(
           blockedReason: tripped ? `stale worker ${failures}x — breaker tripped` : null,
         });
       }
-      db.cancelReservationsForCard(lease.cardId);
       db.release(lease.cardId, lease.runId);
       reclaimed = true;
     });
@@ -372,16 +354,6 @@ export async function tick(
       report.skipped.push({ cardId: card.id, reason: malformed });
       continue;
     }
-    const reserveUsd = Math.min(
-      config.budget.perRunReserveUsd ?? budget.cardCeiling(card, config),
-      budget.cardCeiling(card, config),
-    );
-    const verdict = budget.check(db, card, config, reserveUsd);
-    if (!verdict.allowed) {
-      store.update(card.id, { status: "blocked", blockedReason: verdict.reason });
-      report.skipped.push({ cardId: card.id, reason: verdict.reason });
-      continue;
-    }
     const roleName = card.role ?? config.defaultRole;
     let expectedRevision: string;
     try {
@@ -398,23 +370,20 @@ export async function tick(
         return false;
       }
     };
-    const claimed = db.claimWithReservation({
+    const claimed = db.claimCapacity({
       cardId: card.id,
       owner,
       role: roleName,
       pid: process.pid,
       maxRunning: config.maxRunning,
       maxRunningPerRole: config.maxRunningPerRole,
-      reserveUsd,
-      cardMaxUsd: budget.cardCeiling(card, config),
-      dayMaxUsd: config.budget.perDayUsd,
       snapshotValid,
     });
     if (!claimed) {
       report.skipped.push({
         cardId: card.id,
         reason: snapshotValid()
-          ? "capacity, ownership, or budget reservation unavailable"
+          ? "capacity or ownership unavailable"
           : "card changed during admission; retry on the next tick",
       });
       continue;
@@ -423,14 +392,13 @@ export async function tick(
     // after atomic admission so the worker can never launch from a stale card.
     if (!snapshotValid()) {
       db.withOwnedLease(card.id, claimed.runId, () => {
-        db.cancelReservation(claimed.reservationId);
         db.release(card.id, claimed.runId);
       });
       report.skipped.push({ cardId: card.id, reason: "card changed during admission; retry on the next tick" });
       continue;
     }
     report.started.push(card.id);
-    inFlight.push(execute(store, db, config, roles, card, claimed.runId, claimed.reservationId, options));
+    inFlight.push(execute(store, db, config, roles, card, claimed.runId, options));
   }
 
   await Promise.all(inFlight);
@@ -457,7 +425,6 @@ async function execute(
   roles: Role[],
   card: Card,
   runId: string,
-  reservationId: string,
   options: TickOptions,
 ): Promise<void> {
   const log = options.log ?? (() => {});
@@ -472,7 +439,6 @@ async function execute(
   } catch (error) {
     db.withOwnedLease(card.id, runId, () => {
       store.update(card.id, { status: "blocked", blockedReason: (error as Error).message });
-      db.cancelReservation(reservationId);
       db.release(card.id, runId);
     });
     log(`${card.id} blocked: ${(error as Error).message}`);
@@ -514,7 +480,7 @@ async function execute(
     system,
     prompt,
     cwd: workspace.cwd,
-    maxTurns: budget.turnCap(card, config),
+    maxTurns: limits.turnCap(card, config),
     readOnly: role?.readOnly ?? false,
     skills: effectiveSkills(card.skills, role?.skills ?? []),
     resumeSessionId: foreignSession ? null : card.sessionId,
@@ -529,7 +495,9 @@ async function execute(
   try {
     const result = await (options.runner ?? runCard)(input);
     db.withOwnedLease(card.id, runId, () => {
-      db.reconcile(reservationId, card.id, `run:${runtime}`, result.usd, result.tokens, true);
+      if (result.usd > 0 || result.tokens > 0) {
+        db.spend(card.id, `run:${runtime}`, result.usd, result.tokens);
+      }
       db.finishRun(runId, {
         ok: result.ok && !result.blocked,
         usd: result.usd,
@@ -580,7 +548,6 @@ async function execute(
     }
     const message = (error as Error).message;
     db.withOwnedLease(card.id, runId, () => {
-      db.reconcile(reservationId, card.id, `run:${runtime}`, 0, 0, true);
       db.finishRun(runId, { ok: false, usd: 0, turns: 0, error: message, sessionId: null });
       const failures = db.recordFailure(card.id, message);
       store.update(card.id, {

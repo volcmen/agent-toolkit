@@ -13,10 +13,7 @@ export const STATE_DIR = join(BOARD_DIR, ".state");
 export const DB_FILE = join(STATE_DIR, "board.db");
 export const CONFIG_FILE = join(BOARD_DIR, "board.json");
 
-/**
- * Defaults are deliberately frugal. Triage runs on every intake, so the chain
- * starts at a free local model and only escalates when it fails or is unsure.
- */
+/** Triage starts locally and escalates only when the local result is unusable. */
 export function defaultConfig(workdir: string): BoardConfig {
   return {
     name: "board",
@@ -29,11 +26,11 @@ export function defaultConfig(workdir: string): BoardConfig {
     defaultRole: "generalist",
     defaultRuntime: "codex",
     triageChain: [
-      { kind: "local", model: "llama3.2:3b", maxUsd: 0, baseUrl: "http://127.0.0.1:11434/v1" },
-      { kind: "codex", model: "gpt-5.6-sol", maxUsd: 0.05 },
+      { kind: "local", model: "llama3.2:3b", baseUrl: "http://127.0.0.1:11434/v1" },
+      { kind: "codex", model: "gpt-5.6-sol" },
     ],
     triageMinConfidence: 0.6,
-    budget: { perCardUsd: 1.5, perDayUsd: 10, perCardTurns: 24, perRunReserveUsd: 1.5 },
+    maxTurns: 24,
     context: { bodyChars: 4000, handoffChars: 800, ancestryChars: 1200, maxParents: 6 },
   };
 }
@@ -88,12 +85,11 @@ function numberField(
 function validateProvider(value: unknown, index: number): TriageProvider {
   const field = `triageChain[${index}]`;
   const provider = recordField(value, field);
-  knownKeys(provider, field, ["kind", "model", "maxUsd", "baseUrl"]);
+  knownKeys(provider, field, ["kind", "model", "baseUrl"]);
   if (!["local", "codex", "claude"].includes(String(provider.kind))) {
     configError(`${field}.kind`, "must be one of local, codex, claude");
   }
   stringField(provider.model, `${field}.model`);
-  numberField(provider.maxUsd, `${field}.maxUsd`, { min: 0 });
   if (provider.baseUrl !== undefined) {
     if (provider.kind !== "local") configError(`${field}.baseUrl`, "is only supported for local providers");
     const baseUrl = stringField(provider.baseUrl, `${field}.baseUrl`);
@@ -116,7 +112,7 @@ export function validateConfig(value: unknown): BoardConfig {
   knownKeys(config, "", [
     "name", "workdir", "maxRunning", "maxRunningPerRole", "tickSeconds",
     "failureLimit", "staleSeconds", "defaultRole", "defaultRuntime",
-    "triageChain", "triageMinConfidence", "budget", "context",
+    "triageChain", "triageMinConfidence", "maxTurns", "context",
   ]);
   stringField(config.name, "name");
   const workdir = stringField(config.workdir, "workdir");
@@ -141,15 +137,7 @@ export function validateConfig(value: unknown): BoardConfig {
   if ((config.triageMinConfidence as number) > 1) {
     configError("triageMinConfidence", "must be between 0 and 1");
   }
-
-  const budget = recordField(config.budget, "budget");
-  knownKeys(budget, "budget", ["perCardUsd", "perDayUsd", "perCardTurns", "perRunReserveUsd"]);
-  numberField(budget.perCardUsd, "budget.perCardUsd", { min: 0 });
-  numberField(budget.perDayUsd, "budget.perDayUsd", { min: 0 });
-  numberField(budget.perCardTurns, "budget.perCardTurns", { min: 1, integer: true });
-  if (budget.perRunReserveUsd !== undefined) {
-    numberField(budget.perRunReserveUsd, "budget.perRunReserveUsd", { min: 0 });
-  }
+  numberField(config.maxTurns, "maxTurns", { min: 1, integer: true });
 
   const context = recordField(config.context, "context");
   knownKeys(context, "context", ["bodyChars", "handoffChars", "ancestryChars", "maxParents"]);
@@ -164,8 +152,25 @@ export function loadConfig(root: string): BoardConfig {
   const file = join(root, CONFIG_FILE);
   if (!existsSync(file)) return validateConfig(base);
   try {
-    const patch = JSON.parse(readFileSync(file, "utf8")) as unknown;
-    if (!isRecord(patch)) configError("config", "must be an object");
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
+    if (!isRecord(parsed)) configError("config", "must be an object");
+    // Compatibility for boards created before dollar admission was removed.
+    // Money fields are deliberately discarded; the old turn default survives.
+    const patch = { ...parsed };
+    if (isRecord(patch.budget)) {
+      if (patch.maxTurns === undefined && patch.budget.perCardTurns !== undefined) {
+        patch.maxTurns = patch.budget.perCardTurns;
+      }
+      delete patch.budget;
+    }
+    if (Array.isArray(patch.triageChain)) {
+      patch.triageChain = patch.triageChain.map((value) => {
+        if (!isRecord(value)) return value;
+        const provider = { ...value };
+        delete provider.maxUsd;
+        return provider;
+      });
+    }
     return validateConfig(mergeConfig(base, patch));
   } catch (error) {
     if ((error as Error).message.startsWith(`${CONFIG_FILE}:`)) throw error;

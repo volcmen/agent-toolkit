@@ -2,11 +2,12 @@
   "name": "agent-board",
   "version": "1.0.0",
   "private": true,
-  "description": "Autonomous Kanban for coding agents: markdown cards, souls/roles, local-first triage, budget-capped dispatch.",
+  "description": "Autonomous Kanban for coding agents: markdown cards, souls/roles, local-first triage, capacity-safe dispatch.",
   "type": "module",
   "packageManager": "bun@1.3.14",
   "bin": {
-    "ab": "./bin/ab.ts"
+    "ab": "./bin/ab.ts",
+    "agent-board": "./bin/ab.ts"
   },
   "scripts": {
     "ab": "bun run bin/ab.ts",

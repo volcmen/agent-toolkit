@@ -48,7 +48,7 @@ you ──"do a, b, c"──▶ ab add                board/cards/*.md        (g
 | `src/roles.ts` | souls: `board/roles/<name>/SOUL.md` (frontmatter contract + prompt body), with rejection reasons and the triage roster |
 | `src/prompts.ts` | reusable prompt library with `{{variable}}` rendering |
 | `src/context.ts` | bounded context packs, goal ancestry, HANDOFF/BLOCKED extraction |
-| `src/budget.ts` | per-card and per-day ceilings, turn caps, rough price table |
+| `src/limits.ts` | turn caps and rough prompt-token estimation |
 | `src/llm.ts` | cheap-tier JSON caller + provider chain + lenient JSON extraction |
 | `src/triage.ts` | one call → spec + split + route; writes the resulting graph |
 | `src/workspace.ts` | enforces the card's `workspace`: repo / git worktree / scratch dir |
@@ -179,8 +179,7 @@ expected; only mid-card session resume is runtime-bound.
   here because they need the same context.
 - **Paperclip** (`paperclipai/paperclip`): goal ancestry — every card carries the
   chain of intent back to the root goal, so a worker three levels deep knows the
-  mission without anyone pasting it. Also its budget/governance framing, reduced
-  here to atomic spend reservations against two admission ceilings.
+  mission without anyone pasting it.
 - **kanban-md**: cards as markdown with cooperative claiming, so the board is
   diffable and hand-editable. The lease DB is the part it does not have.
 - **vibe-kanban**: worktree-per-task isolation as a first-class idea (the
@@ -207,10 +206,10 @@ expected; only mid-card session resume is runtime-bound.
 6. **Implementation completion is review-gated**: a successful writable worker
    lands in `review`, with its HANDOFF retained when present. Explicitly read-only
    roles may complete directly; `BLOCKED` remains a distinct successful stop.
-7. **Atomic budget admission** — configured worst-case metered spend is reserved
-   per card and per day before launch, then reconciled. Both cost and tokens are ledgered per card and per kind
-   (`triage:codex`, `run:claude`, …), so `ab stats` shows where the money went.
-7. **The role soul leads the prompt** so provider-side prefix caching can hit
+7. **Usage is observable, not gating** — cost and tokens are ledgered per card
+   and kind (`triage:codex`, `run:claude`, …), so `ab stats` shows where model
+   usage went without blocking dispatch on guessed dollar prices.
+8. **The role soul leads the prompt** so provider-side prefix caching can hit
    across every card that role owns.
 
 ## Where a worker may write
@@ -271,8 +270,7 @@ unsatisfied and cannot silently unlock work.
 - A decomposition root (a card whose `root` is its own id) promotes to `review`
   when its children finish, never to `ready` — otherwise every completed graph
   would spend one unbudgeted run on a card whose body is just "Children: …".
-- `budget.perCardTurns` reaches `claude` only (`--max-turns`). `codex exec` has no
-  turn flag, so a codex card is bounded by the cost ceiling and the runner
-  timeout instead.
+- `maxTurns` reaches `claude` only (`--max-turns`). `codex exec` has no turn
+  flag, so a codex card is bounded by the runner timeout instead.
 - Secrets are never written to cards: the guidance is in every seeded soul, and
   logs live under `board/.logs/` which is gitignored along with `.state/`.

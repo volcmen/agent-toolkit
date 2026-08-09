@@ -53,12 +53,6 @@ export function inspectRoles(root: string): RoleInspection {
       problems.push("max_turns: must be an integer >= 1 or null");
     }
     if (
-      data.budget_usd !== null && data.budget_usd !== undefined
-      && !(typeof data.budget_usd === "number" && Number.isFinite(data.budget_usd) && data.budget_usd >= 0)
-    ) {
-      problems.push("budget_usd: must be a number >= 0 or null");
-    }
-    if (
       data.skills !== undefined
       && !(Array.isArray(data.skills) && data.skills.every((skill) => typeof skill === "string"))
     ) {
@@ -81,7 +75,6 @@ export function inspectRoles(root: string): RoleInspection {
       readOnly: data.read_only === true,
       skills: Array.isArray(data.skills) ? data.skills : [],
       maxTurns: typeof data.max_turns === "number" ? data.max_turns : null,
-      budgetUsd: typeof data.budget_usd === "number" ? data.budget_usd : null,
     });
   }
   return {
@@ -284,7 +277,6 @@ function seedDocument(seed: SeedRole): string {
       read_only: seed.readOnly ? true : null,
       skills: [],
       max_turns: null,
-      budget_usd: null,
     },
     `${seed.soul}\n\n## Shared worker contract\n\n${SHARED_CONTRACT}`,
   );

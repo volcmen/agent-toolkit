@@ -33,7 +33,6 @@ export type Card = {
   /** Extra skills to force-load into the worker. */
   skills: string[];
   workspace: "scratch" | "repo" | "worktree";
-  budgetUsd: number | null;
   maxTurns: number | null;
   goal: boolean;
   priority: number;
@@ -57,7 +56,6 @@ export type Role = {
   readOnly: boolean;
   skills: string[];
   maxTurns: number | null;
-  budgetUsd: number | null;
 };
 
 export type BoardConfig = {
@@ -79,13 +77,8 @@ export type BoardConfig = {
    * model does not believe never reaches a paid worker.
    */
   triageMinConfidence: number;
-  budget: {
-    perCardUsd: number;
-    perDayUsd: number;
-    perCardTurns: number;
-    /** Worst-case amount reserved before a metered worker launch. */
-    perRunReserveUsd?: number;
-  };
+  /** Default per-run turn bound; cards and roles may override it. */
+  maxTurns: number;
   context: {
     /** Hard caps so a card never carries an unbounded prompt. */
     bodyChars: number;
@@ -98,8 +91,6 @@ export type BoardConfig = {
 export type TriageProvider = {
   kind: "local" | "codex" | "claude";
   model: string;
-  /** Skip this provider when the estimated cost exceeds the remaining budget. */
-  maxUsd: number;
   baseUrl?: string;
 };
 

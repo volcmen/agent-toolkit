@@ -30,7 +30,7 @@ racing for the same card produce exactly one winner without a lock file.
 - Cards diff, review, and merge like any other file; `board/` can be committed.
 - A crash cannot corrupt a card (rename is atomic). Stale recovery uses durable
   launch phases: never-spawned claims are released, while registered process
-  groups are terminated before their lease and reservation are reclaimed.
+  groups are terminated before their lease is reclaimed.
 - Dual storage means two things can disagree. Mitigation: the DB never stores
   anything authoritative about a card, only about *runs of* a card.
 - Listing is an O(cards) directory scan. Fine at hundreds of cards; if it ever

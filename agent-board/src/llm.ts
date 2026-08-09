@@ -1,7 +1,7 @@
 /**
  * Cheap-tier JSON caller used by triage and the completion judge.
  *
- * Design rules, all cost-driven:
+ * Design rules:
  *   - one shot per provider, no retry loops; walk the chain instead
  *   - the first provider is local (free) and only failure or low confidence
  *     escalates to a paid one
@@ -328,8 +328,6 @@ export async function callProvider(provider: TriageProvider, call: JsonCall): Pr
 }
 
 export type ChainOptions = {
-  /** Remaining spend; providers priced above it are skipped, not attempted. */
-  remainingUsd?: number;
   /** Accept the first result whose `confidence` clears this bar. */
   minConfidence?: number;
   onAttempt?: (result: JsonResult) => void;
@@ -357,19 +355,6 @@ export async function callChain(
     error: "no triage provider configured",
   };
   for (const provider of chain) {
-    if (options.remainingUsd !== undefined && provider.maxUsd > options.remainingUsd) {
-      last = {
-        ok: false,
-        data: null,
-        provider: provider.kind,
-        model: provider.model,
-        usd: 0,
-        tokens: 0,
-        raw: "",
-        error: `skipped: needs $${provider.maxUsd} but only $${options.remainingUsd.toFixed(4)} left`,
-      };
-      continue;
-    }
     const result = await callProvider(provider, call);
     options.onAttempt?.(result);
     last = result;

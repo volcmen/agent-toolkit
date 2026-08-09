@@ -8,7 +8,7 @@ and local agent tools behind one catalog and one validation workflow.
 
 - [`wiki`](wiki/): bounded Obsidian memory shared by Claude Code and Codex.
 - [`agent-board`](agent-board/): autonomous local Kanban with markdown cards,
-  role souls, local-first triage, budget-capped dispatch, and a web dashboard.
+  role souls, local-first triage, capacity-safe dispatch, and a web dashboard.
 - [`codex-pair`](codex-pair/): independent Codex judgment, product shaping,
   technical leadership, and review from inside Claude Code.
 - [`shared-agents`](shared-agents/): one provider-native personal controller and

@@ -7,7 +7,7 @@
  * dispatcher does not care which agent CLI is behind a role.
  */
 
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { LOGS_DIR } from "./config.ts";
 import { parseCodexStream } from "./llm.ts";
@@ -134,6 +134,48 @@ export function codexDeveloperInstructions(system: string): string {
 export function logPathFor(root: string, cardId: string): string {
   mkdirSync(join(root, LOGS_DIR), { recursive: true });
   return join(root, LOGS_DIR, `${cardId}.log`);
+}
+
+const LOG_LINE_CHARS = 4_000;
+export const DEFAULT_LOG_OUTPUT_CHARS = 20_000;
+
+function boundedLogLine(line: string): string {
+  if (line.length <= LOG_LINE_CHARS) return line;
+  const marker = ` … [${line.length - LOG_LINE_CHARS} chars omitted] … `;
+  const visible = LOG_LINE_CHARS - marker.length;
+  const prefix = Math.ceil(visible / 2);
+  return `${line.slice(0, prefix)}${marker}${line.slice(-(visible - prefix))}`;
+}
+
+/**
+ * Read a useful recent log window without letting one NDJSON event inject a
+ * megabyte-scale command result into an agent prompt or dashboard response.
+ */
+export function readLogTail(
+  path: string,
+  tail: number,
+  maxChars = DEFAULT_LOG_OUTPUT_CHARS,
+): string[] {
+  if (!existsSync(path)) return [];
+  const lines = readFileSync(path, "utf8")
+    .split("\n")
+    .slice(-Math.min(Math.max(tail, 1), 500))
+    .map(boundedLogLine);
+  const selected: string[] = [];
+  let chars = 0;
+  let truncated = false;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index] as string;
+    const added = line.length + (selected.length > 0 ? 1 : 0);
+    if (chars + added > maxChars) {
+      truncated = true;
+      break;
+    }
+    selected.unshift(line);
+    chars += added;
+  }
+  if (truncated) selected.unshift(`… log output bounded to the latest ${maxChars} characters …`);
+  return selected;
 }
 
 function appendLog(path: string, line: string): void {

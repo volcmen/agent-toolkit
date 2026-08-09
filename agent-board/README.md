@@ -1,12 +1,12 @@
 # agent-board
 
 An autonomous Kanban for coding agents that runs on your machine. You state goals;
-a cheap model specs, splits, and routes them; a dispatcher runs `codex` / `claude`
-/ local workers under atomic budget admission; you attach to any card when you want
-to steer it yourself.
+a local-first model specs, splits, and routes them; a dispatcher runs `codex` /
+`claude` / local workers under atomic capacity admission; you attach to any card
+when you want to steer it yourself.
 
 It combines readable, editable card files with role-based routing, resumable
-sessions, failure handling, and atomic spend reservations before metered runs.
+sessions, failure handling, and atomic concurrency enforcement.
 
 ```
 you ──"do a, b, c"──▶ ab add ──▶ triage (free local model, escalates only if it must)
@@ -31,7 +31,7 @@ you ──"do a, b, c"──▶ ab add ──▶ triage (free local model, escal
 ```bash
 cd /path/to/ai-workspace/agent-board
 bun install --frozen-lockfile
-bun link          # package.json exposes bin/ab.ts as `ab`
+bun link          # exposes `agent-board` plus the shorter `ab` alias
 
 # create a board root; ab creates <root>/board/ inside it (roles + prompts are seeded)
 ab init /path/to/boards/myrepo --workdir /path/to/code/myrepo --name myrepo
@@ -48,16 +48,19 @@ ab attach <id>     # resume that exact codex/claude session interactively
 ab archive --done  # preview finished work; add --yes to move it off the board
 ```
 
+For automation, prefer `agent-board`: it is unambiguous on systems such as macOS
+that already ship ApacheBench as `ab`. The examples use the shorter alias.
+
 ## What is in a board
 
-Each project has its own board root. Cards, roles, leases, logs, and budget
+Each project has its own board root. Cards, roles, leases, logs, and usage
 ledger are never mixed across projects. A small user-level registry
 (`~/.config/agent-board/projects.json`) lets the CLI find a board from its
 workdir and tells the dashboard which isolated boards to show.
 
 ```
 board/
-  board.json          caps, budgets, triage chain, workdir
+  board.json          capacity, turn limits, triage chain, workdir
   cards/*.md          the cards — commit these, edit them by hand
   archive/*.md        archived cards — same files, out of the live board
   roles/<n>/SOUL.md   the souls: frontmatter contract + system prompt
@@ -173,12 +176,11 @@ done.
 | Handoffs, not transcripts | a 10-card graph costs linearly, not quadratically |
 | Review-gated completion | implementation runs stop in `review`; only explicitly read-only work auto-completes |
 | Session resume | retries and attaches continue instead of re-priming |
-| Atomic spend reservation | reserves configured worst-case metered spend against per-card/UTC-day admission limits before launch, then reconciles reported actual cost |
 | Ledger by kind | `ab stats` attributes spend to `triage:codex`, `run:claude`, … |
 
-Budget admission and the cost/token ledger remain available to agents and the
-CLI through `ab stats`, but are intentionally omitted from the primary dashboard
-because they are operational safeguards rather than useful board-level UI.
+The cost/token ledger is telemetry, not an admission gate. `ab stats` reports
+what providers returned, while dispatch eligibility depends only on capacity,
+dependencies, ownership, and card validity.
 
 ## Stack
 
@@ -203,7 +205,7 @@ requires a Chrome-family browser available to Bun.
 ## The skill
 
 `plugins/agent-board/` ships an `agent-board` skill so Claude Code and Codex both
-know how to act as the PM for this board (intake, routing precedence, budgets,
+know how to act as the PM for this board (intake, routing precedence, limits,
 supervision). It is distributed through the workspace-wide `ai-workspace`
 marketplace, declared in the root `plugins.json` — this project owns the plugin
 directory, not the distribution:
@@ -227,8 +229,8 @@ claude plugin install agent-board@ai-workspace --scope user
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — module map, lifecycle, and
   design influences
-- [docs/decisions/](docs/decisions/) — DDR-0001…0006: markdown+SQLite split,
-  local-first triage, budget as a gate, handoffs not transcripts, why standalone,
+- [docs/decisions/](docs/decisions/) — design records for markdown+SQLite,
+  local-first triage, usage telemetry, handoffs, standalone operation, and
   enforced workspaces
 
 ## Where a card writes
@@ -249,18 +251,14 @@ claude plugin install agent-board@ai-workspace --scope user
 - **No wiki/vault integration**: card outcomes and handoffs stay in `board/`;
   nothing is written to the Obsidian vault, and nothing imports vault TODOs.
 - The per-card **turn cap applies to claude only** — `codex exec` has no turn
-  flag, so codex cards are bounded by the cost ceiling and the runner timeout.
+  flag, so codex cards are bounded by the runner timeout.
 - No goal-loop judge: a card is one worker run plus retries.
   A decomposition root lands in `review` for you rather than being auto-judged.
 - Worktrees are created but never cleaned up; `git worktree remove` is manual.
 
-## Budget limitation
+## Usage reporting
 
-`budget.perRunReserveUsd` and each triage provider's `maxUsd` are admission
-reservations, not a provider-side kill switch. They prevent multiple
-dispatchers from jointly launching known worst cases beyond a card/day limit.
-Subscription-billed or unknown-price runtimes can report `$0`, and a provider
-can report an actual charge above the configured reservation only after it
-finishes. For those runtimes the board records tokens/cost honestly but cannot
-guarantee a monetary stop; use provider-side account limits when that guarantee
-is required.
+The board records tokens and any provider-reported cost after each call. Many
+subscription runtimes report `$0`, so this ledger is useful attribution rather
+than authoritative billing. Use provider-side account controls if you need a
+monetary stop.

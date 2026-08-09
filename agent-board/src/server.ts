@@ -25,8 +25,7 @@ import { loadRoles } from "./roles.ts";
 import { loadPrompts } from "./prompts.ts";
 import { cardsById, dispatchPreview, parentsSatisfied, tick, type TickOptions, type TickReport } from "./dispatcher.ts";
 import { triageCard } from "./triage.ts";
-import { logPathFor } from "./runners.ts";
-import * as budget from "./budget.ts";
+import { logPathFor, readLogTail } from "./runners.ts";
 import { RUNTIMES, STATUSES, type Card, type Runtime, type Status } from "./types.ts";
 import { DEFAULT_DASHBOARD_PORT, listProjects, registerProject } from "./projects.ts";
 import {
@@ -88,7 +87,7 @@ export function originAllowed(origin: string | null, host: string | null): boole
   }
 }
 
-function cardView(card: Card, db: LeaseDb, config: ReturnType<typeof loadConfig>) {
+function cardView(card: Card, db: LeaseDb) {
   const leased = db.lease(card.id) !== null || db.hasActiveTriage(card.id);
   return {
     id: card.id,
@@ -109,7 +108,6 @@ function cardView(card: Card, db: LeaseDb, config: ReturnType<typeof loadConfig>
     updatedAt: card.updatedAt,
     spentUsd: db.spentOnCard(card.id),
     tokens: db.tokensOnCard(card.id),
-    ceilingUsd: budget.cardCeiling(card, config),
     leased,
     allowedActions: allowedLifecycleActions(card, leased),
   };
@@ -163,14 +161,13 @@ export function createServer(options: ServeOptions) {
    * archive-free so finished work cannot reappear in the columns or the counts.
    */
   const archivePayload = (limit: number) => {
-    const cfg = config();
     const archived = store
       .listArchived()
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return {
       total: archived.length,
       limit,
-      cards: archived.slice(0, limit).map((card) => cardView(card, db, cfg)),
+      cards: archived.slice(0, limit).map((card) => cardView(card, db)),
     };
   };
 
@@ -180,7 +177,7 @@ export function createServer(options: ServeOptions) {
     const byStatus: Record<string, ReturnType<typeof cardView>[]> = {};
     for (const column of COLUMNS) byStatus[column] = [];
     for (const card of cards) {
-      (byStatus[card.status] ??= []).push(cardView(card, db, cfg));
+      (byStatus[card.status] ??= []).push(cardView(card, db));
     }
     for (const column of COLUMNS) {
       byStatus[column]?.sort((a, b) => b.priority - a.priority || a.updatedAt.localeCompare(b.updatedAt));
@@ -209,7 +206,6 @@ export function createServer(options: ServeOptions) {
       spend: {
         today: db.spentToday(),
         tokens: db.tokensToday(),
-        capUsd: cfg.budget.perDayUsd,
         byKind: db.ledgerByKind(),
         day: today(),
       },
@@ -241,8 +237,7 @@ export function createServer(options: ServeOptions) {
           running: projectDb.activeLeases().length,
           trackedSpendUsd: projectDb.spentToday(),
           trackedTokens: projectDb.tokensToday(),
-          budgetCapUsd: loadConfig(project.root).budget.perDayUsd,
-          budgetDay: today(),
+          usageDay: today(),
         };
         if (project.root !== canonicalRoot) projectDb.close();
         return summary;
@@ -352,13 +347,10 @@ export function createServer(options: ServeOptions) {
       if (!card) return json({ error: "no such card" }, 404);
       const logPath = logPathFor(root, card.id);
       const tail = Number(url.searchParams.get("tail") ?? 60);
-      const logLines = existsSync(logPath)
-        ? readFileSync(logPath, "utf8").split("\n").slice(-Math.min(Math.max(tail, 1), 500))
-        : [];
+      const logLines = readLogTail(logPath, tail);
       return json({
-        ...cardView(card, db, config()),
+        ...cardView(card, db),
         body: card.body,
-        budgetUsd: card.budgetUsd,
         maxTurns: card.maxTurns,
         skills: card.skills,
         goal: card.goal,
@@ -434,14 +426,10 @@ export function createServer(options: ServeOptions) {
         : payload.model.trim() || null;
       let parents: string[] = [];
       let priority = 0;
-      let budgetUsd = roleDef?.budgetUsd ?? null;
       let maxTurns = roleDef?.maxTurns ?? null;
       try {
         if (payload.parents !== undefined) parents = validateParents(store, payload.parents);
         if (payload.priority !== undefined) priority = finiteNumber(payload.priority, "priority") as number;
-        if (payload.budgetUsd !== undefined) {
-          budgetUsd = finiteNumber(payload.budgetUsd, "budgetUsd", { nullable: true, min: 0 });
-        }
         if (payload.maxTurns !== undefined) {
           maxTurns = finiteNumber(payload.maxTurns, "maxTurns", { nullable: true, min: 1, integer: true });
         }
@@ -463,13 +451,12 @@ export function createServer(options: ServeOptions) {
         model,
         parents,
         priority,
-        budgetUsd,
         maxTurns,
         workspace: workspace as Card["workspace"],
         status: explicitReady || legacyReady ? dependenciesDone ? "ready" : "todo" : "triage",
       });
       log(`web: added ${card.id} (${card.status})`);
-      return json({ card: cardView(card, db, config()) });
+      return json({ card: cardView(card, db) });
     }
 
     const setMatch = /^\/api\/card\/([^/]+)\/set$/.exec(path);
@@ -552,12 +539,6 @@ export function createServer(options: ServeOptions) {
       try {
         if (payload.parents !== undefined) patch.parents = validateParents(store, payload.parents, card.id);
         if (payload.priority !== undefined) patch.priority = finiteNumber(payload.priority, "priority") as number;
-        if (payload.budgetUsd !== undefined) {
-          patch.budgetUsd = finiteNumber(payload.budgetUsd, "budgetUsd", { nullable: true, min: 0 });
-          if (patch.budgetUsd !== null && patch.budgetUsd < db.spentOnCard(card.id)) {
-            throw new Error("budgetUsd cannot be below already-spent amount");
-          }
-        }
         if (payload.maxTurns !== undefined) {
           patch.maxTurns = finiteNumber(payload.maxTurns, "maxTurns", { nullable: true, min: 1, integer: true });
         }
@@ -580,7 +561,7 @@ export function createServer(options: ServeOptions) {
       if (!mutation.ok) return json({ error: "card is being worked — stop the run first" }, 409);
       const updated = mutation.value;
       log(`web: set ${card.id} → ${updated.status}/${updated.role ?? "-"}`);
-      return json({ card: cardView(updated, db, config()) });
+      return json({ card: cardView(updated, db) });
     }
 
     const triageMatch = /^\/api\/card\/([^/]+)\/triage$/.exec(path);

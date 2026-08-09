@@ -79,9 +79,8 @@ the outcome and surfaced by `ab triage`.
 - `ab roles` exits nonzero and explains a rejected `SOUL.md`, and `ab roles
   --reseed` restores the shipped souls — an upgrade that sharpens descriptions can
   now actually reach an existing board.
-- Role `budget_usd`/`max_turns` now also reach single-card triage results, not
-  only fanout children; a capped role was previously getting the full per-card
-  ceiling whenever triage did not split.
+- Role `max_turns` now also reaches single-card triage results, not only fanout
+  children.
 
 ## Alternatives
 

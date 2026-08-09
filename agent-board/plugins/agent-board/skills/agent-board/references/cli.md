@@ -12,7 +12,7 @@ ab init [dir] [--workdir <repo>] [--name <n>] [--force]
 
 ab add "<goal>" [--role <r>] [--runtime codex|claude|local] [--model <m>]
                 [--prompt <name> --<var> <value> …] [--body <text>] [--body-file <f>]
-                [--parent <id,id>] [--budget <usd>] [--max-turns <n>] [--priority <n>]
+                [--parent <id,id>] [--max-turns <n>] [--priority <n>]
                 [--no-triage] [--workspace repo|worktree|scratch] [--skill <a,b>]
     No --role  → status=triage (a cheap model specs, splits, and routes it).
     With --role → status=ready (skips triage entirely).
@@ -23,7 +23,7 @@ ab triage [<id>…] [--min-confidence 0.6]       run triage now
 ab dispatch [--dry-run] [--max-triage <n>] [--json]
 ab daemon [--interval <s>] [--ticks <n>]
 ab set <id> [--status <s>] [--role <r>] [--runtime <rt>] [--model <m>]
-            [--workspace repo|worktree|scratch] [--budget <usd>] [--max-turns <n>]
+            [--workspace repo|worktree|scratch] [--max-turns <n>]
             [--priority <n>] [--parent <ids>]
 ab attach <id> [--fresh] [--runtime codex|claude] [--say <text>] [--dry-run]
 ab plan <id>                                   exact system+user prompt and argv
@@ -80,7 +80,7 @@ Ids accept the short tail: `ab show n93w1anz` works as well as `ab show c_n93w1a
 - `todo` — specified but gated on parents
 - `ready` — eligible, waiting for a concurrency slot
 - `running` — a lease exists; only the dispatcher creates this
-- `blocked` — needs a human (spec gap, budget breach, tripped breaker, `BLOCKED:`,
+- `blocked` — needs a human (spec gap, tripped breaker, `BLOCKED:`,
   or a parked triage plan: `low triage confidence …`, whose proposal is on the card)
 - `archived` — off the board; the file moves to `board/archive/`. Only `reopen`
   leaves it. Archived cards still resolve by id and still satisfy a child's
@@ -103,8 +103,7 @@ workspace: repo         # repo (default) | worktree | scratch — ENFORCED:
                         #   repo     = the board's workdir
                         #   worktree = git worktree on branch ab/<tail>
                         #   scratch  = empty dir, repo out of scope
-budget_usd: null        # null = board default (perCardUsd)
-max_turns: null         # null = board default (perCardTurns)
+max_turns: null         # null = board default maxTurns
 priority: 0             # higher runs first
 session_id: 019fa469-…  # codex thread / claude session — enables `ab attach`
 blocked_reason: null
@@ -131,10 +130,10 @@ the source of truth and a hand edit wins.
   "defaultRole": "generalist",
   "defaultRuntime": "codex",
   "triageChain": [
-    { "kind": "local", "model": "llama3.2:3b", "maxUsd": 0, "baseUrl": "http://127.0.0.1:11434/v1" },
-    { "kind": "codex", "model": "gpt-5.6-sol", "maxUsd": 0.05 }
+    { "kind": "local", "model": "llama3.2:3b", "baseUrl": "http://127.0.0.1:11434/v1" },
+    { "kind": "codex", "model": "gpt-5.6-sol" }
   ],
-  "budget": { "perCardUsd": 1.5, "perDayUsd": 10, "perCardTurns": 24 },
+  "maxTurns": 24,
   "context": { "bodyChars": 4000, "handoffChars": 800, "ancestryChars": 1200, "maxParents": 6 }
 }
 ```

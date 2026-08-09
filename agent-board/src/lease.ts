@@ -99,16 +99,6 @@ CREATE TABLE IF NOT EXISTS ledger (
 );
 CREATE INDEX IF NOT EXISTS ledger_day ON ledger(day);
 CREATE INDEX IF NOT EXISTS ledger_card ON ledger(card_id);
-CREATE TABLE IF NOT EXISTS reservations (
-  reservation_id TEXT PRIMARY KEY,
-  card_id         TEXT NOT NULL,
-  kind            TEXT NOT NULL,
-  usd             REAL NOT NULL,
-  day             TEXT NOT NULL,
-  created_at      INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS reservations_day ON reservations(day);
-CREATE INDEX IF NOT EXISTS reservations_card ON reservations(card_id);
 CREATE TABLE IF NOT EXISTS triage_claims (
   card_id      TEXT PRIMARY KEY,
   claim_id     TEXT NOT NULL,
@@ -116,8 +106,7 @@ CREATE TABLE IF NOT EXISTS triage_claims (
   state        TEXT NOT NULL,
   result_json  TEXT,
   idempotency_key TEXT NOT NULL DEFAULT '',
-  claimed_at   INTEGER NOT NULL,
-  reservation_id TEXT
+  claimed_at   INTEGER NOT NULL
 );
 `;
 
@@ -140,7 +129,6 @@ export class LeaseDb {
       "ALTER TABLE leases ADD COLUMN role TEXT NOT NULL DEFAULT ''",
       "ALTER TABLE leases ADD COLUMN launch_state TEXT NOT NULL DEFAULT 'claimed'",
       "ALTER TABLE triage_claims ADD COLUMN idempotency_key TEXT NOT NULL DEFAULT ''",
-      "ALTER TABLE triage_claims ADD COLUMN reservation_id TEXT",
     ]) {
       try { this.db.exec(migration); } catch {}
     }
@@ -257,32 +245,20 @@ export class LeaseDb {
     }
   }
 
-  /** Atomically enforce capacity and reserve spend before launching a worker. */
-  claimWithReservation(input: {
+  /** Atomically enforce capacity before launching a worker. */
+  claimCapacity(input: {
     cardId: string; owner: string; role: string; pid: number | null;
     maxRunning: number; maxRunningPerRole: number;
-    reserveUsd: number; cardMaxUsd: number; dayMaxUsd: number;
     /** Re-read markdown while the admission lock is held. */
     snapshotValid?: () => boolean;
-  }): { runId: string; reservationId: string } | null {
+  }): { runId: string } | null {
     const runId = newRunId();
-    const reservationId = `z_${crypto.randomUUID()}`;
     const at = nowSeconds();
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const global = Number((this.db.query("SELECT COUNT(*) AS n FROM leases").get() as { n: number }).n);
       const perRole = Number((this.db.query("SELECT COUNT(*) AS n FROM leases WHERE role = ?1").get(input.role) as { n: number }).n);
-      const cardUsed = Number((this.db.query(
-        `SELECT COALESCE((SELECT SUM(usd) FROM ledger WHERE card_id=?1),0)
-              + COALESCE((SELECT SUM(usd) FROM reservations WHERE card_id=?1),0) AS total`,
-      ).get(input.cardId) as { total: number }).total);
-      const dayUsed = Number((this.db.query(
-        `SELECT COALESCE((SELECT SUM(usd) FROM ledger WHERE day=?1),0)
-              + COALESCE((SELECT SUM(usd) FROM reservations WHERE day=?1),0) AS total`,
-      ).get(today()) as { total: number }).total);
       if (global >= input.maxRunning || perRole >= input.maxRunningPerRole
-        || cardUsed + input.reserveUsd > input.cardMaxUsd
-        || dayUsed + input.reserveUsd > input.dayMaxUsd
         || this.lease(input.cardId)
         || (input.snapshotValid && !input.snapshotValid())) {
         this.db.exec("ROLLBACK");
@@ -292,79 +268,12 @@ export class LeaseDb {
         `INSERT INTO leases(card_id,run_id,owner,claimed_at,heartbeat_at,pid,role)
          VALUES(?1,?2,?3,?4,?4,?5,?6)`,
       ).run(input.cardId, runId, input.owner, at, input.pid, input.role);
-      this.db.query(
-        "INSERT INTO reservations(reservation_id,card_id,kind,usd,day,created_at) VALUES(?1,?2,?3,?4,?5,?6)",
-      ).run(reservationId, input.cardId, `run:${input.role}`, input.reserveUsd, today(), at);
       this.db.exec("COMMIT");
-      return { runId, reservationId };
+      return { runId };
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
     }
-  }
-
-  reserve(cardId: string, kind: string, amount: number, cardMax: number, dayMax: number): string | null {
-    const id = `z_${crypto.randomUUID()}`;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const cardUsed = this.spentOnCard(cardId) + this.reservedOnCard(cardId);
-      const dayUsed = this.spentToday() + this.reservedToday();
-      if (cardUsed + amount > cardMax || dayUsed + amount > dayMax) {
-        this.db.exec("ROLLBACK");
-        return null;
-      }
-      this.db.query(
-        "INSERT INTO reservations(reservation_id,card_id,kind,usd,day,created_at) VALUES(?1,?2,?3,?4,?5,?6)",
-      ).run(id, cardId, kind, amount, today(), nowSeconds());
-      this.db.exec("COMMIT");
-      return id;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
-  }
-
-  reconcile(
-    reservationId: string,
-    cardId: string,
-    kind: string,
-    usd: number,
-    tokens = 0,
-    inTransaction = false,
-  ): boolean {
-    if (!inTransaction) this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const removed = this.db.query("DELETE FROM reservations WHERE reservation_id=?1 AND card_id=?2")
-        .run(reservationId, cardId).changes;
-      if (removed !== 1) {
-        if (!inTransaction) this.db.exec("ROLLBACK");
-        return false;
-      }
-      if (usd > 0 || tokens > 0) this.spend(cardId, kind, usd, tokens);
-      if (!inTransaction) this.db.exec("COMMIT");
-      return true;
-    } catch (error) {
-      if (!inTransaction) this.db.exec("ROLLBACK");
-      throw error;
-    }
-  }
-
-  cancelReservation(reservationId: string): void {
-    this.db.query("DELETE FROM reservations WHERE reservation_id=?1").run(reservationId);
-  }
-
-  cancelReservationsForCard(cardId: string): void {
-    this.db.query("DELETE FROM reservations WHERE card_id=?1").run(cardId);
-  }
-
-  reservedOnCard(cardId: string): number {
-    return Number((this.db.query("SELECT COALESCE(SUM(usd),0) AS total FROM reservations WHERE card_id=?1")
-      .get(cardId) as { total: number }).total);
-  }
-
-  reservedToday(day = today()): number {
-    return Number((this.db.query("SELECT COALESCE(SUM(usd),0) AS total FROM reservations WHERE day=?1")
-      .get(day) as { total: number }).total);
   }
 
   claimTriage(
@@ -379,9 +288,9 @@ export class LeaseDb {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const prior = this.db.query(
-        "SELECT state,idempotency_key,claimed_at,reservation_id FROM triage_claims WHERE card_id=?1",
+        "SELECT state,idempotency_key,claimed_at FROM triage_claims WHERE card_id=?1",
       ).get(cardId) as {
-        state: string; idempotency_key: string; claimed_at: number; reservation_id: string | null;
+        state: string; idempotency_key: string; claimed_at: number;
       } | null;
       const stale = prior?.state === "running" && at - prior.claimed_at > staleSeconds;
       const reusable = !prior || stale || (prior.state === "done" && prior.idempotency_key !== idempotencyKey);
@@ -389,14 +298,11 @@ export class LeaseDb {
         this.db.exec("ROLLBACK");
         return null;
       }
-      if (prior?.reservation_id) {
-        this.db.query("DELETE FROM reservations WHERE reservation_id=?1").run(prior.reservation_id);
-      }
       this.db.query(
         `INSERT INTO triage_claims(card_id,claim_id,owner,state,claimed_at,idempotency_key)
          VALUES(?1,?2,?3,'running',?4,?5)
          ON CONFLICT(card_id) DO UPDATE SET claim_id=?2,owner=?3,state='running',
-           claimed_at=?4,idempotency_key=?5,result_json=NULL,reservation_id=NULL`,
+           claimed_at=?4,idempotency_key=?5,result_json=NULL`,
       ).run(cardId, claimId, owner, at, idempotencyKey);
       this.db.exec("COMMIT");
       return claimId;
@@ -412,44 +318,9 @@ export class LeaseDb {
     ).run(cardId, claimId, at).changes === 1;
   }
 
-  reserveTriage(
-    cardId: string,
-    claimId: string,
-    amount: number,
-    cardMax: number,
-    dayMax: number,
-    at = nowSeconds(),
-  ): string | null {
-    const reservationId = `z_${crypto.randomUUID()}`;
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const owned = this.db.query(
-        "SELECT 1 FROM triage_claims WHERE card_id=?1 AND claim_id=?2 AND state='running' AND reservation_id IS NULL",
-      ).get(cardId, claimId);
-      const cardUsed = this.spentOnCard(cardId) + this.reservedOnCard(cardId);
-      const dayUsed = this.spentToday() + this.reservedToday();
-      if (!owned || cardUsed + amount > cardMax || dayUsed + amount > dayMax) {
-        this.db.exec("ROLLBACK");
-        return null;
-      }
-      this.db.query(
-        "INSERT INTO reservations(reservation_id,card_id,kind,usd,day,created_at) VALUES(?1,?2,'triage',?3,?4,?5)",
-      ).run(reservationId, cardId, amount, today(new Date(at * 1000)), at);
-      this.db.query(
-        "UPDATE triage_claims SET reservation_id=?3 WHERE card_id=?1 AND claim_id=?2 AND state='running'",
-      ).run(cardId, claimId, reservationId);
-      this.db.exec("COMMIT");
-      return reservationId;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
-  }
-
   completeTriage<T>(
     cardId: string,
     claimId: string,
-    reservationId: string,
     charge: { kind: string; usd: number; tokens: number },
     mutation: () => T,
     snapshotValid?: () => boolean,
@@ -458,16 +329,13 @@ export class LeaseDb {
     try {
       const owned = this.db.query(
         `SELECT 1 FROM triage_claims
-         WHERE card_id=?1 AND claim_id=?2 AND state='running' AND reservation_id=?3`,
-      ).get(cardId, claimId, reservationId);
+         WHERE card_id=?1 AND claim_id=?2 AND state='running'`,
+      ).get(cardId, claimId);
       if (!owned) {
         this.db.exec("ROLLBACK");
         return null;
       }
       if (snapshotValid && !snapshotValid()) {
-        this.db.query(
-          "DELETE FROM reservations WHERE reservation_id=?1 AND card_id=?2",
-        ).run(reservationId, cardId);
         if (charge.usd > 0 || charge.tokens > 0) {
           this.spend(cardId, charge.kind, charge.usd, charge.tokens);
         }
@@ -478,52 +346,12 @@ export class LeaseDb {
         return null;
       }
       const result = mutation();
-      const removed = this.db.query(
-        "DELETE FROM reservations WHERE reservation_id=?1 AND card_id=?2",
-      ).run(reservationId, cardId).changes;
-      if (removed !== 1) throw new Error("triage reservation disappeared before completion");
       if (charge.usd > 0 || charge.tokens > 0) {
         this.spend(cardId, charge.kind, charge.usd, charge.tokens);
       }
       this.db.query(
-        `UPDATE triage_claims SET state='done',result_json=?3,reservation_id=NULL
-         WHERE card_id=?1 AND claim_id=?2 AND state='running'`,
-      ).run(cardId, claimId, JSON.stringify(result));
-      this.db.exec("COMMIT");
-      return result;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
-  }
-
-  completeUnreservedTriage<T>(
-    cardId: string,
-    claimId: string,
-    mutation: () => T,
-    snapshotValid?: () => boolean,
-  ): T | null {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const owned = this.db.query(
-        `SELECT 1 FROM triage_claims
-         WHERE card_id=?1 AND claim_id=?2 AND state='running' AND reservation_id IS NULL`,
-      ).get(cardId, claimId);
-      if (!owned) {
-        this.db.exec("ROLLBACK");
-        return null;
-      }
-      if (snapshotValid && !snapshotValid()) {
-        this.db.query(
-          "DELETE FROM triage_claims WHERE card_id=?1 AND claim_id=?2",
-        ).run(cardId, claimId);
-        this.db.exec("COMMIT");
-        return null;
-      }
-      const result = mutation();
-      this.db.query(
         `UPDATE triage_claims SET state='done',result_json=?3
-         WHERE card_id=?1 AND claim_id=?2 AND state='running' AND reservation_id IS NULL`,
+         WHERE card_id=?1 AND claim_id=?2 AND state='running'`,
       ).run(cardId, claimId, JSON.stringify(result));
       this.db.exec("COMMIT");
       return result;
@@ -540,25 +368,9 @@ export class LeaseDb {
   }
 
   releaseTriage(cardId: string, claimId: string): boolean {
-    this.db.exec("BEGIN IMMEDIATE");
-    try {
-      const row = this.db.query(
-        "SELECT reservation_id FROM triage_claims WHERE card_id=?1 AND claim_id=?2 AND state='running'",
-      ).get(cardId, claimId) as { reservation_id: string | null } | null;
-      if (!row) {
-        this.db.exec("ROLLBACK");
-        return false;
-      }
-      if (row.reservation_id) {
-        this.db.query("DELETE FROM reservations WHERE reservation_id=?1").run(row.reservation_id);
-      }
-      this.db.query("DELETE FROM triage_claims WHERE card_id=?1 AND claim_id=?2").run(cardId, claimId);
-      this.db.exec("COMMIT");
-      return true;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
+    return this.db.query(
+      "DELETE FROM triage_claims WHERE card_id=?1 AND claim_id=?2 AND state='running'",
+    ).run(cardId, claimId).changes === 1;
   }
 
   triageState(cardId: string): { state: string; result: unknown } | null {

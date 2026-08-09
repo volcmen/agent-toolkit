@@ -42,7 +42,7 @@
       "displayName": "Agent Board",
       "source": "./agent-board/plugins/agent-board",
       "version": "1.0.0",
-      "description": "Autonomous local Kanban for coding agents: markdown cards, souls/roles, local-first triage, budget-capped dispatch, attachable sessions.",
+      "description": "Autonomous local Kanban for coding agents: markdown cards, souls/roles, local-first triage, capacity-safe dispatch, attachable sessions.",
       "category": "Productivity",
       "keywords": [
         "kanban",
@@ -54,7 +54,7 @@
       "license": "MIT",
       "codex": {
         "shortDescription": "Turn goals into routed Kanban cards that agents execute unattended.",
-        "longDescription": "Product-manager control of a local agent board: raw ideas are specified, split, and routed to role souls by a cheap local-first triage model; a dispatcher runs codex/claude/local workers under hard budget ceilings; cards are markdown files you can edit by hand.",
+        "longDescription": "Product-manager control of a local agent board: raw ideas are specified, split, and routed to role souls by a local-first triage model; a dispatcher runs codex/claude/local workers under atomic capacity controls; cards are markdown files you can edit by hand.",
         "capabilities": [
           "Read",
           "Write"

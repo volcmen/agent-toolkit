@@ -199,7 +199,7 @@ async function triageCardClaimed(
   config: BoardConfig,
   roles: Role[],
   card: Card,
-  options: { minConfidence?: number; remainingUsd?: number; log?: (line: string) => void } = {},
+  options: { minConfidence?: number; log?: (line: string) => void } = {},
 ): Promise<TriageOutcome> {
   const user = [
     `Card id: ${card.id}`,
@@ -218,7 +218,6 @@ async function triageCardClaimed(
     { system: SYSTEM, user, schema: TRIAGE_SCHEMA, maxOutputTokens: 1600 },
     {
       minConfidence: options.minConfidence ?? config.triageMinConfidence,
-      remainingUsd: options.remainingUsd,
       onAttempt: (attempt) => {
         attempts.push(attempt);
         options.log?.(
@@ -329,9 +328,6 @@ function applyTriageOutcome(
       role: only.role,
       runtime: card.runtime ?? role?.runtime ?? config.defaultRuntime,
       model: card.model ?? role?.model ?? null,
-      // Role caps must land here too, not only on fanout children: a role capped
-      // at $0.25 was silently getting the full per-card ceiling on single cards.
-      budgetUsd: card.budgetUsd ?? role?.budgetUsd ?? null,
       maxTurns: card.maxTurns ?? role?.maxTurns ?? null,
       skills: card.skills.length > 0 ? card.skills : role?.skills ?? [],
       status: card.parents.length > 0 ? "todo" : "ready",
@@ -360,7 +356,6 @@ function applyTriageOutcome(
       parents,
       root: card.root ?? card.id,
       status: parents.length > 0 ? "todo" : "ready",
-      budgetUsd: role?.budgetUsd ?? null,
       maxTurns: role?.maxTurns ?? null,
       skills: role?.skills ?? [],
     });
@@ -389,14 +384,14 @@ function applyTriageOutcome(
   };
 }
 
-/** Cross-process idempotent triage entry point with pre-call spend reservation. */
+/** Cross-process idempotent triage entry point. */
 export async function triageCard(
   store: Store,
   db: LeaseDb,
   config: BoardConfig,
   roles: Role[],
   card: Card,
-  options: { minConfidence?: number; remainingUsd?: number; log?: (line: string) => void; owner?: string } = {},
+  options: { minConfidence?: number; log?: (line: string) => void; owner?: string } = {},
 ): Promise<TriageOutcome> {
   const minConfidence = options.minConfidence ?? config.triageMinConfidence;
   if (card.invalidReason) {
@@ -433,32 +428,6 @@ export async function triageCard(
           created: [], plan: null, error: "triage already in progress",
         };
   }
-  const reserveUsd = config.triageChain.reduce((sum, provider) => sum + Math.max(0, provider.maxUsd), 0);
-  const reservationId = db.reserveTriage(
-    card.id,
-    claimId,
-    reserveUsd,
-    card.budgetUsd ?? config.budget.perCardUsd,
-    config.budget.perDayUsd,
-  );
-  if (!reservationId) {
-    const outcome: TriageOutcome = {
-      ok: false, cardId: card.id, provider: "none", model: "", usd: 0, tokens: 0,
-      created: [], plan: null, error: "budget reservation unavailable",
-    };
-    return db.completeUnreservedTriage(
-      card.id,
-      claimId,
-      () => {
-        store.update(card.id, { status: "blocked", blockedReason: "budget reservation unavailable" });
-        return outcome;
-      },
-      snapshotValid,
-    ) ?? {
-      ok: false, cardId: card.id, provider: "none", model: "", usd: 0, tokens: 0,
-      created: [], plan: null, error: "triage ownership or card revision lost",
-    };
-  }
   let outcome: TriageOutcome;
   const heartbeatMs = Math.max(1_000, Math.floor(config.staleSeconds * 500));
   const heartbeat = setInterval(() => db.heartbeatTriage(card.id, claimId), heartbeatMs);
@@ -466,7 +435,6 @@ export async function triageCard(
     outcome = await triageCardClaimed(config, roles, card, {
       ...options,
       minConfidence,
-      remainingUsd: Math.min(options.remainingUsd ?? reserveUsd, reserveUsd),
     });
   } catch (error) {
     outcome = {
@@ -479,7 +447,6 @@ export async function triageCard(
   const completed = db.completeTriage(
     card.id,
     claimId,
-    reservationId,
     { kind: `triage:${outcome.provider}`, usd: outcome.usd, tokens: outcome.tokens },
     () => applyTriageOutcome(store, config, roles, card, outcome, minConfidence),
     snapshotValid,

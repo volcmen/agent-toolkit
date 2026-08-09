@@ -107,7 +107,7 @@ describe("dashboard", () => {
     expect(data.cards.ready[0].body.trim()).toBe("");
     expect(data.roles.length).toBeGreaterThanOrEqual(10);
     expect(data.caps.maxRunning).toBe(2);
-    expect(data.spend.capUsd).toBe(10);
+    expect(data.spend).not.toHaveProperty("capUsd");
   });
 
   test("card detail carries spec, runs and a log tail", async () => {
@@ -133,7 +133,7 @@ describe("dashboard", () => {
     expect(data.name).toBe("backend");
     expect(data.soul).toContain("backend");
     expect(data).toHaveProperty("skills");
-    expect(data).toHaveProperty("budgetUsd");
+    expect(data).not.toHaveProperty("budgetUsd");
     expect(JSON.stringify(data)).not.toContain(root);
   });
 
@@ -196,7 +196,6 @@ describe("mutations", () => {
       parents: [parent.id],
       runtime: "claude",
       model: "model-x",
-      budgetUsd: 0.75,
       maxTurns: 12,
       mode: "ready",
     });
@@ -210,7 +209,6 @@ describe("mutations", () => {
       parents: [parent.id],
       runtime: "claude",
       model: "model-x",
-      budgetUsd: 0.75,
       maxTurns: 12,
     });
   });
@@ -224,7 +222,7 @@ describe("mutations", () => {
     expect(store.requireById(card.id).role).toBe("qa");
   });
 
-  test("set atomically edits spec, routing, dependency, and budget fields", async () => {
+  test("set atomically edits spec, routing, dependency, and execution fields", async () => {
     const parent = store.create({ title: "parent", status: "done" });
     const card = store.create({ title: "old", role: "backend", status: "ready" });
     const response = await write(boot(), `/api/card/${card.id}/set`, {
@@ -234,7 +232,6 @@ describe("mutations", () => {
       priority: 20,
       runtime: "claude",
       model: "m",
-      budgetUsd: 1,
       maxTurns: 9,
     });
     expect(response.status).toBe(200);
@@ -246,7 +243,6 @@ describe("mutations", () => {
       priority: 20,
       runtime: "claude",
       model: "m",
-      budgetUsd: 1,
       maxTurns: 9,
     });
   });
@@ -259,7 +255,6 @@ describe("mutations", () => {
     expect((await write(url, `/api/card/${card.id}/set`, {})).status).toBe(400);
     expect((await write(url, `/api/card/${card.id}/set`, { priority: "10" })).status).toBe(400);
     expect((await write(url, `/api/card/${card.id}/set`, { maxTurns: 1.5 })).status).toBe(400);
-    expect((await write(url, `/api/card/${card.id}/set`, { budgetUsd: -1 })).status).toBe(400);
   });
 
   test("dependency and lifecycle invariants reject missing, self, cycles, and manual running", async () => {

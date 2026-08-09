@@ -25,7 +25,7 @@
     {
       "name": "agent-board",
       "source": "./agent-board/plugins/agent-board",
-      "description": "Autonomous local Kanban for coding agents: markdown cards, souls/roles, local-first triage, budget-capped dispatch, attachable sessions.",
+      "description": "Autonomous local Kanban for coding agents: markdown cards, souls/roles, local-first triage, capacity-safe dispatch, attachable sessions.",
       "version": "1.0.0",
       "displayName": "Agent Board",
       "category": "Productivity",
