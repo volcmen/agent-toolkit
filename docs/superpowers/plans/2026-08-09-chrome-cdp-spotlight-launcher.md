@@ -740,36 +740,19 @@ git commit -m "test: cover Chrome CDP integration states"
 - Create: `chrome-cdp/app/Info.plist`
 - Create: `chrome-cdp/scripts/build.sh`
 - Create: `chrome-cdp/scripts/verify.sh`
-- Create: `chrome-cdp/Tests/ChromeCDPMacTests/AppBundleContractTests.swift`
+- Create: `chrome-cdp/Tests/ChromeCDPMacTests/AppBundleBuildTests.swift`
 
-- [ ] **Step 1: Write app-resource and script contract tests**
+- [ ] **Step 1: Write staged app-build tests**
 
-Assert the AppleScript contains lifecycle presentation only, resolves `Contents/Resources/chrome-cdp-helper` relative to `path to me`, shell-quotes that path, shows stdout as a success notification, and presents stderr as a critical failure alert. Assert it contains no port, profile, process, CDP, lock, or launch logic.
+Copy the project into an XCTest temporary directory, run its `scripts/build.sh`, and verify the resulting app bundle as an artifact. Inspect the built `Info.plist` with `/usr/bin/plutil`; execute the embedded `Contents/Resources/chrome-cdp-helper` with `--version` and `--self-check`; run `/usr/bin/osadecompile` against the compiled applet; and require strict `/usr/bin/codesign` verification for both the embedded helper and bundle, including ad-hoc signature details.
 
-Assert `Info.plist` has:
-
-```text
-CFBundleDisplayName = Chrome CDP
-CFBundleExecutable = applet
-CFBundleIconFile = applet
-CFBundleIdentifier = ai.daviddavid.chrome-cdp
-CFBundleInfoDictionaryVersion = 6.0
-CFBundleName = Chrome CDP
-CFBundlePackageType = APPL
-CFBundleSignature = aplt
-CFBundleShortVersionString = 1.0.0
-CFBundleVersion = 1
-LSMinimumSystemVersion = 13.0
-OSAAppletShowStartupScreen = false
-```
-
-Assert the scripts use fixed absolute system tool paths, create output through a temporary stage, embed the helper, ad-hoc sign the helper and bundle, strictly verify both, and never access the live CDP endpoint.
+Assert the built plist exposes the exact identity and version values specified below through `plutil`, not by inspecting source. The test must not invoke the helper's no-argument lifecycle, access a live CDP endpoint, or write to the repository's `dist/` directory.
 
 - [ ] **Step 2: Run and confirm the missing resources**
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter AppBundleContractTests
+/usr/bin/swift test --filter AppBundleBuildTests
 ```
 
 Expected: FAIL because the app and scripts do not exist.
@@ -793,6 +776,23 @@ end run
 
 The deterministic plist may retain the generic `applet.icns` produced by `osacompile`; custom icon work stays deferred.
 
+Give `Info.plist` these exact artifact values:
+
+```text
+CFBundleDisplayName = Chrome CDP
+CFBundleExecutable = applet
+CFBundleIconFile = applet
+CFBundleIdentifier = ai.daviddavid.chrome-cdp
+CFBundleInfoDictionaryVersion = 6.0
+CFBundleName = Chrome CDP
+CFBundlePackageType = APPL
+CFBundleSignature = aplt
+CFBundleShortVersionString = 1.0.0
+CFBundleVersion = 1
+LSMinimumSystemVersion = 13.0
+OSAAppletShowStartupScreen = false
+```
+
 - [ ] **Step 4: Implement staged assembly and verification**
 
 `build.sh` performs this exact sequence:
@@ -811,12 +811,12 @@ The deterministic plist may retain the generic `applet.icns` produced by `osacom
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter AppBundleContractTests
+/usr/bin/swift test --filter AppBundleBuildTests
 /bin/chmod 0755 scripts/build.sh scripts/verify.sh
 ./scripts/build.sh
 ./scripts/verify.sh --app "$PWD/dist/Chrome CDP.app" --staged
 cd /Users/david.david/Personal/ai
-git add chrome-cdp/app chrome-cdp/scripts chrome-cdp/Tests/ChromeCDPMacTests/AppBundleContractTests.swift
+git add chrome-cdp/app chrome-cdp/scripts chrome-cdp/Tests/ChromeCDPMacTests/AppBundleBuildTests.swift
 git commit -m "build: assemble Chrome CDP Spotlight app"
 ```
 
@@ -833,30 +833,22 @@ Expected: staged verification PASS; `dist/` remains untracked.
 - Create: `chrome-cdp/scripts/bundle-manifest.sh`
 - Create: `chrome-cdp/scripts/install.sh`
 - Create: `chrome-cdp/Tests/ChromeCDPMacTests/AtomicBundleSwapTests.swift`
-- Create: `chrome-cdp/Tests/ChromeCDPMacTests/InstallScriptContractTests.swift`
+- Create: `chrome-cdp/Tests/ChromeCDPMacTests/BundleManifestTests.swift`
 
 - [ ] **Step 1: Write atomic-swap tests before installer code**
 
-In a temporary directory, create `installed.app` and `staged.app` with distinct files and inodes. Assert `AtomicBundleSwap.publish(staged:installed:)` calls `renameatx_np` with both canonical paths and `RENAME_SWAP` when both exist, leaving new bytes at installed and old bytes at staged in one operation. Assert calling it again rolls back. When installed is absent, assert plain `rename` publishes staged. Reject symlinks, non-bundles, different parent directories, and paths outside the explicitly supplied parent.
+In a temporary directory, create `installed.app` and `staged.app` with distinct files and inodes. Exercise the real filesystem operation and assert `AtomicBundleSwap.publish(staged:installed:)` exchanges their bytes and inodes. Assert calling it again rolls back. When installed is absent, assert publication moves staged into place. Reject symlinks, non-bundles, different parent directories, and paths outside the explicitly supplied parent. The implementation requirement remains `renameatx_np` with `RENAME_SWAP` when both bundles exist and plain `rename` when the destination is absent; verify that requirement in code review rather than by mocking the system call.
 
-- [ ] **Step 2: Write manifest and install-script contract tests**
+- [ ] **Step 2: Write bundle-manifest behavior tests**
 
-Assert the manifest is deterministic, relative-path based, recursive, sorted under `LC_ALL=C`, and contains SHA-256 for every regular bundle file. Assert `install.sh`:
-
-- builds and verifies before touching `/Applications`;
-- captures UTC timestamp, recursive manifest, `codesign -dvvv`, strict verification output, and a complete `ditto --rsrc --extattr` backup;
-- compares source and backup manifests before staging;
-- stages only at `/Applications/.Chrome CDP.app.stage-12345`, with the real numeric process ID substituted for `12345`, after validating the prefix literally;
-- invokes the native atomic installer rather than a two-step replacement;
-- swaps back on installed verification failure;
-- never contains `kill`, `pkill`, `killall`, `chmod -R`, a profile copy, browser launch, URL-handler mutation, or agent-browser startup.
+In temporary `.app` bundles containing nested regular files, run `bundle-manifest.sh` and assert it emits deterministic SHA-256 records using sorted relative paths under `LC_ALL=C`. Assert identical bundle contents produce identical manifests regardless of creation order, and changing one regular file changes only its corresponding digest record. Reject non-absolute paths, paths that are not `.app` bundles, and bundles containing unsupported file types.
 
 - [ ] **Step 3: Run and confirm installer tests fail**
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
 /usr/bin/swift test --filter AtomicBundleSwapTests
-/usr/bin/swift test --filter InstallScriptContractTests
+/usr/bin/swift test --filter BundleManifestTests
 ```
 
 Expected: FAIL because atomic swap and scripts do not exist.
@@ -890,11 +882,14 @@ Validate exact canonical parent paths and bundle suffixes before calling `Atomic
 
 `install.sh rollback BACKUP_DIR` canonicalizes `BACKUP_DIR`, requires its verified `Chrome CDP.app`, stages it under `/Applications`, atomically swaps it with the installed bundle, verifies the result, swaps back on failure, and preserves the displaced current bundle in `BACKUP_DIR/rollback-displaced/`. Neither mode touches browser processes or profiles.
 
+Exercise installation safety through the native swap tests, bundle-manifest behavior tests, staged app verification, `/bin/bash -n` syntax checks, and explicit code review of ordering and destructive boundaries. Do not add source-text or forbidden-string contract tests.
+
 - [ ] **Step 6: Test only temporary paths, then commit**
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
 /usr/bin/swift test --filter ChromeCDPMacTests
+/bin/bash -n scripts/build.sh scripts/bundle-manifest.sh scripts/install.sh scripts/verify.sh
 /bin/chmod 0755 scripts/bundle-manifest.sh scripts/install.sh
 ./scripts/build.sh
 ./scripts/verify.sh --app "$PWD/dist/Chrome CDP.app" --staged
@@ -911,30 +906,24 @@ Expected: all tests PASS; do not run `install.sh install` yet.
 
 - Modify: `chrome-cdp/README.md`
 - Modify: `README.md`
-- Create: `chrome-cdp/Tests/ChromeCDPMacTests/DocumentationContractTests.swift`
 
-- [ ] **Step 1: Write documentation contract tests**
+- [ ] **Step 1: Define the verified documentation scope**
 
-Assert the project README documents prerequisites, architecture, exact fixed production values, security decisions, build, default tests, opt-in integration tests, staged verification, install, backup discovery, rollback, warm-reuse validation, agent-browser attachment, and troubleshooting for each failure case. Assert it explicitly warns never to point automation at the live normal Chrome user-data root and distinguishes agent-browser's copied named-profile behavior from direct persistent profile paths.
+Document prerequisites, architecture, exact fixed production values, security decisions, build, default tests, opt-in integration tests, staged verification, install, backup discovery, rollback, warm-reuse validation, agent-browser attachment, and troubleshooting for each failure case.
 
-Assert the root README adds this project without removing existing entries:
+Explicitly warn never to point automation at the live normal Chrome user-data root and distinguish agent-browser's copied named-profile behavior from direct persistent profile paths.
+
+The root README adds this project without removing existing entries:
 
 ```markdown
 - [`chrome-cdp`](chrome-cdp/): safe Spotlight launcher for a headed, dedicated-profile Chrome CDP session.
 ```
 
-- [ ] **Step 2: Run and confirm documentation failure**
+- [ ] **Step 2: Route the final README draft through Alan Wake**
 
-```bash
-cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter DocumentationContractTests
-```
+Provide the verified commands and behavior to the required `alan_wake` specialist. Fact-check its output against the implemented code, command help, scripts, and observed verification output before applying it. Human prose does not get a source-text unit test.
 
-Expected: FAIL because the initial README is intentionally incomplete.
-
-- [ ] **Step 3: Route the final README draft through Alan Wake**
-
-Provide the verified commands and behavior to the required `alan_wake` specialist. Fact-check its output against code and scripts before applying it. Document rollback without a fake path by using:
+Document rollback without a fake path by using:
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
@@ -944,7 +933,7 @@ backup_dir="$(/usr/bin/find ../.local-backup/chrome-cdp -mindepth 1 -maxdepth 1 
 
 Document three isolated `agent-browser` sessions and `close` each session after inspection; closing an attached session must be verified not to terminate Chrome.
 
-- [ ] **Step 4: Run docs and full default verification, then commit**
+- [ ] **Step 3: Run full default verification, then commit**
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
@@ -953,7 +942,7 @@ cd /Users/david.david/Personal/ai/chrome-cdp
 ./scripts/verify.sh --app "$PWD/dist/Chrome CDP.app" --staged
 cd /Users/david.david/Personal/ai
 git diff --check
-git add chrome-cdp/README.md chrome-cdp/Tests/ChromeCDPMacTests/DocumentationContractTests.swift README.md
+git add chrome-cdp/README.md README.md
 git commit -m "docs: document Chrome CDP launcher"
 ```
 
