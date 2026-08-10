@@ -1,4 +1,4 @@
-import ChromeCDPMac
+@_spi(Testing) import ChromeCDPMac
 import ChromeCDPTestSupport
 import Darwin
 import Dispatch
@@ -101,6 +101,53 @@ private func expectLockTimeout(_ operation: () throws -> Void) throws {
         throw TestAssertionFailure("expected launch-lock timeout, got \(error)")
     }
     throw TestAssertionFailure("expected launch-lock timeout")
+}
+
+private func expectStabilizationIdentityChange(_ operation: () throws -> Void) throws {
+    do {
+        try operation()
+    } catch LockEntryStabilizationError.identityChanged {
+        return
+    } catch {
+        throw TestAssertionFailure("expected stabilization identity change, got \(error)")
+    }
+    throw TestAssertionFailure("expected stabilization identity change")
+}
+
+private let lockIdentityA = LockEntryIdentity(device: 1, inode: 10)
+private let lockIdentityB = LockEntryIdentity(device: 1, inode: 20)
+
+func launchLockStabilizationExistingEntryCannotFallBackToCreationTest() throws {
+    var policy = LockEntryStabilizationPolicy()
+    try expectEqual(try policy.observeExisting(lockIdentityA), .openExisting)
+
+    try expectStabilizationIdentityChange { _ = try policy.observeAbsent() }
+    try expectStabilizationIdentityChange { try policy.entryDisappeared() }
+}
+
+func launchLockStabilizationRejectsExistingIdentityTransitionTest() throws {
+    var policy = LockEntryStabilizationPolicy()
+    try expectEqual(try policy.observeExisting(lockIdentityA), .openExisting)
+
+    try expectStabilizationIdentityChange { _ = try policy.observeExisting(lockIdentityB) }
+}
+
+func launchLockStabilizationLatchesPeerAfterCreationRaceTest() throws {
+    var policy = LockEntryStabilizationPolicy()
+    try expectEqual(try policy.observeAbsent(), .createIfAbsent)
+    try policy.creationLostToPeer()
+
+    try expectEqual(try policy.observeExisting(lockIdentityB), .openExisting)
+    try policy.validateOpened(lockIdentityB)
+}
+
+func launchLockStabilizationRejectsLatchedPeerDisappearanceTest() throws {
+    var policy = LockEntryStabilizationPolicy()
+    try expectEqual(try policy.observeAbsent(), .createIfAbsent)
+    try policy.creationLostToPeer()
+    _ = try policy.observeExisting(lockIdentityB)
+
+    try expectStabilizationIdentityChange { try policy.entryDisappeared() }
 }
 
 func launchLockCreatesPrivateLockAndExcludesChildTest() throws {
@@ -394,6 +441,10 @@ func launchLockCooperatesDuringSimultaneousFirstCreationTest() throws {
 }
 
 func launchLockTests() throws {
+    try launchLockStabilizationExistingEntryCannotFallBackToCreationTest()
+    try launchLockStabilizationRejectsExistingIdentityTransitionTest()
+    try launchLockStabilizationLatchesPeerAfterCreationRaceTest()
+    try launchLockStabilizationRejectsLatchedPeerDisappearanceTest()
     try launchLockCreatesPrivateLockAndExcludesChildTest()
     try launchLockReleaseAllowsSecondChildToAcquireTest()
     try launchLockChildTerminationReleasesKernelLockWithoutChangingLockFileTest()
@@ -416,6 +467,10 @@ func launchLockTests() throws {
 
 func registerLaunchLockTests(_ runner: inout TestRunner) {
     runner.register("LaunchLockTests", launchLockTests)
+    runner.register("LaunchLockTests.StabilizationExistingEntryCannotFallBackToCreation", launchLockStabilizationExistingEntryCannotFallBackToCreationTest)
+    runner.register("LaunchLockTests.StabilizationRejectsExistingIdentityTransition", launchLockStabilizationRejectsExistingIdentityTransitionTest)
+    runner.register("LaunchLockTests.StabilizationLatchesPeerAfterCreationRace", launchLockStabilizationLatchesPeerAfterCreationRaceTest)
+    runner.register("LaunchLockTests.StabilizationRejectsLatchedPeerDisappearance", launchLockStabilizationRejectsLatchedPeerDisappearanceTest)
     runner.register("LaunchLockTests.CreatesPrivateLockAndExcludesChild", launchLockCreatesPrivateLockAndExcludesChildTest)
     runner.register("LaunchLockTests.ReleaseAllowsSecondChildToAcquire", launchLockReleaseAllowsSecondChildToAcquireTest)
     runner.register("LaunchLockTests.ChildTerminationReleasesKernelLockWithoutChangingLockFile", launchLockChildTerminationReleasesKernelLockWithoutChangingLockFileTest)

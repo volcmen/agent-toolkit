@@ -27,6 +27,86 @@ public enum LaunchLockError: Error, CustomStringConvertible {
     }
 }
 
+@_spi(Testing)
+public struct LockEntryIdentity: Equatable, Sendable {
+    public let device: UInt64
+    public let inode: UInt64
+
+    public init(device: UInt64, inode: UInt64) {
+        self.device = device
+        self.inode = inode
+    }
+}
+
+@_spi(Testing)
+public enum LockEntryStabilizationAction: Equatable, Sendable {
+    case createIfAbsent
+    case openExisting
+}
+
+@_spi(Testing)
+public enum LockEntryStabilizationError: Error, Equatable, Sendable {
+    case identityChanged
+}
+
+@_spi(Testing)
+public struct LockEntryStabilizationPolicy {
+    private enum State: Equatable {
+        case unobserved
+        case creating
+        case awaitingPeer
+        case latched(LockEntryIdentity)
+    }
+
+    private var state: State = .unobserved
+
+    public init() {}
+
+    public mutating func observeAbsent() throws -> LockEntryStabilizationAction {
+        guard case .unobserved = state else {
+            throw LockEntryStabilizationError.identityChanged
+        }
+        state = .creating
+        return .createIfAbsent
+    }
+
+    public mutating func observeExisting(_ identity: LockEntryIdentity) throws -> LockEntryStabilizationAction {
+        switch state {
+        case .unobserved, .awaitingPeer:
+            state = .latched(identity)
+            return .openExisting
+        case .latched(let latched) where latched == identity:
+            return .openExisting
+        case .creating, .latched:
+            throw LockEntryStabilizationError.identityChanged
+        }
+    }
+
+    public mutating func creationLostToPeer() throws {
+        guard case .creating = state else {
+            throw LockEntryStabilizationError.identityChanged
+        }
+        state = .awaitingPeer
+    }
+
+    public mutating func created(_ identity: LockEntryIdentity) throws {
+        guard case .creating = state else {
+            throw LockEntryStabilizationError.identityChanged
+        }
+        state = .latched(identity)
+    }
+
+    public func validateOpened(_ identity: LockEntryIdentity) throws {
+        guard case .latched(let latched) = state, latched == identity else {
+            throw LockEntryStabilizationError.identityChanged
+        }
+    }
+
+    public func entryDisappeared() throws -> Never {
+        throw LockEntryStabilizationError.identityChanged
+    }
+}
+
 public final class LaunchLockLease: @unchecked Sendable {
     private let stateLock = NSLock()
     private var descriptor: Int32?
@@ -204,8 +284,27 @@ public struct LaunchLock {
         deadline: TimeInterval,
         pollInterval: TimeInterval
     ) throws -> StableLockEntry {
+        do {
+            return try stabilizeLockEntry(
+                parentDescriptor: parentDescriptor,
+                name: name,
+                deadline: deadline,
+                pollInterval: pollInterval
+            )
+        } catch is LockEntryStabilizationError {
+            throw LaunchLockError.identityChanged
+        }
+    }
+
+    private func stabilizeLockEntry(
+        parentDescriptor: Int32,
+        name: String,
+        deadline: TimeInterval,
+        pollInterval: TimeInterval
+    ) throws -> StableLockEntry {
         var isInitialObservation = true
         var retried = false
+        var policy = LockEntryStabilizationPolicy()
         while true {
             if !isInitialObservation, try monotonicTime() >= deadline {
                 throw LaunchLockError.timeout
@@ -213,26 +312,24 @@ public struct LaunchLock {
             isInitialObservation = false
             let existing = try lstatLockEntry(parentDescriptor: parentDescriptor, name: name)
             let flags: Int32
-            if existing == nil {
-                flags = O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW
-            } else {
+            if let existing {
+                _ = try policy.observeExisting(FileIdentity(existing).testingIdentity)
                 flags = O_RDWR | O_CLOEXEC | O_NOFOLLOW
+            } else {
+                _ = try policy.observeAbsent()
+                flags = O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW
             }
             let descriptor = openat(parentDescriptor, name, flags, Self.privateLockMode)
             if descriptor < 0 {
                 let openError = errno
                 if existing == nil, openError == EEXIST {
+                    try policy.creationLostToPeer()
                     retried = true
                     try waitForStableEntryRetry(deadline: deadline, pollInterval: pollInterval)
                     continue
                 }
                 if existing != nil, openError == ENOENT {
-                    guard try lstatLockEntry(parentDescriptor: parentDescriptor, name: name) != nil else {
-                        throw LaunchLockError.identityChanged
-                    }
-                    retried = true
-                    try waitForStableEntryRetry(deadline: deadline, pollInterval: pollInterval)
-                    continue
+                    try policy.entryDisappeared()
                 }
                 throw LaunchLockError.posix(action: "open lock file without following links", errno: openError)
             }
@@ -245,8 +342,10 @@ public struct LaunchLock {
 
             let opened = try fstatMetadata(descriptor, action: "inspect opened launch-lock file")
             let openedIdentity = try requireCurrentUserSingleLinkRegularFile(opened)
-            if let existing, FileIdentity(existing) != openedIdentity {
-                throw LaunchLockError.identityChanged
+            if existing == nil {
+                try policy.created(openedIdentity.testingIdentity)
+            } else {
+                try policy.validateOpened(openedIdentity.testingIdentity)
             }
             if mode(of: opened) != Self.privateLockMode {
                 guard fchmod(descriptor, Self.privateLockMode) == 0 else {
@@ -257,8 +356,11 @@ public struct LaunchLock {
             guard FileIdentity(repaired) == openedIdentity, mode(of: repaired) == Self.privateLockMode else {
                 throw LaunchLockError.identityChanged
             }
-            guard let current = try lstatLockEntry(parentDescriptor: parentDescriptor, name: name),
-                  FileIdentity(current) == openedIdentity,
+            guard let current = try lstatLockEntry(parentDescriptor: parentDescriptor, name: name) else {
+                try policy.entryDisappeared()
+            }
+            _ = try policy.observeExisting(FileIdentity(current).testingIdentity)
+            guard FileIdentity(current) == openedIdentity,
                   mode(of: current) == Self.privateLockMode else {
                 throw LaunchLockError.identityChanged
             }
@@ -393,6 +495,10 @@ private struct FileIdentity: Equatable {
     init(_ metadata: stat) {
         device = metadata.st_dev
         inode = metadata.st_ino
+    }
+
+    var testingIdentity: LockEntryIdentity {
+        LockEntryIdentity(device: UInt64(device), inode: UInt64(inode))
     }
 }
 
