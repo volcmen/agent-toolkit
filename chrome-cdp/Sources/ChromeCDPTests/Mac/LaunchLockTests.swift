@@ -1,6 +1,7 @@
 import ChromeCDPMac
 import ChromeCDPTestSupport
 import Darwin
+import Dispatch
 import Foundation
 
 private func lockMode(at url: URL) throws -> UInt16 {
@@ -8,7 +9,7 @@ private func lockMode(at url: URL) throws -> UInt16 {
     guard lstat(url.path, &metadata) == 0 else {
         throw TestAssertionFailure("lstat failed for lock fixture: \(url.path)")
     }
-    return UInt16(metadata.st_mode & 0o777)
+    return UInt16(metadata.st_mode & 0o7777)
 }
 
 private func waitForChildStatus(_ statusURL: URL, process: Process, timeout: TimeInterval = 2) throws -> String {
@@ -58,6 +59,17 @@ private func expectUnsafeLockRejection(_ expected: LaunchLockError, _ operation:
     throw TestAssertionFailure("expected unsafe launch-lock rejection")
 }
 
+private func expectLockTimeout(_ operation: () throws -> Void) throws {
+    do {
+        try operation()
+    } catch LaunchLockError.timeout {
+        return
+    } catch {
+        throw TestAssertionFailure("expected launch-lock timeout, got \(error)")
+    }
+    throw TestAssertionFailure("expected launch-lock timeout")
+}
+
 func launchLockCreatesPrivateLockAndExcludesChildTest() throws {
     let root = try makeTemporaryDirectory(prefix: "chrome-cdp-launch-lock-")
     defer { try? FileManager.default.removeItem(at: root) }
@@ -67,10 +79,60 @@ func launchLockCreatesPrivateLockAndExcludesChildTest() throws {
     let statusURL = root.appendingPathComponent("contended-status")
     let child = try launchLockChild(action: "attempt", lockURL: lockURL, statusURL: statusURL)
 
-    try expectEqual(try waitForChildStatus(statusURL, process: child), "failed")
+    try expectEqual(try waitForChildStatus(statusURL, process: child), "timeout")
     try waitForChildExit(child)
     try expectEqual(try lockMode(at: lockURL), 0o600)
     try expectEqual(try lockMode(at: lockURL.deletingLastPathComponent()), 0o700)
+}
+
+func launchLockRepairsStickyBitOnParentDirectoryTest() throws {
+    let root = try makeTemporaryDirectory(prefix: "chrome-cdp-launch-lock-")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let parent = root.appendingPathComponent("locks", isDirectory: true)
+    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+    guard chmod(parent.path, 0o1700) == 0 else {
+        throw TestAssertionFailure("could not set sticky parent fixture mode")
+    }
+    let lockURL = parent.appendingPathComponent("launch.lock")
+
+    let lease = try LaunchLock(lockURL: lockURL).acquire(timeout: 0.2, pollInterval: 0.01)
+    defer { lease.release() }
+
+    try expectEqual(try lockMode(at: parent), 0o700)
+}
+
+func launchLockRepairsSetgidBitOnParentDirectoryTest() throws {
+    let root = try makeTemporaryDirectory(prefix: "chrome-cdp-launch-lock-")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let parent = root.appendingPathComponent("locks", isDirectory: true)
+    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+    guard chmod(parent.path, 0o2700) == 0 else {
+        throw TestAssertionFailure("could not set setgid parent fixture mode")
+    }
+    let lockURL = parent.appendingPathComponent("launch.lock")
+
+    let lease = try LaunchLock(lockURL: lockURL).acquire(timeout: 0.2, pollInterval: 0.01)
+    defer { lease.release() }
+
+    try expectEqual(try lockMode(at: parent), 0o700)
+}
+
+func launchLockNormalizesSpecialBitsOnExistingFileTest() throws {
+    let root = try makeTemporaryDirectory(prefix: "chrome-cdp-launch-lock-")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let parent = root.appendingPathComponent("locks", isDirectory: true)
+    let lockURL = parent.appendingPathComponent("launch.lock")
+    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+    try "stable lock bytes".write(to: lockURL, atomically: true, encoding: .utf8)
+    guard chmod(lockURL.path, 0o1600) == 0 else {
+        throw TestAssertionFailure("could not set special-bit lock fixture mode")
+    }
+
+    let lease = try LaunchLock(lockURL: lockURL).acquire(timeout: 0.2, pollInterval: 0.01)
+    defer { lease.release() }
+
+    try expectEqual(try lockMode(at: lockURL), 0o600)
+    try expectEqual(try String(contentsOf: lockURL, encoding: .utf8), "stable lock bytes")
 }
 
 func launchLockRejectsSymlinkedParentWithoutChangingTargetTest() throws {
@@ -89,6 +151,19 @@ func launchLockRejectsSymlinkedParentWithoutChangingTargetTest() throws {
     }
 
     try expectEqual(try lockMode(at: target), before)
+}
+
+func launchLockRejectsNonDirectoryParentTest() throws {
+    let root = try makeTemporaryDirectory(prefix: "chrome-cdp-launch-lock-")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let parent = root.appendingPathComponent("locks")
+    try "not a directory".write(to: parent, atomically: true, encoding: .utf8)
+
+    try expectUnsafeLockRejection(.unsafeParent) {
+        _ = try LaunchLock(lockURL: parent.appendingPathComponent("launch.lock")).acquire(timeout: 0.1, pollInterval: 0.01)
+    }
+
+    try expectEqual(try String(contentsOf: parent, encoding: .utf8), "not a directory")
 }
 
 func launchLockRejectsSymlinkedLockFileWithoutChangingTargetTest() throws {
@@ -122,6 +197,25 @@ func launchLockRejectsNonRegularLockPathTest() throws {
     }
 }
 
+func launchLockRejectsHardLinkedLockFileTest() throws {
+    let root = try makeTemporaryDirectory(prefix: "chrome-cdp-launch-lock-")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let parent = root.appendingPathComponent("locks", isDirectory: true)
+    let target = root.appendingPathComponent("target")
+    let lockURL = parent.appendingPathComponent("launch.lock")
+    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+    try "do not mutate hard-link target".write(to: target, atomically: true, encoding: .utf8)
+    guard link(target.path, lockURL.path) == 0 else {
+        throw TestAssertionFailure("could not make hard-linked lock fixture")
+    }
+
+    try expectUnsafeLockRejection(.unsafeLockFile) {
+        _ = try LaunchLock(lockURL: lockURL).acquire(timeout: 0.1, pollInterval: 0.01)
+    }
+
+    try expectEqual(try String(contentsOf: target, encoding: .utf8), "do not mutate hard-link target")
+}
+
 func launchLockReleaseAllowsSecondChildToAcquireTest() throws {
     let root = try makeTemporaryDirectory(prefix: "chrome-cdp-launch-lock-")
     defer { try? FileManager.default.removeItem(at: root) }
@@ -152,6 +246,9 @@ func launchLockChildTerminationReleasesKernelLockWithoutChangingLockFileTest() t
     }
 
     try expectEqual(try waitForChildStatus(readyURL, process: child), "acquired")
+    try expectLockTimeout {
+        _ = try LaunchLock(lockURL: lockURL).acquire(timeout: 0.05, pollInterval: 0.01)
+    }
     child.terminate()
     try waitForChildExit(child)
     _ = try LaunchLock(lockURL: lockURL).acquire(timeout: 0.2, pollInterval: 0.01)
@@ -162,13 +259,59 @@ func launchLockChildTerminationReleasesKernelLockWithoutChangingLockFileTest() t
     }
 }
 
+func launchLockDoubleReleaseAllowsReacquisitionTest() throws {
+    let root = try makeTemporaryDirectory(prefix: "chrome-cdp-launch-lock-")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let lockURL = root.appendingPathComponent("locks/launch.lock")
+    let lease = try LaunchLock(lockURL: lockURL).acquire(timeout: 0.2, pollInterval: 0.01)
+    lease.release()
+    lease.release()
+
+    let nextLease = try LaunchLock(lockURL: lockURL).acquire(timeout: 0.2, pollInterval: 0.01)
+    nextLease.release()
+}
+
+func launchLockDeinitReleasesForReacquisitionTest() throws {
+    let root = try makeTemporaryDirectory(prefix: "chrome-cdp-launch-lock-")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let lockURL = root.appendingPathComponent("locks/launch.lock")
+    var lease: LaunchLockLease? = try LaunchLock(lockURL: lockURL).acquire(timeout: 0.2, pollInterval: 0.01)
+    withExtendedLifetime(lease) {}
+    lease = nil
+
+    let nextLease = try LaunchLock(lockURL: lockURL).acquire(timeout: 0.2, pollInterval: 0.01)
+    nextLease.release()
+}
+
+func launchLockConcurrentReleaseAllowsReacquisitionTest() throws {
+    let root = try makeTemporaryDirectory(prefix: "chrome-cdp-launch-lock-")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let lockURL = root.appendingPathComponent("locks/launch.lock")
+    let lease = try LaunchLock(lockURL: lockURL).acquire(timeout: 0.2, pollInterval: 0.01)
+
+    DispatchQueue.concurrentPerform(iterations: 16) { _ in
+        lease.release()
+    }
+
+    let nextLease = try LaunchLock(lockURL: lockURL).acquire(timeout: 0.2, pollInterval: 0.01)
+    nextLease.release()
+}
+
 func launchLockTests() throws {
     try launchLockCreatesPrivateLockAndExcludesChildTest()
     try launchLockReleaseAllowsSecondChildToAcquireTest()
     try launchLockChildTerminationReleasesKernelLockWithoutChangingLockFileTest()
+    try launchLockDoubleReleaseAllowsReacquisitionTest()
+    try launchLockDeinitReleasesForReacquisitionTest()
+    try launchLockConcurrentReleaseAllowsReacquisitionTest()
+    try launchLockRepairsStickyBitOnParentDirectoryTest()
+    try launchLockRepairsSetgidBitOnParentDirectoryTest()
+    try launchLockNormalizesSpecialBitsOnExistingFileTest()
     try launchLockRejectsSymlinkedParentWithoutChangingTargetTest()
+    try launchLockRejectsNonDirectoryParentTest()
     try launchLockRejectsSymlinkedLockFileWithoutChangingTargetTest()
     try launchLockRejectsNonRegularLockPathTest()
+    try launchLockRejectsHardLinkedLockFileTest()
 }
 
 func registerLaunchLockTests(_ runner: inout TestRunner) {
@@ -176,7 +319,15 @@ func registerLaunchLockTests(_ runner: inout TestRunner) {
     runner.register("LaunchLockTests.CreatesPrivateLockAndExcludesChild", launchLockCreatesPrivateLockAndExcludesChildTest)
     runner.register("LaunchLockTests.ReleaseAllowsSecondChildToAcquire", launchLockReleaseAllowsSecondChildToAcquireTest)
     runner.register("LaunchLockTests.ChildTerminationReleasesKernelLockWithoutChangingLockFile", launchLockChildTerminationReleasesKernelLockWithoutChangingLockFileTest)
+    runner.register("LaunchLockTests.DoubleReleaseAllowsReacquisition", launchLockDoubleReleaseAllowsReacquisitionTest)
+    runner.register("LaunchLockTests.DeinitReleasesForReacquisition", launchLockDeinitReleasesForReacquisitionTest)
+    runner.register("LaunchLockTests.ConcurrentReleaseAllowsReacquisition", launchLockConcurrentReleaseAllowsReacquisitionTest)
+    runner.register("LaunchLockTests.RepairsStickyBitOnParentDirectory", launchLockRepairsStickyBitOnParentDirectoryTest)
+    runner.register("LaunchLockTests.RepairsSetgidBitOnParentDirectory", launchLockRepairsSetgidBitOnParentDirectoryTest)
+    runner.register("LaunchLockTests.NormalizesSpecialBitsOnExistingFile", launchLockNormalizesSpecialBitsOnExistingFileTest)
     runner.register("LaunchLockTests.RejectsSymlinkedParentWithoutChangingTarget", launchLockRejectsSymlinkedParentWithoutChangingTargetTest)
+    runner.register("LaunchLockTests.RejectsNonDirectoryParent", launchLockRejectsNonDirectoryParentTest)
     runner.register("LaunchLockTests.RejectsSymlinkedLockFileWithoutChangingTarget", launchLockRejectsSymlinkedLockFileWithoutChangingTargetTest)
     runner.register("LaunchLockTests.RejectsNonRegularLockPath", launchLockRejectsNonRegularLockPathTest)
+    runner.register("LaunchLockTests.RejectsHardLinkedLockFile", launchLockRejectsHardLinkedLockFileTest)
 }

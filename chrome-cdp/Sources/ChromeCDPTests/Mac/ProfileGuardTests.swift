@@ -9,7 +9,7 @@ private func profileMode(at url: URL) throws -> UInt16 {
     guard lstat(url.path, &metadata) == 0 else {
         throw TestAssertionFailure("lstat failed for test fixture: \(url.path)")
     }
-    return UInt16(metadata.st_mode & 0o777)
+    return UInt16(metadata.st_mode & 0o7777)
 }
 
 private func expectProfileGuardRejection(_ operation: () throws -> Void) throws {
@@ -68,6 +68,36 @@ func profileGuardLeavesPrivateDirectoryUnchangedTest() throws {
     try expectEqual(try profileMode(at: profile), before)
 }
 
+func profileGuardRepairsStickyBitOnPrivateDirectoryTest() throws {
+    let root = try makeTemporaryDirectory(prefix: "chrome-cdp-profile-guard-")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let profile = root.appendingPathComponent("profile", isDirectory: true)
+    try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+    guard chmod(profile.path, 0o1700) == 0 else {
+        throw TestAssertionFailure("could not set sticky profile fixture mode")
+    }
+
+    try ProfileGuard().prepare(profile)
+
+    try expectEqual(try ProfileGuard().inspect(profile), .valid(mode: 0o700))
+    try expectEqual(try profileMode(at: profile), 0o700)
+}
+
+func profileGuardRepairsSetgidBitOnPrivateDirectoryTest() throws {
+    let root = try makeTemporaryDirectory(prefix: "chrome-cdp-profile-guard-")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let profile = root.appendingPathComponent("profile", isDirectory: true)
+    try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+    guard chmod(profile.path, 0o2700) == 0 else {
+        throw TestAssertionFailure("could not set setgid profile fixture mode")
+    }
+
+    try ProfileGuard().prepare(profile)
+
+    try expectEqual(try ProfileGuard().inspect(profile), .valid(mode: 0o700))
+    try expectEqual(try profileMode(at: profile), 0o700)
+}
+
 func profileGuardRejectsSymlinkWithoutChangingTargetTest() throws {
     let root = try makeTemporaryDirectory(prefix: "chrome-cdp-profile-guard-")
     defer { try? FileManager.default.removeItem(at: root) }
@@ -116,6 +146,8 @@ func profileGuardTests() throws {
     try profileGuardCreatesMissingDirectoryWithPrivateModeTest()
     try profileGuardRepairsOnlyProfileDirectoryModeTest()
     try profileGuardLeavesPrivateDirectoryUnchangedTest()
+    try profileGuardRepairsStickyBitOnPrivateDirectoryTest()
+    try profileGuardRepairsSetgidBitOnPrivateDirectoryTest()
     try profileGuardRejectsSymlinkWithoutChangingTargetTest()
     try profileGuardRejectsRegularFileTest()
     try profileGuardRejectsInjectedWrongOwnerWithoutModeRepairTest()
@@ -126,6 +158,8 @@ func registerProfileGuardTests(_ runner: inout TestRunner) {
     runner.register("ProfileGuardTests.CreatesMissingDirectoryWithPrivateMode", profileGuardCreatesMissingDirectoryWithPrivateModeTest)
     runner.register("ProfileGuardTests.RepairsOnlyProfileDirectoryMode", profileGuardRepairsOnlyProfileDirectoryModeTest)
     runner.register("ProfileGuardTests.LeavesPrivateDirectoryUnchanged", profileGuardLeavesPrivateDirectoryUnchangedTest)
+    runner.register("ProfileGuardTests.RepairsStickyBitOnPrivateDirectory", profileGuardRepairsStickyBitOnPrivateDirectoryTest)
+    runner.register("ProfileGuardTests.RepairsSetgidBitOnPrivateDirectory", profileGuardRepairsSetgidBitOnPrivateDirectoryTest)
     runner.register("ProfileGuardTests.RejectsSymlinkWithoutChangingTarget", profileGuardRejectsSymlinkWithoutChangingTargetTest)
     runner.register("ProfileGuardTests.RejectsRegularFile", profileGuardRejectsRegularFileTest)
     runner.register("ProfileGuardTests.RejectsInjectedWrongOwnerWithoutModeRepair", profileGuardRejectsInjectedWrongOwnerWithoutModeRepairTest)

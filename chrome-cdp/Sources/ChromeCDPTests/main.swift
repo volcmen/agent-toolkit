@@ -37,14 +37,19 @@ func runLaunchLockChild(arguments: [String]) -> Int32 {
         let lease = try LaunchLock(lockURL: lockURL).acquire(timeout: 0.4, pollInterval: 0.01)
         try "acquired".write(to: statusURL, atomically: true, encoding: .utf8)
         if action == .hold {
-            while true {
-                usleep(10_000)
+            withExtendedLifetime(lease) {
+                while true {
+                    usleep(10_000)
+                }
             }
         }
         lease.release()
         return 0
+    } catch LaunchLockError.timeout {
+        try? "timeout".write(to: statusURL, atomically: true, encoding: .utf8)
+        return 1
     } catch {
-        try? "failed".write(to: statusURL, atomically: true, encoding: .utf8)
+        try? "error".write(to: statusURL, atomically: true, encoding: .utf8)
         return 1
     }
 }

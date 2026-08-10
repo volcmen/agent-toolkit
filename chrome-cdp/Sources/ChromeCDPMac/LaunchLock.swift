@@ -4,6 +4,7 @@ import Foundation
 public enum LaunchLockError: Error, CustomStringConvertible {
     case unsafeParent
     case unsafeLockFile
+    case identityChanged
     case invalidTiming
     case timeout
     case posix(action: String, errno: Int32)
@@ -13,7 +14,9 @@ public enum LaunchLockError: Error, CustomStringConvertible {
         case .unsafeParent:
             return "Chrome CDP launch-lock parent is not a current-user directory and was not modified."
         case .unsafeLockFile:
-            return "Chrome CDP launch-lock file is not a current-user regular file and was not used."
+            return "Chrome CDP launch-lock file is not a current-user, single-link regular file and was not used."
+        case .identityChanged:
+            return "Chrome CDP launch-lock path changed while it was being validated and was not used."
         case .invalidTiming:
             return "Chrome CDP launch-lock timeout and poll interval must be non-negative and positive, respectively."
         case .timeout:
@@ -24,7 +27,7 @@ public enum LaunchLockError: Error, CustomStringConvertible {
     }
 }
 
-public final class LaunchLockLease {
+public final class LaunchLockLease: @unchecked Sendable {
     private let stateLock = NSLock()
     private var descriptor: Int32?
 
@@ -49,6 +52,8 @@ public final class LaunchLockLease {
 }
 
 public struct LaunchLock {
+    private static let privateDirectoryMode: mode_t = 0o700
+    private static let privateLockMode: mode_t = 0o600
     private let lockURL: URL
     private let currentUID: uid_t
 
@@ -61,12 +66,26 @@ public struct LaunchLock {
         guard timeout >= 0, pollInterval > 0 else {
             throw LaunchLockError.invalidTiming
         }
-        try prepareParent()
-        try rejectUnsafeExistingLockPath()
+        let parentDescriptor = try openVerifiedParentDirectory()
+        defer { _ = close(parentDescriptor) }
 
-        let descriptor = open(lockURL.path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0o600)
+        let lockName = lockURL.lastPathComponent
+        guard !lockName.isEmpty, lockName != ".", lockName != ".." else {
+            throw LaunchLockError.unsafeLockFile
+        }
+        let existing = try lstatLockEntry(parentDescriptor: parentDescriptor, name: lockName)
+        let creationFlags = existing == nil ? O_EXCL : 0
+        let descriptor = openat(
+            parentDescriptor,
+            lockName,
+            O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW | creationFlags,
+            Self.privateLockMode
+        )
         guard descriptor >= 0 else {
-            throw LaunchLockError.posix(action: "open", errno: errno)
+            if errno == EEXIST, existing == nil {
+                throw LaunchLockError.identityChanged
+            }
+            throw LaunchLockError.posix(action: "open lock file without following links", errno: errno)
         }
         var closeDescriptor = true
         defer {
@@ -75,79 +94,146 @@ public struct LaunchLock {
             }
         }
 
-        try validateOpenedLockFile(descriptor)
-        guard fchmod(descriptor, 0o600) == 0 else {
-            throw LaunchLockError.posix(action: "restrict permissions on", errno: errno)
+        let opened = try fstatMetadata(descriptor, action: "inspect opened launch-lock file")
+        let openedIdentity = try requireCurrentUserSingleLinkRegularFile(opened)
+        if let existing, FileIdentity(existing) != openedIdentity {
+            throw LaunchLockError.identityChanged
         }
-        try acquireExclusiveLock(descriptor, timeout: timeout, pollInterval: pollInterval)
+        if mode(of: opened) != Self.privateLockMode {
+            guard fchmod(descriptor, Self.privateLockMode) == 0 else {
+                throw LaunchLockError.posix(action: "restrict permissions on lock file", errno: errno)
+            }
+        }
+        let repaired = try fstatMetadata(descriptor, action: "verify repaired launch-lock file")
+        guard FileIdentity(repaired) == openedIdentity, mode(of: repaired) == Self.privateLockMode else {
+            throw LaunchLockError.identityChanged
+        }
+        guard let current = try lstatLockEntry(parentDescriptor: parentDescriptor, name: lockName),
+              FileIdentity(current) == openedIdentity,
+              mode(of: current) == Self.privateLockMode else {
+            throw LaunchLockError.identityChanged
+        }
 
+        try acquireExclusiveLock(descriptor, timeout: timeout, pollInterval: pollInterval)
         closeDescriptor = false
         return LaunchLockLease(descriptor: descriptor)
     }
 
-    private func prepareParent() throws {
+    private func openVerifiedParentDirectory() throws -> Int32 {
         let parentURL = lockURL.deletingLastPathComponent()
-        switch try inspectPath(parentURL) {
-        case .missing:
+        var observed = try lstatMetadata(at: parentURL)
+        if isMissing(observed) {
             do {
                 let previousUmask = umask(0o077)
                 defer { umask(previousUmask) }
-                if mkdir(parentURL.path, 0o700) != 0 && errno != EEXIST {
+                if mkdir(parentURL.path, Self.privateDirectoryMode) != 0 && errno != EEXIST {
                     throw LaunchLockError.posix(action: "create launch-lock parent", errno: errno)
                 }
             }
-        case .directory:
-            break
-        case .regular, .unsafe:
-            throw LaunchLockError.unsafeParent
+            observed = try lstatMetadata(at: parentURL)
+        }
+        let observedIdentity = try requireCurrentUserDirectory(observed)
+
+        // The configured parent path's ancestors are the trusted boundary; all mutation below
+        // this point uses this no-follow descriptor rather than resolving the parent path again.
+        let descriptor = open(parentURL.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            throw LaunchLockError.posix(action: "open launch-lock parent without following links", errno: errno)
+        }
+        var closeDescriptor = true
+        defer {
+            if closeDescriptor {
+                _ = close(descriptor)
+            }
         }
 
-        guard case .directory(let mode) = try inspectPath(parentURL) else {
-            throw LaunchLockError.unsafeParent
+        var opened = try fstatMetadata(descriptor, action: "inspect opened launch-lock parent")
+        let openedIdentity = try requireCurrentUserDirectory(opened)
+        guard openedIdentity == observedIdentity else {
+            throw LaunchLockError.identityChanged
         }
-        if mode != 0o700 {
-            guard case .directory = try inspectPath(parentURL) else {
-                throw LaunchLockError.unsafeParent
-            }
-            guard chmod(parentURL.path, 0o700) == 0 else {
+        if mode(of: opened) != Self.privateDirectoryMode {
+            guard fchmod(descriptor, Self.privateDirectoryMode) == 0 else {
                 throw LaunchLockError.posix(action: "restrict permissions on launch-lock parent", errno: errno)
             }
+            opened = try fstatMetadata(descriptor, action: "verify repaired launch-lock parent")
         }
-        guard case .directory(let finalMode) = try inspectPath(parentURL), finalMode == 0o700 else {
-            throw LaunchLockError.unsafeParent
+        guard FileIdentity(opened) == openedIdentity, mode(of: opened) == Self.privateDirectoryMode else {
+            throw LaunchLockError.identityChanged
         }
+        let postMutation = try lstatMetadata(at: parentURL)
+        guard FileIdentity(postMutation) == openedIdentity, mode(of: postMutation) == Self.privateDirectoryMode else {
+            throw LaunchLockError.identityChanged
+        }
+        closeDescriptor = false
+        return descriptor
     }
 
-    private func rejectUnsafeExistingLockPath() throws {
-        switch try inspectPath(lockURL) {
-        case .missing, .regular:
-            return
-        case .directory, .unsafe:
-            throw LaunchLockError.unsafeLockFile
+    private func lstatLockEntry(parentDescriptor: Int32, name: String) throws -> stat? {
+        var metadata = stat()
+        guard fstatat(parentDescriptor, name, &metadata, AT_SYMLINK_NOFOLLOW) == 0 else {
+            if errno == ENOENT {
+                return nil
+            }
+            throw LaunchLockError.posix(action: "inspect lock file", errno: errno)
         }
+        _ = try requireCurrentUserSingleLinkRegularFile(metadata)
+        return metadata
     }
 
-    private func validateOpenedLockFile(_ descriptor: Int32) throws {
+    private func lstatMetadata(at url: URL) throws -> stat {
+        var metadata = stat()
+        guard lstat(url.path, &metadata) == 0 else {
+            if errno == ENOENT {
+                return metadata
+            }
+            throw LaunchLockError.posix(action: "inspect", errno: errno)
+        }
+        return metadata
+    }
+
+    private func fstatMetadata(_ descriptor: Int32, action: String) throws -> stat {
         var metadata = stat()
         guard fstat(descriptor, &metadata) == 0 else {
-            throw LaunchLockError.posix(action: "inspect opened launch-lock file", errno: errno)
+            throw LaunchLockError.posix(action: action, errno: errno)
         }
-        guard metadata.st_uid == currentUID, (metadata.st_mode & S_IFMT) == S_IFREG else {
+        return metadata
+    }
+
+    private func requireCurrentUserDirectory(_ metadata: stat) throws -> FileIdentity {
+        guard metadata.st_uid == currentUID, (metadata.st_mode & S_IFMT) == S_IFDIR else {
+            throw LaunchLockError.unsafeParent
+        }
+        return FileIdentity(metadata)
+    }
+
+    private func requireCurrentUserSingleLinkRegularFile(_ metadata: stat) throws -> FileIdentity {
+        guard metadata.st_uid == currentUID,
+              (metadata.st_mode & S_IFMT) == S_IFREG,
+              metadata.st_nlink == 1 else {
             throw LaunchLockError.unsafeLockFile
         }
+        return FileIdentity(metadata)
     }
 
     private func acquireExclusiveLock(_ descriptor: Int32, timeout: TimeInterval, pollInterval: TimeInterval) throws {
         let deadline = try monotonicTime() + timeout
+        var isInitialAttempt = true
         while true {
+            if !isInitialAttempt, try monotonicTime() >= deadline {
+                throw LaunchLockError.timeout
+            }
+            isInitialAttempt = false
             if flock(descriptor, LOCK_EX | LOCK_NB) == 0 {
                 return
             }
             let lockError = errno
+            if lockError == EINTR {
+                continue
+            }
             guard lockError == EWOULDBLOCK || lockError == EAGAIN else {
                 throw LaunchLockError.posix(action: "acquire", errno: lockError)
             }
-
             let remaining = deadline - (try monotonicTime())
             guard remaining > 0 else {
                 throw LaunchLockError.timeout
@@ -180,32 +266,22 @@ public struct LaunchLock {
             requested = remaining
         }
     }
+}
 
-    private func inspectPath(_ url: URL) throws -> LockPathObservation {
-        var metadata = stat()
-        guard lstat(url.path, &metadata) == 0 else {
-            if errno == ENOENT {
-                return .missing
-            }
-            throw LaunchLockError.posix(action: "inspect", errno: errno)
-        }
-        guard metadata.st_uid == currentUID else {
-            return .unsafe
-        }
-        switch metadata.st_mode & S_IFMT {
-        case S_IFDIR:
-            return .directory(mode: UInt16(metadata.st_mode & 0o777))
-        case S_IFREG:
-            return .regular
-        default:
-            return .unsafe
-        }
+private struct FileIdentity: Equatable {
+    let device: dev_t
+    let inode: ino_t
+
+    init(_ metadata: stat) {
+        device = metadata.st_dev
+        inode = metadata.st_ino
     }
 }
 
-private enum LockPathObservation {
-    case missing
-    case directory(mode: UInt16)
-    case regular
-    case unsafe
+private func isMissing(_ metadata: stat) -> Bool {
+    metadata.st_mode == 0 && metadata.st_ino == 0
+}
+
+private func mode(of metadata: stat) -> mode_t {
+    metadata.st_mode & 0o7777
 }
