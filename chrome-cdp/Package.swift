@@ -6,11 +6,20 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "ChromeCDPCore", targets: ["ChromeCDPCore"]),
+        .library(name: "ChromeCDPMac", targets: ["ChromeCDPMac"]),
         .executable(name: "chrome-cdp-helper", targets: ["ChromeCDPHelper"]),
         .executable(name: "chrome-cdp-tests", targets: ["ChromeCDPTests"])
     ],
     targets: [
         .target(name: "ChromeCDPCore"),
+        .target(
+            name: "ChromeCDPMac",
+            dependencies: ["ChromeCDPCore"],
+            linkerSettings: [
+                .linkedFramework("AppKit"),
+                .linkedFramework("CoreServices")
+            ]
+        ),
         .target(name: "ChromeCDPTestSupport"),
         .executableTarget(
             name: "ChromeCDPHelper",
@@ -18,7 +27,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "ChromeCDPTests",
-            dependencies: ["ChromeCDPCore", "ChromeCDPTestSupport"]
+            dependencies: ["ChromeCDPCore", "ChromeCDPMac", "ChromeCDPTestSupport"]
         )
     ]
 )
