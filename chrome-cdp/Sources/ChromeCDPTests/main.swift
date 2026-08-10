@@ -16,6 +16,9 @@ registerLauncherClassifierTests(&runner)
 registerLauncherFailureTests(&runner)
 registerProfileGuardTests(&runner)
 registerLaunchLockTests(&runner)
+registerProcessInspectorTests(&runner)
+registerListenerInspectorTests(&runner)
+registerCDPClientTests(&runner)
 runner.register("ChromeCDPCoreTests") {
     try launcherConfigurationProductionTest()
     try launcherClassifierTests()
@@ -24,6 +27,9 @@ runner.register("ChromeCDPCoreTests") {
 runner.register("ChromeCDPMacTests") {
     try profileGuardTests()
     try launchLockTests()
+    try processInspectorTests()
+    try listenerInspectorTests()
+    try cdpClientTests()
 }
 exit(Int32(runner.run(arguments: CommandLine.arguments)))
 

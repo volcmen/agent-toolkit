@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 
 public struct TestAssertionFailure: Error, CustomStringConvertible {
     public let description: String
@@ -38,6 +39,41 @@ public func makeTemporaryDirectory(prefix: String = "chrome-cdp-test-") throws -
         .appendingPathComponent("\(prefix)\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     return directory
+}
+
+private final class AsyncResultBox<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Result<Value, Error>?
+
+    func store(_ result: Result<Value, Error>) {
+        lock.lock()
+        self.result = result
+        lock.unlock()
+    }
+
+    func take() -> Result<Value, Error>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return result
+    }
+}
+
+public func awaitValue<Value: Sendable>(_ operation: @escaping @Sendable () async throws -> Value) throws -> Value {
+    let semaphore = DispatchSemaphore(value: 0)
+    let box = AsyncResultBox<Value>()
+    Task {
+        do {
+            box.store(.success(try await operation()))
+        } catch {
+            box.store(.failure(error))
+        }
+        semaphore.signal()
+    }
+    semaphore.wait()
+    guard let result = box.take() else {
+        throw TestAssertionFailure("async test completed without a result")
+    }
+    return try result.get()
 }
 
 public struct TestRunner {
