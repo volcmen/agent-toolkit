@@ -73,48 +73,26 @@ public struct LaunchLock {
         guard !lockName.isEmpty, lockName != ".", lockName != ".." else {
             throw LaunchLockError.unsafeLockFile
         }
-        let existing = try lstatLockEntry(parentDescriptor: parentDescriptor, name: lockName)
-        let creationFlags = existing == nil ? O_EXCL : 0
-        let descriptor = openat(
-            parentDescriptor,
-            lockName,
-            O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW | creationFlags,
-            Self.privateLockMode
+        let deadline = try monotonicTime() + timeout
+        let stableEntry = try openStableLockEntry(
+            parentDescriptor: parentDescriptor,
+            name: lockName,
+            deadline: deadline,
+            pollInterval: pollInterval
         )
-        guard descriptor >= 0 else {
-            if errno == EEXIST, existing == nil {
-                throw LaunchLockError.identityChanged
-            }
-            throw LaunchLockError.posix(action: "open lock file without following links", errno: errno)
-        }
+        let descriptor = stableEntry.descriptor
         var closeDescriptor = true
         defer {
             if closeDescriptor {
                 _ = close(descriptor)
             }
         }
-
-        let opened = try fstatMetadata(descriptor, action: "inspect opened launch-lock file")
-        let openedIdentity = try requireCurrentUserSingleLinkRegularFile(opened)
-        if let existing, FileIdentity(existing) != openedIdentity {
-            throw LaunchLockError.identityChanged
-        }
-        if mode(of: opened) != Self.privateLockMode {
-            guard fchmod(descriptor, Self.privateLockMode) == 0 else {
-                throw LaunchLockError.posix(action: "restrict permissions on lock file", errno: errno)
-            }
-        }
-        let repaired = try fstatMetadata(descriptor, action: "verify repaired launch-lock file")
-        guard FileIdentity(repaired) == openedIdentity, mode(of: repaired) == Self.privateLockMode else {
-            throw LaunchLockError.identityChanged
-        }
-        guard let current = try lstatLockEntry(parentDescriptor: parentDescriptor, name: lockName),
-              FileIdentity(current) == openedIdentity,
-              mode(of: current) == Self.privateLockMode else {
-            throw LaunchLockError.identityChanged
-        }
-
-        try acquireExclusiveLock(descriptor, timeout: timeout, pollInterval: pollInterval)
+        try acquireExclusiveLock(
+            descriptor,
+            deadline: deadline,
+            pollInterval: pollInterval,
+            mayUseInitialAttempt: !stableEntry.retried
+        )
         closeDescriptor = false
         return LaunchLockLease(descriptor: descriptor)
     }
@@ -136,7 +114,11 @@ public struct LaunchLock {
 
         // The configured parent path's ancestors are the trusted boundary; all mutation below
         // this point uses this no-follow descriptor rather than resolving the parent path again.
-        let descriptor = open(parentURL.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        var descriptor = open(parentURL.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        if descriptor < 0, errno == EACCES {
+            try repairUnopenableParentDirectory(at: parentURL, expectedIdentity: observedIdentity)
+            descriptor = open(parentURL.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        }
         guard descriptor >= 0 else {
             throw LaunchLockError.posix(action: "open launch-lock parent without following links", errno: errno)
         }
@@ -167,6 +149,130 @@ public struct LaunchLock {
         }
         closeDescriptor = false
         return descriptor
+    }
+
+    private func repairUnopenableParentDirectory(at url: URL, expectedIdentity: FileIdentity) throws {
+        let name = url.lastPathComponent
+        guard isSinglePathComponent(name) else {
+            throw LaunchLockError.identityChanged
+        }
+        let ancestorURL = url.deletingLastPathComponent()
+        let ancestorDescriptor = try openVerifiedCurrentUserDirectory(
+            at: ancestorURL,
+            action: "open launch-lock parent ancestor without following links"
+        )
+        defer { _ = close(ancestorDescriptor) }
+
+        let before = try fstatAt(ancestorDescriptor, name: name, action: "inspect inaccessible launch-lock parent")
+        guard try requireCurrentUserDirectory(before) == expectedIdentity else {
+            throw LaunchLockError.identityChanged
+        }
+        guard fchmodat(ancestorDescriptor, name, Self.privateDirectoryMode, AT_SYMLINK_NOFOLLOW) == 0 else {
+            throw LaunchLockError.posix(action: "restrict permissions on inaccessible launch-lock parent", errno: errno)
+        }
+        let after = try fstatAt(ancestorDescriptor, name: name, action: "verify repaired inaccessible launch-lock parent")
+        guard try requireCurrentUserDirectory(after) == expectedIdentity,
+              mode(of: after) == Self.privateDirectoryMode else {
+            throw LaunchLockError.identityChanged
+        }
+    }
+
+    private func openVerifiedCurrentUserDirectory(at url: URL, action: String) throws -> Int32 {
+        let observed = try lstatMetadata(at: url)
+        let observedIdentity = try requireCurrentUserDirectory(observed)
+        let descriptor = open(url.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            throw LaunchLockError.posix(action: action, errno: errno)
+        }
+        var closeDescriptor = true
+        defer {
+            if closeDescriptor {
+                _ = close(descriptor)
+            }
+        }
+        let opened = try fstatMetadata(descriptor, action: "inspect opened launch-lock parent ancestor")
+        guard try requireCurrentUserDirectory(opened) == observedIdentity else {
+            throw LaunchLockError.identityChanged
+        }
+        closeDescriptor = false
+        return descriptor
+    }
+
+    private func openStableLockEntry(
+        parentDescriptor: Int32,
+        name: String,
+        deadline: TimeInterval,
+        pollInterval: TimeInterval
+    ) throws -> StableLockEntry {
+        var isInitialObservation = true
+        var retried = false
+        while true {
+            if !isInitialObservation, try monotonicTime() >= deadline {
+                throw LaunchLockError.timeout
+            }
+            isInitialObservation = false
+            let existing = try lstatLockEntry(parentDescriptor: parentDescriptor, name: name)
+            let flags: Int32
+            if existing == nil {
+                flags = O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW
+            } else {
+                flags = O_RDWR | O_CLOEXEC | O_NOFOLLOW
+            }
+            let descriptor = openat(parentDescriptor, name, flags, Self.privateLockMode)
+            if descriptor < 0 {
+                let openError = errno
+                if existing == nil, openError == EEXIST {
+                    retried = true
+                    try waitForStableEntryRetry(deadline: deadline, pollInterval: pollInterval)
+                    continue
+                }
+                if existing != nil, openError == ENOENT {
+                    guard try lstatLockEntry(parentDescriptor: parentDescriptor, name: name) != nil else {
+                        throw LaunchLockError.identityChanged
+                    }
+                    retried = true
+                    try waitForStableEntryRetry(deadline: deadline, pollInterval: pollInterval)
+                    continue
+                }
+                throw LaunchLockError.posix(action: "open lock file without following links", errno: openError)
+            }
+            var closeDescriptor = true
+            defer {
+                if closeDescriptor {
+                    _ = close(descriptor)
+                }
+            }
+
+            let opened = try fstatMetadata(descriptor, action: "inspect opened launch-lock file")
+            let openedIdentity = try requireCurrentUserSingleLinkRegularFile(opened)
+            if let existing, FileIdentity(existing) != openedIdentity {
+                throw LaunchLockError.identityChanged
+            }
+            if mode(of: opened) != Self.privateLockMode {
+                guard fchmod(descriptor, Self.privateLockMode) == 0 else {
+                    throw LaunchLockError.posix(action: "restrict permissions on lock file", errno: errno)
+                }
+            }
+            let repaired = try fstatMetadata(descriptor, action: "verify repaired launch-lock file")
+            guard FileIdentity(repaired) == openedIdentity, mode(of: repaired) == Self.privateLockMode else {
+                throw LaunchLockError.identityChanged
+            }
+            guard let current = try lstatLockEntry(parentDescriptor: parentDescriptor, name: name),
+                  FileIdentity(current) == openedIdentity,
+                  mode(of: current) == Self.privateLockMode else {
+                throw LaunchLockError.identityChanged
+            }
+            closeDescriptor = false
+            return StableLockEntry(descriptor: descriptor, retried: retried)
+        }
+    }
+
+    private func waitForStableEntryRetry(deadline: TimeInterval, pollInterval: TimeInterval) throws {
+        let remaining = deadline - (try monotonicTime())
+        guard remaining > 0 else {
+            throw LaunchLockError.timeout
+        }
+        try sleepMonotonically(min(pollInterval, remaining))
     }
 
     private func lstatLockEntry(parentDescriptor: Int32, name: String) throws -> stat? {
@@ -200,6 +306,14 @@ public struct LaunchLock {
         return metadata
     }
 
+    private func fstatAt(_ parentDescriptor: Int32, name: String, action: String) throws -> stat {
+        var metadata = stat()
+        guard fstatat(parentDescriptor, name, &metadata, AT_SYMLINK_NOFOLLOW) == 0 else {
+            throw LaunchLockError.posix(action: action, errno: errno)
+        }
+        return metadata
+    }
+
     private func requireCurrentUserDirectory(_ metadata: stat) throws -> FileIdentity {
         guard metadata.st_uid == currentUID, (metadata.st_mode & S_IFMT) == S_IFDIR else {
             throw LaunchLockError.unsafeParent
@@ -216,9 +330,13 @@ public struct LaunchLock {
         return FileIdentity(metadata)
     }
 
-    private func acquireExclusiveLock(_ descriptor: Int32, timeout: TimeInterval, pollInterval: TimeInterval) throws {
-        let deadline = try monotonicTime() + timeout
-        var isInitialAttempt = true
+    private func acquireExclusiveLock(
+        _ descriptor: Int32,
+        deadline: TimeInterval,
+        pollInterval: TimeInterval,
+        mayUseInitialAttempt: Bool
+    ) throws {
+        var isInitialAttempt = mayUseInitialAttempt
         while true {
             if !isInitialAttempt, try monotonicTime() >= deadline {
                 throw LaunchLockError.timeout
@@ -278,10 +396,19 @@ private struct FileIdentity: Equatable {
     }
 }
 
+private struct StableLockEntry {
+    let descriptor: Int32
+    let retried: Bool
+}
+
 private func isMissing(_ metadata: stat) -> Bool {
     metadata.st_mode == 0 && metadata.st_ino == 0
 }
 
 private func mode(of metadata: stat) -> mode_t {
     metadata.st_mode & 0o7777
+}
+
+private func isSinglePathComponent(_ name: String) -> Bool {
+    !name.isEmpty && name != "." && name != ".." && !name.contains("/")
 }

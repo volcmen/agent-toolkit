@@ -34,6 +34,39 @@ private func launchLockChild(action: String, lockURL: URL, statusURL: URL) throw
     return process
 }
 
+private func launchLockRaceChild(lockURL: URL, statusURL: URL, gateURL: URL) throws -> Process {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    process.arguments = ["--launch-lock-race-child", lockURL.path, statusURL.path, gateURL.path]
+    try process.run()
+    return process
+}
+
+private func waitForChildStatus(
+    _ statusURL: URL,
+    process: Process,
+    accepting expected: Set<String>,
+    timeout: TimeInterval = 2
+) throws -> String {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if FileManager.default.fileExists(atPath: statusURL.path) {
+            let status = try String(contentsOf: statusURL, encoding: .utf8)
+            if expected.contains(status) {
+                return status
+            }
+            if status == "error" {
+                throw TestAssertionFailure("lock child reported generic error")
+            }
+        }
+        if !process.isRunning {
+            throw TestAssertionFailure("lock child exited before publishing an expected status")
+        }
+        usleep(5_000)
+    }
+    throw TestAssertionFailure("lock child did not publish an expected status before deadline")
+}
+
 private func waitForChildExit(_ process: Process, timeout: TimeInterval = 2) throws {
     let deadline = Date().addingTimeInterval(timeout)
     while process.isRunning && Date() < deadline {
@@ -133,6 +166,34 @@ func launchLockNormalizesSpecialBitsOnExistingFileTest() throws {
 
     try expectEqual(try lockMode(at: lockURL), 0o600)
     try expectEqual(try String(contentsOf: lockURL, encoding: .utf8), "stable lock bytes")
+}
+
+private func launchLockRepairsInaccessibleParentModeTest(_ initialMode: mode_t) throws {
+    let root = try makeTemporaryDirectory(prefix: "chrome-cdp-launch-lock-")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let parent = root.appendingPathComponent("locks", isDirectory: true)
+    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+    guard chmod(parent.path, initialMode) == 0 else {
+        throw TestAssertionFailure("could not set inaccessible launch-lock parent mode")
+    }
+    let lockURL = parent.appendingPathComponent("launch.lock")
+
+    let lease = try LaunchLock(lockURL: lockURL).acquire(timeout: 0.2, pollInterval: 0.01)
+    defer { lease.release() }
+
+    try expectEqual(try lockMode(at: parent), 0o700)
+}
+
+func launchLockRepairsMode0000ParentDirectoryTest() throws {
+    try launchLockRepairsInaccessibleParentModeTest(0o0000)
+}
+
+func launchLockRepairsMode0100ParentDirectoryTest() throws {
+    try launchLockRepairsInaccessibleParentModeTest(0o0100)
+}
+
+func launchLockRepairsMode0300ParentDirectoryTest() throws {
+    try launchLockRepairsInaccessibleParentModeTest(0o0300)
 }
 
 func launchLockRejectsSymlinkedParentWithoutChangingTargetTest() throws {
@@ -297,6 +358,41 @@ func launchLockConcurrentReleaseAllowsReacquisitionTest() throws {
     nextLease.release()
 }
 
+func launchLockCooperatesDuringSimultaneousFirstCreationTest() throws {
+    for _ in 0..<8 {
+        let root = try makeTemporaryDirectory(prefix: "chrome-cdp-launch-lock-race-")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lockURL = root.appendingPathComponent("locks/launch.lock")
+        let gateURL = root.appendingPathComponent("gate")
+        let firstStatus = root.appendingPathComponent("first-status")
+        let secondStatus = root.appendingPathComponent("second-status")
+        let first = try launchLockRaceChild(lockURL: lockURL, statusURL: firstStatus, gateURL: gateURL)
+        let second = try launchLockRaceChild(lockURL: lockURL, statusURL: secondStatus, gateURL: gateURL)
+        defer {
+            if first.isRunning { first.terminate() }
+            if second.isRunning { second.terminate() }
+        }
+
+        try expectEqual(try waitForChildStatus(firstStatus, process: first, accepting: ["ready"]), "ready")
+        try expectEqual(try waitForChildStatus(secondStatus, process: second, accepting: ["ready"]), "ready")
+        try "go".write(to: gateURL, atomically: true, encoding: .utf8)
+        let firstOutcome = try waitForChildStatus(firstStatus, process: first, accepting: ["acquired", "timeout"])
+        let secondOutcome = try waitForChildStatus(secondStatus, process: second, accepting: ["acquired", "timeout"])
+        try expectEqual(Set([firstOutcome, secondOutcome]), Set(["acquired", "timeout"]))
+
+        if first.isRunning { first.terminate() }
+        if second.isRunning { second.terminate() }
+        try waitForChildExit(first)
+        try waitForChildExit(second)
+
+        var metadata = stat()
+        guard lstat(lockURL.path, &metadata) == 0, (metadata.st_mode & S_IFMT) == S_IFREG, metadata.st_ino != 0 else {
+            throw TestAssertionFailure("simultaneous creation must leave one stable regular lock inode")
+        }
+        try expectEqual(try lockMode(at: lockURL), 0o600)
+    }
+}
+
 func launchLockTests() throws {
     try launchLockCreatesPrivateLockAndExcludesChildTest()
     try launchLockReleaseAllowsSecondChildToAcquireTest()
@@ -307,11 +403,15 @@ func launchLockTests() throws {
     try launchLockRepairsStickyBitOnParentDirectoryTest()
     try launchLockRepairsSetgidBitOnParentDirectoryTest()
     try launchLockNormalizesSpecialBitsOnExistingFileTest()
+    try launchLockRepairsMode0000ParentDirectoryTest()
+    try launchLockRepairsMode0100ParentDirectoryTest()
+    try launchLockRepairsMode0300ParentDirectoryTest()
     try launchLockRejectsSymlinkedParentWithoutChangingTargetTest()
     try launchLockRejectsNonDirectoryParentTest()
     try launchLockRejectsSymlinkedLockFileWithoutChangingTargetTest()
     try launchLockRejectsNonRegularLockPathTest()
     try launchLockRejectsHardLinkedLockFileTest()
+    try launchLockCooperatesDuringSimultaneousFirstCreationTest()
 }
 
 func registerLaunchLockTests(_ runner: inout TestRunner) {
@@ -325,9 +425,13 @@ func registerLaunchLockTests(_ runner: inout TestRunner) {
     runner.register("LaunchLockTests.RepairsStickyBitOnParentDirectory", launchLockRepairsStickyBitOnParentDirectoryTest)
     runner.register("LaunchLockTests.RepairsSetgidBitOnParentDirectory", launchLockRepairsSetgidBitOnParentDirectoryTest)
     runner.register("LaunchLockTests.NormalizesSpecialBitsOnExistingFile", launchLockNormalizesSpecialBitsOnExistingFileTest)
+    runner.register("LaunchLockTests.RepairsMode0000ParentDirectory", launchLockRepairsMode0000ParentDirectoryTest)
+    runner.register("LaunchLockTests.RepairsMode0100ParentDirectory", launchLockRepairsMode0100ParentDirectoryTest)
+    runner.register("LaunchLockTests.RepairsMode0300ParentDirectory", launchLockRepairsMode0300ParentDirectoryTest)
     runner.register("LaunchLockTests.RejectsSymlinkedParentWithoutChangingTarget", launchLockRejectsSymlinkedParentWithoutChangingTargetTest)
     runner.register("LaunchLockTests.RejectsNonDirectoryParent", launchLockRejectsNonDirectoryParentTest)
     runner.register("LaunchLockTests.RejectsSymlinkedLockFileWithoutChangingTarget", launchLockRejectsSymlinkedLockFileWithoutChangingTargetTest)
     runner.register("LaunchLockTests.RejectsNonRegularLockPath", launchLockRejectsNonRegularLockPathTest)
     runner.register("LaunchLockTests.RejectsHardLinkedLockFile", launchLockRejectsHardLinkedLockFileTest)
+    runner.register("LaunchLockTests.CooperatesDuringSimultaneousFirstCreation", launchLockCooperatesDuringSimultaneousFirstCreationTest)
 }

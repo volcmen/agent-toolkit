@@ -83,7 +83,11 @@ public struct ProfileGuard {
     private func withVerifiedDirectory<T>(at url: URL, _ operation: (Int32, FileIdentity) throws -> T) throws -> T {
         let observed = try lstatMetadata(at: url)
         let observedIdentity = try requireCurrentUserDirectory(observed)
-        let descriptor = open(url.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        var descriptor = open(url.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        if descriptor < 0, errno == EACCES {
+            try repairUnopenableDirectory(at: url, expectedIdentity: observedIdentity)
+            descriptor = open(url.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        }
         guard descriptor >= 0 else {
             throw ProfileGuardError.posix(action: "open profile directory without following links", errno: errno)
         }
@@ -95,6 +99,51 @@ public struct ProfileGuard {
             throw ProfileGuardError.identityChanged
         }
         return try operation(descriptor, openedIdentity)
+    }
+
+    private func repairUnopenableDirectory(at url: URL, expectedIdentity: FileIdentity) throws {
+        let name = url.lastPathComponent
+        guard isSinglePathComponent(name) else {
+            throw ProfileGuardError.identityChanged
+        }
+        let parentURL = url.deletingLastPathComponent()
+        let parentDescriptor = try openVerifiedCurrentUserDirectory(at: parentURL, action: "open profile parent without following links")
+        defer { _ = close(parentDescriptor) }
+
+        let before = try fstatAt(parentDescriptor, name: name, action: "inspect inaccessible profile directory")
+        guard try requireCurrentUserDirectory(before) == expectedIdentity else {
+            throw ProfileGuardError.identityChanged
+        }
+        guard fchmodat(parentDescriptor, name, Self.privateDirectoryMode, AT_SYMLINK_NOFOLLOW) == 0 else {
+            throw ProfileGuardError.posix(action: "restrict permissions on inaccessible profile directory", errno: errno)
+        }
+        let after = try fstatAt(parentDescriptor, name: name, action: "verify repaired inaccessible profile directory")
+        guard try requireCurrentUserDirectory(after) == expectedIdentity,
+              mode(of: after) == Self.privateDirectoryMode else {
+            throw ProfileGuardError.identityChanged
+        }
+    }
+
+    private func openVerifiedCurrentUserDirectory(at url: URL, action: String) throws -> Int32 {
+        let observed = try lstatMetadata(at: url)
+        let observedIdentity = try requireCurrentUserDirectory(observed)
+        // The caller's configured ancestors are trusted; this descriptor anchors the immediate child repair.
+        let descriptor = open(url.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            throw ProfileGuardError.posix(action: action, errno: errno)
+        }
+        var closeDescriptor = true
+        defer {
+            if closeDescriptor {
+                _ = close(descriptor)
+            }
+        }
+        let opened = try fstatMetadata(descriptor, action: "inspect opened profile parent")
+        guard try requireCurrentUserDirectory(opened) == observedIdentity else {
+            throw ProfileGuardError.identityChanged
+        }
+        closeDescriptor = false
+        return descriptor
     }
 
     private func lstatMetadata(at url: URL) throws -> stat {
@@ -111,6 +160,14 @@ public struct ProfileGuard {
     private func fstatMetadata(_ descriptor: Int32, action: String) throws -> stat {
         var metadata = stat()
         guard fstat(descriptor, &metadata) == 0 else {
+            throw ProfileGuardError.posix(action: action, errno: errno)
+        }
+        return metadata
+    }
+
+    private func fstatAt(_ parentDescriptor: Int32, name: String, action: String) throws -> stat {
+        var metadata = stat()
+        guard fstatat(parentDescriptor, name, &metadata, AT_SYMLINK_NOFOLLOW) == 0 else {
             throw ProfileGuardError.posix(action: action, errno: errno)
         }
         return metadata
@@ -153,4 +210,8 @@ private struct FileIdentity: Equatable {
 
 private func mode(of metadata: stat) -> mode_t {
     metadata.st_mode & 0o7777
+}
+
+private func isSinglePathComponent(_ name: String) -> Bool {
+    !name.isEmpty && name != "." && name != ".." && !name.contains("/")
 }

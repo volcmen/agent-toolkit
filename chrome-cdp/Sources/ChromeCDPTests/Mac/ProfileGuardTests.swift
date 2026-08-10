@@ -98,6 +98,36 @@ func profileGuardRepairsSetgidBitOnPrivateDirectoryTest() throws {
     try expectEqual(try profileMode(at: profile), 0o700)
 }
 
+private func profileGuardRepairsInaccessibleDirectoryModeTest(_ initialMode: mode_t) throws {
+    let root = try makeTemporaryDirectory(prefix: "chrome-cdp-profile-guard-")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let profile = root.appendingPathComponent("profile", isDirectory: true)
+    let child = profile.appendingPathComponent("child-fixture")
+    try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+    try "child bytes".write(to: child, atomically: true, encoding: .utf8)
+    guard chmod(child.path, 0o640) == 0, chmod(profile.path, initialMode) == 0 else {
+        throw TestAssertionFailure("could not set inaccessible profile fixture modes")
+    }
+
+    try ProfileGuard().prepare(profile)
+
+    try expectEqual(try profileMode(at: profile), 0o700)
+    try expectEqual(try String(contentsOf: child), "child bytes")
+    try expectEqual(try profileMode(at: child), 0o640)
+}
+
+func profileGuardRepairsMode0000DirectoryTest() throws {
+    try profileGuardRepairsInaccessibleDirectoryModeTest(0o0000)
+}
+
+func profileGuardRepairsMode0100DirectoryTest() throws {
+    try profileGuardRepairsInaccessibleDirectoryModeTest(0o0100)
+}
+
+func profileGuardRepairsMode0300DirectoryTest() throws {
+    try profileGuardRepairsInaccessibleDirectoryModeTest(0o0300)
+}
+
 func profileGuardRejectsSymlinkWithoutChangingTargetTest() throws {
     let root = try makeTemporaryDirectory(prefix: "chrome-cdp-profile-guard-")
     defer { try? FileManager.default.removeItem(at: root) }
@@ -148,6 +178,9 @@ func profileGuardTests() throws {
     try profileGuardLeavesPrivateDirectoryUnchangedTest()
     try profileGuardRepairsStickyBitOnPrivateDirectoryTest()
     try profileGuardRepairsSetgidBitOnPrivateDirectoryTest()
+    try profileGuardRepairsMode0000DirectoryTest()
+    try profileGuardRepairsMode0100DirectoryTest()
+    try profileGuardRepairsMode0300DirectoryTest()
     try profileGuardRejectsSymlinkWithoutChangingTargetTest()
     try profileGuardRejectsRegularFileTest()
     try profileGuardRejectsInjectedWrongOwnerWithoutModeRepairTest()
@@ -160,6 +193,9 @@ func registerProfileGuardTests(_ runner: inout TestRunner) {
     runner.register("ProfileGuardTests.LeavesPrivateDirectoryUnchanged", profileGuardLeavesPrivateDirectoryUnchangedTest)
     runner.register("ProfileGuardTests.RepairsStickyBitOnPrivateDirectory", profileGuardRepairsStickyBitOnPrivateDirectoryTest)
     runner.register("ProfileGuardTests.RepairsSetgidBitOnPrivateDirectory", profileGuardRepairsSetgidBitOnPrivateDirectoryTest)
+    runner.register("ProfileGuardTests.RepairsMode0000Directory", profileGuardRepairsMode0000DirectoryTest)
+    runner.register("ProfileGuardTests.RepairsMode0100Directory", profileGuardRepairsMode0100DirectoryTest)
+    runner.register("ProfileGuardTests.RepairsMode0300Directory", profileGuardRepairsMode0300DirectoryTest)
     runner.register("ProfileGuardTests.RejectsSymlinkWithoutChangingTarget", profileGuardRejectsSymlinkWithoutChangingTargetTest)
     runner.register("ProfileGuardTests.RejectsRegularFile", profileGuardRejectsRegularFileTest)
     runner.register("ProfileGuardTests.RejectsInjectedWrongOwnerWithoutModeRepair", profileGuardRejectsInjectedWrongOwnerWithoutModeRepairTest)
