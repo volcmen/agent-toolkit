@@ -17,9 +17,9 @@
 
 ## Development
 
-From `/Users/david.david/Personal/ai/chrome-cdp`:
+Use any Swift 6.x toolchain. From `/Users/david.david/Personal/ai/chrome-cdp`:
 
 ```bash
-/usr/bin/swift test
+/usr/bin/swift run chrome-cdp-tests
 /usr/bin/swift build -c release
 ```
