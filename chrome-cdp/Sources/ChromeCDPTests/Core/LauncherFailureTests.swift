@@ -1,7 +1,7 @@
 import ChromeCDPCore
 import ChromeCDPTestSupport
 
-func launcherFailureTests() throws {
+func launcherFailureExitCodesAreStableTest() throws {
     let failures: [(LauncherFailure, Int32)] = [
         (.missingChrome(applicationPath: "/Applications/Google Chrome.app"), 10),
         (.lockTimeout, 11),
@@ -23,29 +23,50 @@ func launcherFailureTests() throws {
             throw TestAssertionFailure("\(failure) must have an actionable description")
         }
     }
+}
 
-    let conflictSentence = "Chrome CDP did not terminate or replace another process."
+func launcherFailureConflictDescriptionsStateNonTerminationTest() throws {
+    let sentence = "Chrome CDP did not terminate or replace another process."
     for failure in [
         LauncherFailure.foreignListener(pid: 41, port: 9222),
         .nonLoopbackListener(address: "0.0.0.0", port: 9222),
         .wrongProfileChrome(pid: 42, profilePath: "/Users/tester/other-profile"),
         .profileConflict(pid: 43, profilePath: "/Users/tester/chrome-cdp-profile")
     ] {
-        guard failure.errorDescription?.contains(conflictSentence) == true else {
+        guard failure.errorDescription?.contains(sentence) == true else {
             throw TestAssertionFailure("\(failure) must state that no process was terminated or replaced")
         }
     }
+}
 
-    let secret = "https://example.test/private?token=secret"
-    let description = LauncherFailure.profileConflict(
-        pid: 43,
-        profilePath: "/Users/tester/chrome-cdp-profile"
-    ).errorDescription ?? ""
-    guard !description.contains(secret), !description.contains("token=") else {
-        throw TestAssertionFailure("conflict descriptions must not expose command or endpoint data")
+func launcherFailureTimeoutDescriptionsStateNonTerminationTest() throws {
+    let sentence = "Chrome CDP did not terminate or replace another process."
+    for failure in [LauncherFailure.lockTimeout, .readinessTimeout(lastFailure: .unavailable)] {
+        guard failure.errorDescription?.contains(sentence) == true else {
+            throw TestAssertionFailure("\(failure) must state that no process was terminated or replaced")
+        }
     }
+}
+
+func launcherFailureWrongProfileDescriptionSuppressesSecretLikeProfileValueTest() throws {
+    let secretProfilePath = "/Users/tester/profile?token=secret-value"
+    let description = LauncherFailure.wrongProfileChrome(pid: 43, profilePath: secretProfilePath).errorDescription ?? ""
+    guard !description.contains(secretProfilePath), !description.contains("token="), !description.contains("secret-value") else {
+        throw TestAssertionFailure("wrong-profile descriptions must not expose a supplied profile value")
+    }
+}
+
+func launcherFailureTests() throws {
+    try launcherFailureExitCodesAreStableTest()
+    try launcherFailureConflictDescriptionsStateNonTerminationTest()
+    try launcherFailureTimeoutDescriptionsStateNonTerminationTest()
+    try launcherFailureWrongProfileDescriptionSuppressesSecretLikeProfileValueTest()
 }
 
 func registerLauncherFailureTests(_ runner: inout TestRunner) {
     runner.register("LauncherFailureTests", launcherFailureTests)
+    runner.register("LauncherFailureTests.ExitCodesAreStable", launcherFailureExitCodesAreStableTest)
+    runner.register("LauncherFailureTests.ConflictDescriptionsStateNonTermination", launcherFailureConflictDescriptionsStateNonTerminationTest)
+    runner.register("LauncherFailureTests.TimeoutDescriptionsStateNonTermination", launcherFailureTimeoutDescriptionsStateNonTerminationTest)
+    runner.register("LauncherFailureTests.WrongProfileDescriptionSuppressesSecretLikeProfileValue", launcherFailureWrongProfileDescriptionSuppressesSecretLikeProfileValueTest)
 }

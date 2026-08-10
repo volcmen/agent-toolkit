@@ -48,7 +48,7 @@ public enum LauncherFailure: Error, Equatable, Sendable, LocalizedError {
         case let .missingChrome(applicationPath):
             return "Google Chrome was not found at \(applicationPath). Install Google Chrome and try again."
         case .lockTimeout:
-            return "Another Chrome CDP launch is still in progress. Wait a moment and try again."
+            return "Another Chrome CDP launch is still in progress. Wait a moment and try again. \(Self.conflictSafetySentence)"
         case let .unsafeProfile(reason):
             return unsafeProfileDescription(reason)
         case let .foreignListener(pid, port):
@@ -63,7 +63,7 @@ public enum LauncherFailure: Error, Equatable, Sendable, LocalizedError {
             let owner = pid.map { "Chrome PID \($0)" } ?? "More than one Chrome process"
             return "\(owner) is using the dedicated profile \(profilePath) without the required Chrome CDP configuration. Close or reconfigure the conflicting Chrome instance before retrying. \(Self.conflictSafetySentence)"
         case .readinessTimeout:
-            return "Chrome did not become ready for local CDP before the readiness deadline. Check the Chrome window and retry."
+            return "Chrome did not become ready for local CDP before the readiness deadline. Check the Chrome window and retry. \(Self.conflictSafetySentence)"
         case .invalidWebSocket:
             return "Chrome returned an unsafe CDP WebSocket endpoint. Correct the Chrome CDP configuration before retrying."
         case .launchFailed:

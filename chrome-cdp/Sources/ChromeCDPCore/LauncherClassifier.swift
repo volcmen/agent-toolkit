@@ -44,7 +44,7 @@ public struct LauncherClassifier: Sendable {
         if let wrongProfileProcess = processDetails.first(where: { process, arguments in
             process.executablePath == configuration.chromeExecutableURL.path
                 && isOwnedByListener(process, listeners: snapshot.listeners)
-                && arguments.userDataDirectory.isSingleValueDifferent(from: configuration.profileURL.path)
+                && arguments.userDataDirectory.hasSingleDistinctValueDifferent(from: configuration.profileURL.path)
         }) {
             return .fail(
                 .wrongProfileChrome(
@@ -156,7 +156,8 @@ private struct ParsedArgumentValues {
         !values.isEmpty && Set(values) == [expected]
     }
 
-    func isSingleValueDifferent(from expected: String) -> Bool {
-        values.count == 1 && values[0] != expected
+    func hasSingleDistinctValueDifferent(from expected: String) -> Bool {
+        let distinctValues = Set(values)
+        return distinctValues.count == 1 && distinctValues.first != expected
     }
 }
