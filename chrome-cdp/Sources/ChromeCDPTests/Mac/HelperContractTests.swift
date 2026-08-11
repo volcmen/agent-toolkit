@@ -1,11 +1,28 @@
-import ChromeCDPCore
+@_spi(Testing) import ChromeCDPCore
 @_spi(Testing) import ChromeCDPMac
 import ChromeCDPTestSupport
 import Foundation
 
-private let helperConfiguration = LauncherConfiguration.production(
-    homeDirectory: URL(fileURLWithPath: "/Users/tester", isDirectory: true)
-)
+private let helperHomeDirectory = URL(fileURLWithPath: "/Users/tester", isDirectory: true)
+private let baseHelperConfiguration = LauncherConfiguration.production(homeDirectory: helperHomeDirectory)
+
+private func helperConfiguration(
+    profileURL: URL = baseHelperConfiguration.profileURL,
+    lockTimeout: TimeInterval = baseHelperConfiguration.lockTimeout,
+    lockURL: URL = baseHelperConfiguration.lockURL
+) -> LauncherConfiguration {
+    LauncherConfiguration(
+        chromeApplicationURL: baseHelperConfiguration.chromeApplicationURL,
+        chromeExecutableURL: baseHelperConfiguration.chromeExecutableURL,
+        profileURL: profileURL,
+        host: baseHelperConfiguration.host,
+        port: baseHelperConfiguration.port,
+        readinessTimeout: baseHelperConfiguration.readinessTimeout,
+        pollInterval: baseHelperConfiguration.pollInterval,
+        lockTimeout: lockTimeout,
+        lockURL: lockURL
+    )
+}
 
 private final class HelperTestState: @unchecked Sendable {
     private let lock = NSLock()
@@ -32,11 +49,14 @@ private final class HelperTestState: @unchecked Sendable {
 
 private func runHelper(
     arguments: [String],
+    configuration: LauncherConfiguration = baseHelperConfiguration,
+    expectedHomeDirectory: URL = helperHomeDirectory,
     result: @escaping @Sendable () async throws -> LauncherOutcome = { .reused(pid: 90_135) }
 ) throws -> (Int32, HelperTestState) {
     let state = HelperTestState()
     let runner = HelperCommandRunner(
-        configuration: helperConfiguration,
+        configuration: configuration,
+        expectedHomeDirectory: expectedHomeDirectory,
         runLauncher: {
             state.recordInvocation()
             return try await result()
@@ -65,21 +85,27 @@ func helperSelfCheckIsStableJSONAndHasNoLauncherEffectsTest() throws {
     try expectEqual(status, 0)
     try expectEqual(state.invocationCount(), 0)
     try expectEqual(state.errors(), [])
-    guard state.output().count == 1,
-          let data = state.output()[0].data(using: .utf8),
-          let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-        throw TestAssertionFailure("self-check must print exactly one JSON object")
+    try expectEqual(
+        state.output(),
+        [#"{"appName":"Google Chrome","host":"127.0.0.1","pollInterval":0.2,"port":9222,"profileSuffix":"chrome-cdp-profile","timeout":10,"version":"1.0.0"}"# + "\n"]
+    )
+}
+
+func helperSelfCheckRejectsAnyNonProductionPathOrLockValueTest() throws {
+    let invalidConfigurations = [
+        helperConfiguration(profileURL: URL(fileURLWithPath: "/Users/other/chrome-cdp-profile")),
+        helperConfiguration(profileURL: URL(fileURLWithPath: "/Users/tester/other-profile")),
+        helperConfiguration(lockURL: URL(fileURLWithPath: "/Users/tester/Library/Caches/other.lock")),
+        helperConfiguration(lockTimeout: 9)
+    ]
+
+    for configuration in invalidConfigurations {
+        let (status, state) = try runHelper(arguments: ["--self-check"], configuration: configuration)
+        try expectEqual(status, 24)
+        try expectEqual(state.invocationCount(), 0)
+        try expectEqual(state.output(), [])
+        try expectEqual(state.errors(), ["Chrome CDP helper configuration is invalid.\n"])
     }
-    try expectEqual(Set(object.keys), Set([
-        "version", "appName", "profileSuffix", "host", "port", "timeout", "pollInterval"
-    ]))
-    try expectEqual(object["version"] as? String, "1.0.0")
-    try expectEqual(object["appName"] as? String, "Google Chrome")
-    try expectEqual(object["profileSuffix"] as? String, "chrome-cdp-profile")
-    try expectEqual(object["host"] as? String, "127.0.0.1")
-    try expectEqual(object["port"] as? Int, 9222)
-    try expectEqual(object["timeout"] as? Double, 10)
-    try expectEqual(object["pollInterval"] as? Double, 0.2)
 }
 
 func helperUnknownArgumentsExitWithUsageTest() throws {
@@ -138,6 +164,7 @@ func helperMapsNonTimeoutLockErrorsWithoutRawDetailsTest() throws {
 func helperContractTests() throws {
     try helperVersionHasNoLauncherEffectsTest()
     try helperSelfCheckIsStableJSONAndHasNoLauncherEffectsTest()
+    try helperSelfCheckRejectsAnyNonProductionPathOrLockValueTest()
     try helperUnknownArgumentsExitWithUsageTest()
     try helperNoArgumentsPrintsLaunchedOutcomeTest()
     try helperNoArgumentsPrintsReusedOutcomeTest()
@@ -149,6 +176,7 @@ func registerHelperContractTests(_ runner: inout TestRunner) {
     runner.register("HelperContractTests", helperContractTests)
     runner.register("HelperContractTests.VersionHasNoLauncherEffects", helperVersionHasNoLauncherEffectsTest)
     runner.register("HelperContractTests.SelfCheckIsStableJSONAndHasNoLauncherEffects", helperSelfCheckIsStableJSONAndHasNoLauncherEffectsTest)
+    runner.register("HelperContractTests.SelfCheckRejectsAnyNonProductionPathOrLockValue", helperSelfCheckRejectsAnyNonProductionPathOrLockValueTest)
     runner.register("HelperContractTests.UnknownArgumentsExitWithUsage", helperUnknownArgumentsExitWithUsageTest)
     runner.register("HelperContractTests.NoArgumentsPrintsLaunchedOutcome", helperNoArgumentsPrintsLaunchedOutcomeTest)
     runner.register("HelperContractTests.NoArgumentsPrintsReusedOutcome", helperNoArgumentsPrintsReusedOutcomeTest)

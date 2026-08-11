@@ -683,6 +683,39 @@ func cdpClientCreatesBlankTargetWithFixedPutEndpointTest() throws {
     try expectEqual(requests[0].httpShouldHandleCookies, false)
 }
 
+func cdpClientCreateBlankTargetPropagatesCancellationTest() throws {
+    let endpoint = "http://127.0.0.1:9222/json/new?about:blank"
+    let requestStarted = DispatchSemaphore(value: 0)
+    CDPStubLifecycleHooks.shared.install(
+        beforeDelivery: {},
+        afterStart: { _ in requestStarted.signal() },
+        afterStopMarked: {},
+        afterStopReturns: {}
+    )
+    defer { CDPStubLifecycleHooks.shared.clear() }
+    CDPStubStore.shared.reset([endpoint: .hanging])
+    let session = cdpSession()
+    defer { session.invalidateAndCancel() }
+    let task = Task {
+        try await CDPClient(session: session).createBlankTarget(configuration: cdpConfiguration)
+    }
+    guard requestStarted.wait(timeout: .now() + 0.5) == .success else {
+        task.cancel()
+        throw TestAssertionFailure("blank-target request did not start")
+    }
+    task.cancel()
+
+    let propagated = try awaitValue(timeout: 0.5) {
+        do {
+            try await task.value
+            return false
+        } catch is CancellationError {
+            return true
+        }
+    }
+    try expectEqual(propagated, true)
+}
+
 func cdpClientMapsCreateHTTPTransportAndRedirectFailuresTest() throws {
     let endpoint = "http://127.0.0.1:9222/json/new?about:blank"
     let stubs: [CDPStubStore.Stub] = [
@@ -754,6 +787,7 @@ func cdpClientTests() throws {
     try cdpClientRejectsMalformedTargetListTest()
     try cdpClientReportsZeroPagesWhenOnlyNonPageTargetsExistTest()
     try cdpClientCreatesBlankTargetWithFixedPutEndpointTest()
+    try cdpClientCreateBlankTargetPropagatesCancellationTest()
     try cdpClientMapsCreateHTTPTransportAndRedirectFailuresTest()
     try cdpClientRejectsMalformedCreateJSONTest()
     try cdpClientRejectsNonPageBlankTargetResponseTest()
@@ -779,6 +813,7 @@ func registerCDPClientTests(_ runner: inout TestRunner) {
     runner.register("CDPClientTests.RejectsMalformedTargetList", cdpClientRejectsMalformedTargetListTest)
     runner.register("CDPClientTests.ReportsZeroPagesWhenOnlyNonPageTargetsExist", cdpClientReportsZeroPagesWhenOnlyNonPageTargetsExistTest)
     runner.register("CDPClientTests.CreatesBlankTargetWithFixedPutEndpoint", cdpClientCreatesBlankTargetWithFixedPutEndpointTest)
+    runner.register("CDPClientTests.CreateBlankTargetPropagatesCancellation", cdpClientCreateBlankTargetPropagatesCancellationTest)
     runner.register("CDPClientTests.MapsCreateHTTPTransportAndRedirectFailures", cdpClientMapsCreateHTTPTransportAndRedirectFailuresTest)
     runner.register("CDPClientTests.RejectsMalformedCreateJSON", cdpClientRejectsMalformedCreateJSONTest)
     runner.register("CDPClientTests.RejectsNonPageBlankTargetResponse", cdpClientRejectsNonPageBlankTargetResponseTest)

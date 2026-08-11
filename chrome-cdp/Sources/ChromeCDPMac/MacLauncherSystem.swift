@@ -12,8 +12,6 @@ extension LaunchLockError: LaunchLockAcquisitionError {
 
 extension LaunchLockLease: LaunchLockLeasing {}
 
-extension LaunchLock: @unchecked Sendable {}
-
 public struct LaunchLockAdapter: LaunchLocking, Sendable {
     private let lockURL: URL
 
@@ -150,6 +148,9 @@ public struct MacLauncherSystem: LauncherSystem, Sendable {
             "--no-default-browser-check"
         ]
         do {
+            // Trust boundary: Launch Services re-resolves the final application by name when
+            // /usr/bin/open runs. The production app name and validated path are fixed, but
+            // macOS owns that final resolution after descriptor-anchored validation returns.
             let status = try runCommand(URL(fileURLWithPath: "/usr/bin/open"), arguments)
             guard status == 0 else {
                 throw LauncherFailure.launchFailed
@@ -164,7 +165,10 @@ public struct MacLauncherSystem: LauncherSystem, Sendable {
     public func createBlankTarget(configuration: LauncherConfiguration) async throws {
         do {
             try await createTarget(configuration)
+        } catch let cancellation as CancellationError {
+            throw cancellation
         } catch {
+            try Task.checkCancellation()
             throw LauncherFailure.targetCreationFailed
         }
     }
@@ -177,19 +181,100 @@ public struct MacLauncherSystem: LauncherSystem, Sendable {
 
     @_spi(Testing)
     public static func validateChromeInstallation(applicationURL: URL, executableURL: URL) -> Bool {
-        var applicationMetadata = stat()
-        guard lstat(applicationURL.path, &applicationMetadata) == 0,
-              applicationMetadata.st_mode & S_IFMT == S_IFDIR else {
+        let applicationComponents = applicationURL.standardizedFileURL.pathComponents
+        let executableComponents = executableURL.standardizedFileURL.pathComponents
+        guard executableComponents.count == applicationComponents.count + 3,
+              Array(executableComponents.prefix(applicationComponents.count)) == applicationComponents,
+              Array(executableComponents.suffix(3).prefix(2)) == ["Contents", "MacOS"],
+              let applicationName = applicationComponents.last,
+              let executableName = executableComponents.last,
+              isSinglePathComponent(applicationName),
+              isSinglePathComponent(executableName) else {
             return false
         }
 
-        var executableMetadata = stat()
-        guard lstat(executableURL.path, &executableMetadata) == 0,
-              executableMetadata.st_mode & S_IFMT == S_IFREG,
-              access(executableURL.path, X_OK) == 0 else {
+        // The configured application parent is trusted and may itself traverse macOS aliases
+        // such as /var or /tmp. Everything below it is opened relative to anchored descriptors.
+        let trustedParent = applicationURL.deletingLastPathComponent()
+        let parentDescriptor = open(trustedParent.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard parentDescriptor >= 0 else { return false }
+        defer { _ = close(parentDescriptor) }
+
+        let applicationDescriptor = openat(
+            parentDescriptor,
+            applicationName,
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+        )
+        guard applicationDescriptor >= 0 else { return false }
+        defer { _ = close(applicationDescriptor) }
+
+        let contentsDescriptor = openat(
+            applicationDescriptor,
+            "Contents",
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+        )
+        guard contentsDescriptor >= 0 else { return false }
+        defer { _ = close(contentsDescriptor) }
+
+        let macOSDescriptor = openat(
+            contentsDescriptor,
+            "MacOS",
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW
+        )
+        guard macOSDescriptor >= 0 else { return false }
+        defer { _ = close(macOSDescriptor) }
+
+        let executableDescriptor = openat(
+            macOSDescriptor,
+            executableName,
+            O_EXEC | O_CLOEXEC | O_NOFOLLOW
+        )
+        guard executableDescriptor >= 0 else { return false }
+        defer { _ = close(executableDescriptor) }
+
+        var metadata = stat()
+        guard fstat(executableDescriptor, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFREG,
+              isExecutableByCurrentProcess(metadata) else {
             return false
         }
         return true
+    }
+
+    private static func isSinglePathComponent(_ name: String) -> Bool {
+        !name.isEmpty && name != "." && name != ".." && !name.contains("/")
+    }
+
+    private static func isExecutableByCurrentProcess(_ metadata: stat) -> Bool {
+        let effectiveUID = geteuid()
+        let permissionBits = metadata.st_mode & 0o777
+        if effectiveUID == 0 {
+            return permissionBits & 0o111 != 0
+        }
+        if metadata.st_uid == effectiveUID {
+            return permissionBits & S_IXUSR != 0
+        }
+
+        guard let effectiveGroups = effectiveGroupIDs() else { return false }
+        if effectiveGroups.contains(metadata.st_gid) {
+            return permissionBits & S_IXGRP != 0
+        }
+        return permissionBits & S_IXOTH != 0
+    }
+
+    private static func effectiveGroupIDs() -> Set<gid_t>? {
+        let groupCount = getgroups(0, nil)
+        guard groupCount >= 0 else { return nil }
+        var groups = [gid_t](repeating: 0, count: Int(groupCount))
+        if groupCount > 0 {
+            let actualCount = groups.withUnsafeMutableBufferPointer { buffer in
+                getgroups(groupCount, buffer.baseAddress)
+            }
+            guard actualCount >= 0 else { return nil }
+            groups.removeSubrange(Int(actualCount)..<groups.count)
+        }
+        groups.append(getegid())
+        return Set(groups)
     }
 }
 
@@ -197,6 +282,7 @@ public struct HelperCommandRunner: Sendable {
     private static let usage = "usage: chrome-cdp-helper [--version | --self-check]\n"
 
     private let configuration: LauncherConfiguration
+    private let expectedHomeDirectory: URL
     private let runLauncher: @Sendable () async throws -> LauncherOutcome
     private let writeStandardOutput: @Sendable (String) -> Void
     private let writeStandardError: @Sendable (String) -> Void
@@ -204,20 +290,24 @@ public struct HelperCommandRunner: Sendable {
     @_spi(Testing)
     public init(
         configuration: LauncherConfiguration,
+        expectedHomeDirectory: URL,
         runLauncher: @escaping @Sendable () async throws -> LauncherOutcome,
         writeStandardOutput: @escaping @Sendable (String) -> Void,
         writeStandardError: @escaping @Sendable (String) -> Void
     ) {
         self.configuration = configuration
+        self.expectedHomeDirectory = expectedHomeDirectory
         self.runLauncher = runLauncher
         self.writeStandardOutput = writeStandardOutput
         self.writeStandardError = writeStandardError
     }
 
     public static func production() -> HelperCommandRunner {
-        let configuration = LauncherConfiguration.production()
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+        let configuration = LauncherConfiguration.production(homeDirectory: homeDirectory)
         return HelperCommandRunner(
             configuration: configuration,
+            expectedHomeDirectory: homeDirectory,
             runLauncher: {
                 let runner = LauncherRunner(
                     configuration: configuration,
@@ -276,13 +366,7 @@ public struct HelperCommandRunner: Sendable {
     }
 
     private func runSelfCheck() -> Int32 {
-        guard configuration.chromeApplicationURL.path == "/Applications/Google Chrome.app",
-              configuration.chromeExecutableURL.path == "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-              configuration.profileURL.lastPathComponent == "chrome-cdp-profile",
-              configuration.host == "127.0.0.1",
-              configuration.port == 9222,
-              configuration.readinessTimeout == 10,
-              configuration.pollInterval == 0.2 else {
+        guard configuration == LauncherConfiguration.production(homeDirectory: expectedHomeDirectory) else {
             writeStandardError("Chrome CDP helper configuration is invalid.\n")
             return 24
         }

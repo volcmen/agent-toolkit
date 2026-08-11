@@ -86,7 +86,10 @@ public struct CDPClient: CDPServicing, Sendable {
         let (data, response): (Data, URLResponse)
         do {
             (data, response) = try await requestData(request, timeout: request.timeoutInterval)
+        } catch let cancellation as CancellationError {
+            throw cancellation
         } catch {
+            try Task.checkCancellation()
             throw CDPClientError.requestFailed
         }
         guard let httpResponse = response as? HTTPURLResponse,

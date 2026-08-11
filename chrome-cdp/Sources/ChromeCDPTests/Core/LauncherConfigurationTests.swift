@@ -1,4 +1,4 @@
-import ChromeCDPCore
+@_spi(Testing) import ChromeCDPCore
 import ChromeCDPTestSupport
 import Foundation
 
@@ -16,6 +16,31 @@ func launcherConfigurationProductionTest() throws {
     try expectEqual(configuration.lockURL.path, "/Users/tester/Library/Caches/Chrome CDP/launch.lock")
 }
 
+func launcherConfigurationTestingInitializerPreservesEveryFieldTest() throws {
+    let configuration = LauncherConfiguration(
+        chromeApplicationURL: URL(fileURLWithPath: "/Testing/Chrome.app"),
+        chromeExecutableURL: URL(fileURLWithPath: "/Testing/Chrome.app/Contents/MacOS/Chrome"),
+        profileURL: URL(fileURLWithPath: "/Testing/profile"),
+        host: "localhost",
+        port: 9333,
+        readinessTimeout: 12,
+        pollInterval: 0.4,
+        lockTimeout: 8,
+        lockURL: URL(fileURLWithPath: "/Testing/launch.lock")
+    )
+
+    try expectEqual(configuration.chromeApplicationURL.path, "/Testing/Chrome.app")
+    try expectEqual(configuration.chromeExecutableURL.path, "/Testing/Chrome.app/Contents/MacOS/Chrome")
+    try expectEqual(configuration.profileURL.path, "/Testing/profile")
+    try expectEqual(configuration.host, "localhost")
+    try expectEqual(configuration.port, 9333)
+    try expectEqual(configuration.readinessTimeout, 12)
+    try expectEqual(configuration.pollInterval, 0.4)
+    try expectEqual(configuration.lockTimeout, 8)
+    try expectEqual(configuration.lockURL.path, "/Testing/launch.lock")
+}
+
 func registerLauncherConfigurationTests(_ runner: inout TestRunner) {
     runner.register("LauncherConfigurationTests", launcherConfigurationProductionTest)
+    runner.register("LauncherConfigurationTests.TestingInitializerPreservesEveryField", launcherConfigurationTestingInitializerPreservesEveryFieldTest)
 }

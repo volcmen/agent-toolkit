@@ -11,6 +11,29 @@ public struct LauncherConfiguration: Equatable, Sendable {
     public let lockTimeout: TimeInterval
     public let lockURL: URL
 
+    @_spi(Testing)
+    public init(
+        chromeApplicationURL: URL,
+        chromeExecutableURL: URL,
+        profileURL: URL,
+        host: String,
+        port: Int,
+        readinessTimeout: TimeInterval,
+        pollInterval: TimeInterval,
+        lockTimeout: TimeInterval,
+        lockURL: URL
+    ) {
+        self.chromeApplicationURL = chromeApplicationURL
+        self.chromeExecutableURL = chromeExecutableURL
+        self.profileURL = profileURL
+        self.host = host
+        self.port = port
+        self.readinessTimeout = readinessTimeout
+        self.pollInterval = pollInterval
+        self.lockTimeout = lockTimeout
+        self.lockURL = lockURL
+    }
+
     public static func production(homeDirectory: URL) -> LauncherConfiguration {
         LauncherConfiguration(
             chromeApplicationURL: URL(fileURLWithPath: "/Applications/Google Chrome.app"),

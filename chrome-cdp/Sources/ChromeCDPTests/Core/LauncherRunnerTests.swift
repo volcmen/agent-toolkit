@@ -147,6 +147,7 @@ private final class FakeLauncherSystem: LauncherSystem, @unchecked Sendable {
     var snapshots: [SystemSnapshot]
     var repeatLastSnapshot = false
     var failingEvent: RunnerEvent?
+    var cancellingEvent: RunnerEvent?
     var observationTime: (@Sendable () -> TimeInterval)?
     private(set) var snapshotObservationTimes: [TimeInterval] = []
     private let recorder: RunnerEventRecorder
@@ -196,6 +197,9 @@ private final class FakeLauncherSystem: LauncherSystem, @unchecked Sendable {
 
     private func perform(_ event: RunnerEvent) throws {
         recorder.record(event)
+        if cancellingEvent == event {
+            throw CancellationError()
+        }
         if failingEvent == event {
             throw LauncherRunnerTestError.effectFailure
         }
@@ -431,6 +435,33 @@ func launcherRunnerBlankTargetOnlyForZeroPagesTest() throws {
         try expectEqual(recorder.events.filter { $0 == .createBlankTarget }.count, 0)
         try expectEqual(lock.lease.releaseCount, 1)
     }
+}
+
+func launcherRunnerTargetCancellationReleasesWithoutActivationTest() throws {
+    let recorder = RunnerEventRecorder()
+    let lock = FakeLaunchLock(recorder: recorder)
+    let clock = FakeLauncherClock(recorder: recorder)
+    let system = FakeLauncherSystem(
+        snapshots: [readySnapshot(pid: 207, pageCount: 0)],
+        recorder: recorder
+    )
+    system.cancellingEvent = .createBlankTarget
+
+    let propagated = try awaitValue {
+        do {
+            _ = try await makeRunner(system: system, lock: lock, clock: clock).run()
+            return false
+        } catch is CancellationError {
+            return true
+        }
+    }
+
+    try expectEqual(propagated, true)
+    try expectEqual(lock.lease.releaseCount, 1)
+    try expectEqual(recorder.events, [
+        .acquire(timeout: 10, pollInterval: 0.2), .chromeIsInstalled, .snapshot,
+        .createBlankTarget, .release,
+    ])
 }
 
 func launcherRunnerActivatesOnlyValidatedPIDTest() throws {
@@ -683,6 +714,7 @@ func launcherRunnerTests() throws {
     try launcherRunnerStartingStatePollsWithoutLaunchingTest()
     try launcherRunnerReadyStateReusesWithoutLaunchingTest()
     try launcherRunnerBlankTargetOnlyForZeroPagesTest()
+    try launcherRunnerTargetCancellationReleasesWithoutActivationTest()
     try launcherRunnerActivatesOnlyValidatedPIDTest()
     try launcherRunnerConflictsProduceNoBrowserEffectsTest()
     try launcherRunnerReadinessUsesBoundedMonotonicDeadlineAndLastFailureTest()
@@ -704,6 +736,7 @@ func registerLauncherRunnerTests(_ runner: inout TestRunner) {
     runner.register("LauncherRunnerTests.StartingStatePollsWithoutLaunching", launcherRunnerStartingStatePollsWithoutLaunchingTest)
     runner.register("LauncherRunnerTests.ReadyStateReusesWithoutLaunching", launcherRunnerReadyStateReusesWithoutLaunchingTest)
     runner.register("LauncherRunnerTests.BlankTargetOnlyForZeroPages", launcherRunnerBlankTargetOnlyForZeroPagesTest)
+    runner.register("LauncherRunnerTests.TargetCancellationReleasesWithoutActivation", launcherRunnerTargetCancellationReleasesWithoutActivationTest)
     runner.register("LauncherRunnerTests.ActivatesOnlyValidatedPID", launcherRunnerActivatesOnlyValidatedPIDTest)
     runner.register("LauncherRunnerTests.ConflictsProduceNoBrowserEffects", launcherRunnerConflictsProduceNoBrowserEffectsTest)
     runner.register("LauncherRunnerTests.ReadinessUsesBoundedMonotonicDeadlineAndLastFailure", launcherRunnerReadinessUsesBoundedMonotonicDeadlineAndLastFailureTest)

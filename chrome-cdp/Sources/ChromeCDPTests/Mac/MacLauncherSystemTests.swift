@@ -185,6 +185,32 @@ func macLauncherSystemMapsTargetErrorsTest() throws {
     }
 }
 
+func macLauncherSystemPropagatesTargetCancellationTest() throws {
+    let targetStarted = DispatchSemaphore(value: 0)
+    let system = makeMacSystem(createTarget: { _ in
+        targetStarted.signal()
+        try await Task.sleep(for: .seconds(60))
+    })
+    let task = Task {
+        try await system.createBlankTarget(configuration: macSystemConfiguration)
+    }
+    guard targetStarted.wait(timeout: .now() + 0.5) == .success else {
+        task.cancel()
+        throw TestAssertionFailure("blank-target effect did not start")
+    }
+    task.cancel()
+
+    let propagated = try awaitValue {
+        do {
+            try await task.value
+            return false
+        } catch is CancellationError {
+            return true
+        }
+    }
+    try expectEqual(propagated, true)
+}
+
 func macLauncherSystemMapsUnsafeProfilePreparationTest() throws {
     let system = makeMacSystem(
         prepareProfile: { _ in throw ProfileGuardError.unsafePath(.symlink) }
@@ -228,6 +254,16 @@ func macLauncherSystemValidatesAppAndExecutableWithoutFollowingLinksTest() throw
         throw TestAssertionFailure("a real application directory with an executable must validate")
     }
 
+    let outsideExecutable = directory.appendingPathComponent("Outside Chrome")
+    try Data("#!/bin/sh\n".utf8).write(to: outsideExecutable)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: outsideExecutable.path)
+    guard !MacLauncherSystem.validateChromeInstallation(
+        applicationURL: realApp,
+        executableURL: outsideExecutable
+    ) else {
+        throw TestAssertionFailure("the executable must be a relative descendant of the application")
+    }
+
     let regularApp = directory.appendingPathComponent("Not An App")
     try Data().write(to: regularApp)
     guard !MacLauncherSystem.validateChromeInstallation(
@@ -256,6 +292,33 @@ func macLauncherSystemValidatesAppAndExecutableWithoutFollowingLinksTest() throw
         throw TestAssertionFailure("a symlinked application must be rejected")
     }
 
+    let linkedContentsApp = directory.appendingPathComponent("Linked Contents.app", isDirectory: true)
+    try FileManager.default.createDirectory(at: linkedContentsApp, withIntermediateDirectories: false)
+    try FileManager.default.createSymbolicLink(
+        at: linkedContentsApp.appendingPathComponent("Contents"),
+        withDestinationURL: realApp.appendingPathComponent("Contents")
+    )
+    guard !MacLauncherSystem.validateChromeInstallation(
+        applicationURL: linkedContentsApp,
+        executableURL: linkedContentsApp.appendingPathComponent("Contents/MacOS/Google Chrome")
+    ) else {
+        throw TestAssertionFailure("a symlinked Contents directory must be rejected")
+    }
+
+    let linkedMacOSApp = directory.appendingPathComponent("Linked MacOS.app", isDirectory: true)
+    let linkedMacOSContents = linkedMacOSApp.appendingPathComponent("Contents", isDirectory: true)
+    try FileManager.default.createDirectory(at: linkedMacOSContents, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(
+        at: linkedMacOSContents.appendingPathComponent("MacOS"),
+        withDestinationURL: realApp.appendingPathComponent("Contents/MacOS")
+    )
+    guard !MacLauncherSystem.validateChromeInstallation(
+        applicationURL: linkedMacOSApp,
+        executableURL: linkedMacOSApp.appendingPathComponent("Contents/MacOS/Google Chrome")
+    ) else {
+        throw TestAssertionFailure("a symlinked MacOS directory must be rejected")
+    }
+
     let linkedExecutable = realApp.appendingPathComponent("Contents/MacOS/Linked Chrome")
     try FileManager.default.createSymbolicLink(at: linkedExecutable, withDestinationURL: realExecutable)
     guard !MacLauncherSystem.validateChromeInstallation(
@@ -263,6 +326,24 @@ func macLauncherSystemValidatesAppAndExecutableWithoutFollowingLinksTest() throw
         executableURL: linkedExecutable
     ) else {
         throw TestAssertionFailure("a symlinked executable must be rejected")
+    }
+
+    for insufficientMode in [0o010, 0o001] {
+        try FileManager.default.setAttributes([.posixPermissions: insufficientMode], ofItemAtPath: realExecutable.path)
+        guard !MacLauncherSystem.validateChromeInstallation(
+            applicationURL: realApp,
+            executableURL: realExecutable
+        ) else {
+            throw TestAssertionFailure("the effective owner's execute bit must control permission")
+        }
+    }
+
+    try FileManager.default.setAttributes([.posixPermissions: 0o100], ofItemAtPath: realExecutable.path)
+    guard MacLauncherSystem.validateChromeInstallation(
+        applicationURL: realApp,
+        executableURL: realExecutable
+    ) else {
+        throw TestAssertionFailure("an owner-executable regular file must validate")
     }
 
     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: realExecutable.path)
@@ -302,6 +383,7 @@ func macLauncherSystemTests() throws {
     try macLauncherSystemComposesSnapshotTest()
     try macLauncherSystemMapsObservationErrorsTest()
     try macLauncherSystemMapsTargetErrorsTest()
+    try macLauncherSystemPropagatesTargetCancellationTest()
     try macLauncherSystemMapsUnsafeProfilePreparationTest()
     try macLauncherSystemMapsOtherProfilePreparationErrorsTest()
     try macLauncherSystemValidatesAppAndExecutableWithoutFollowingLinksTest()
@@ -318,6 +400,7 @@ func registerMacLauncherSystemTests(_ runner: inout TestRunner) {
     runner.register("MacLauncherSystemTests.ComposesSnapshot", macLauncherSystemComposesSnapshotTest)
     runner.register("MacLauncherSystemTests.MapsObservationErrors", macLauncherSystemMapsObservationErrorsTest)
     runner.register("MacLauncherSystemTests.MapsTargetErrors", macLauncherSystemMapsTargetErrorsTest)
+    runner.register("MacLauncherSystemTests.PropagatesTargetCancellation", macLauncherSystemPropagatesTargetCancellationTest)
     runner.register("MacLauncherSystemTests.MapsUnsafeProfilePreparation", macLauncherSystemMapsUnsafeProfilePreparationTest)
     runner.register("MacLauncherSystemTests.MapsOtherProfilePreparationErrors", macLauncherSystemMapsOtherProfilePreparationErrorsTest)
     runner.register("MacLauncherSystemTests.ValidatesAppAndExecutableWithoutFollowingLinks", macLauncherSystemValidatesAppAndExecutableWithoutFollowingLinksTest)
