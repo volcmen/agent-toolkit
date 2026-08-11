@@ -8,7 +8,7 @@ plugin marketplace.
 
 | Role | User agent |
 | --- | --- |
-| Controller | Fable `controller` |
+| Controller | Fable `controller` (medium effort) |
 | Task analyst | Sonnet `task-analyst` |
 | Repository explorer | Sonnet `Explore` |
 | Writing specialist | Sonnet `alan-wake` |

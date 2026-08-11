@@ -7,7 +7,7 @@
       "prompt": "prompts/controller.md",
       "claude": {
         "model": "fable",
-        "effort": "high"
+        "effort": "medium"
       }
     },
     {

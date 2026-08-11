@@ -39,11 +39,11 @@ class Rendering(unittest.TestCase):
         catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
         controller = next(agent for agent in catalog if agent["id"] == "controller")
         self.assertEqual(controller["claude"]["model"], "fable")
-        self.assertEqual(controller["claude"]["effort"], "high")
+        self.assertEqual(controller["claude"]["effort"], "medium")
         rendered = (ROOT / "claude" / "agents" / "controller.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("\neffort: high\n", rendered)
+        self.assertIn("\neffort: medium\n", rendered)
         for agent in catalog:
             if agent.get("codex"):
                 self.assertTrue(agent["codex"]["model"].startswith("gpt-"))
