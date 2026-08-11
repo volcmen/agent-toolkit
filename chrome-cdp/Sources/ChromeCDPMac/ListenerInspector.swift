@@ -92,22 +92,15 @@ public struct ListenerInspector: Sendable {
     }
 
     private static func systemLsof(port: UInt16) throws -> LsofCommandResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        process.arguments = ["-nP", "-a", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fpn"]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = Pipe()
         do {
-            try process.run()
+            let result = try ProcessInspector.capture(
+                executableURL: URL(fileURLWithPath: "/usr/sbin/lsof"),
+                arguments: ["-nP", "-a", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fpn"]
+            )
+            return LsofCommandResult(status: result.status, output: result.standardOutput)
         } catch {
             throw ListenerInspectorError.commandFailed
         }
-        process.waitUntilExit()
-        return LsofCommandResult(
-            status: process.terminationStatus,
-            output: output.fileHandleForReading.readDataToEndOfFile()
-        )
     }
 
     private static func parseEndpoint(_ value: String) throws -> (address: String, port: UInt16) {

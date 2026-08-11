@@ -9,6 +9,9 @@ if CommandLine.arguments.dropFirst().first == "--launch-lock-child" {
 if CommandLine.arguments.dropFirst().first == "--launch-lock-race-child" {
     exit(runLaunchLockRaceChild(arguments: Array(CommandLine.arguments.dropFirst(2))))
 }
+if CommandLine.arguments.dropFirst().first == "--process-output-child" {
+    exit(runProcessOutputChild(arguments: Array(CommandLine.arguments.dropFirst(2))))
+}
 
 var runner = TestRunner()
 registerLauncherConfigurationTests(&runner)
@@ -66,6 +69,16 @@ func runLaunchLockChild(arguments: [String]) -> Int32 {
 private enum LaunchLockChildAction: String {
     case attempt
     case hold
+}
+
+func runProcessOutputChild(arguments: [String]) -> Int32 {
+    guard arguments.count == 1, let count = Int(arguments[0]), count > 0 else {
+        return 2
+    }
+    let output = Data(repeating: 0x6F, count: count)
+    FileHandle.standardOutput.write(output)
+    FileHandle.standardError.write(output)
+    return 0
 }
 
 func runLaunchLockRaceChild(arguments: [String]) -> Int32 {

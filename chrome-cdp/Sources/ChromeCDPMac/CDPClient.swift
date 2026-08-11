@@ -82,9 +82,10 @@ public struct CDPClient: CDPServicing, Sendable {
         request.httpMethod = method
         request.timeoutInterval = requestTimeout(for: configuration)
         request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.httpShouldHandleCookies = false
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await session.data(for: request, delegate: NoRedirectDelegate())
+            (data, response) = try await requestData(request, timeout: request.timeoutInterval)
         } catch {
             throw CDPClientError.requestFailed
         }
@@ -94,6 +95,23 @@ public struct CDPClient: CDPServicing, Sendable {
             throw CDPClientError.requestFailed
         }
         return data
+    }
+
+    private func requestData(_ request: URLRequest, timeout: TimeInterval) async throws -> (Data, URLResponse) {
+        try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
+            group.addTask {
+                try await session.data(for: request, delegate: NoRedirectDelegate())
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(timeout))
+                throw CDPClientError.requestFailed
+            }
+            guard let result = try await group.next() else {
+                throw CDPClientError.requestFailed
+            }
+            group.cancelAll()
+            return result
+        }
     }
 
     private func endpointURL(configuration: LauncherConfiguration, path: String, query: String? = nil) throws -> URL {

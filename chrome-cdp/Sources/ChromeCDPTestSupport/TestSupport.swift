@@ -58,10 +58,16 @@ private final class AsyncResultBox<Value: Sendable>: @unchecked Sendable {
     }
 }
 
-public func awaitValue<Value: Sendable>(_ operation: @escaping @Sendable () async throws -> Value) throws -> Value {
+public func awaitValue<Value: Sendable>(
+    timeout: TimeInterval = 1,
+    _ operation: @escaping @Sendable () async throws -> Value
+) throws -> Value {
+    guard timeout > 0 else {
+        throw TestAssertionFailure("async test timeout must be positive")
+    }
     let semaphore = DispatchSemaphore(value: 0)
     let box = AsyncResultBox<Value>()
-    Task {
+    let task = Task {
         do {
             box.store(.success(try await operation()))
         } catch {
@@ -69,7 +75,10 @@ public func awaitValue<Value: Sendable>(_ operation: @escaping @Sendable () asyn
         }
         semaphore.signal()
     }
-    semaphore.wait()
+    guard semaphore.wait(timeout: .now() + timeout) == .success else {
+        task.cancel()
+        throw TestAssertionFailure("async operation timed out after \(timeout) seconds")
+    }
     guard let result = box.take() else {
         throw TestAssertionFailure("async test completed without a result")
     }
