@@ -131,6 +131,38 @@ Do not begin with phrases such as "Here is a revised version," "Certainly," or
   path, ref, or identifier that the source does not establish.
 - Preserve required templates, fields, checklists, and metadata.
 
+## Destination references
+
+Before finalizing Slack, Notion, Confluence, or GitLab content, consult the
+applicable official reference below during the task. Open the direct source;
+do not turn this bounded syntax check into broad research. If a destination
+tool is active, inspect its input schema first. Follow a tool-specific format
+instead of raw destination syntax only when the active tool contract explicitly
+documents that conversion. Complete this check before finalizing.
+
+If an official page is temporarily unavailable, use the verified baseline
+below. Never invent syntax, blocks, macros, conversion behavior, or connector
+capabilities.
+
+- Slack: https://docs.slack.dev/messaging/formatting-message-text/
+  Raw messages use Slack `mrkdwn`: `*bold*`, `_italic_`, backticks, and
+  `<url|label>` links.
+- Notion: https://developers.notion.com/reference/block,
+  https://developers.notion.com/guides/data-apis/working-with-markdown-content,
+  and https://www.notion.com/help/what-is-a-block. Prefer a tool's native block
+  schema. Use Notion-flavored Markdown only when the transport documents it;
+  ordinary Markdown does not represent every Notion block.
+- Confluence: https://support.atlassian.com/confluence-cloud/docs/format-text/,
+  https://support.atlassian.com/confluence-cloud/docs/available-markdown-commands/,
+  and https://support.atlassian.com/confluence-cloud/docs/insert-confluence-wiki-markup/.
+  Prefer the active tool's native page-body schema. Distinguish current
+  Confluence editor formatting and Markdown commands from legacy wiki markup;
+  do not emit legacy markup unless the user or destination contract requires it.
+- GitLab: https://docs.gitlab.com/user/markdown/. Use GitLab Flavored Markdown
+  in descriptions, comments, wiki pages, and Markdown files. Keep titles plain
+  except for syntax GitLab explicitly supports because titles do not support
+  full GitLab Flavored Markdown.
+
 ## Destination defaults
 
 ### Chat and Slack
@@ -140,12 +172,11 @@ Do not begin with phrases such as "Here is a revised version," "Certainly," or
   `*NTD-6907 — root cause + fix*` or `*dev35 — fixed and validated*`.
 - Default to one to five short lines; every line must carry a fact the reader
   needs. Cut transitions, narration, and restated thread context.
-- Write Slack mrkdwn, not Markdown: `*bold*` with single asterisks, `_italic_`,
-  backticks for code, and named links as `<url|label>`. `[text](url)` does not
-  render in Slack. Exception: when the controller states the message will be
-  posted through a tool that accepts Markdown and converts it (such as the
-  Slack MCP draft/send tools), write standard Markdown links `[label](url)`
-  and keep the rest in mrkdwn-safe formatting.
+- Write Slack `mrkdwn`, not Markdown: `*bold*` with single asterisks,
+  `_italic_`, backticks for code, and named links as `<url|label>`.
+  `[text](url)` does not render in raw Slack messages. Use another link syntax
+  only when the active tool contract explicitly documents that it accepts and
+  converts it.
 - Render every ticket, MR, pipeline, commit, file:line, or document reference
   as a named link whose label is its identifier, such as `<url|NTD-6907>`,
   `<url|MR !1572>`, or `<url|deploy_mos.groovy:24>`, whenever the URL is in

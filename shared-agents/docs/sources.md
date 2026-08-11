@@ -38,3 +38,26 @@ Claude Code watches existing `~/.claude/agents/` and `.claude/agents/`
 directories and uses added or edited definitions within seconds. Restart only
 when the scope's first `agents` directory did not exist at session startup, or
 when the session started with `--disable-slash-commands`.
+
+## Destination-formatting sources
+
+Alan Wake consults the applicable official source before finalizing content for
+these destinations:
+
+- [Slack: formatting message text](https://docs.slack.dev/messaging/formatting-message-text/)
+  — raw message `mrkdwn`, links, escaping, lists, quotes, and code.
+- [Notion: block reference](https://developers.notion.com/reference/block),
+  [working with Markdown content](https://developers.notion.com/guides/data-apis/working-with-markdown-content),
+  and [what is a block?](https://www.notion.com/help/what-is-a-block)
+  — native block types, Notion-flavored Markdown, and editor block semantics.
+- [Confluence: format text](https://support.atlassian.com/confluence-cloud/docs/format-text/),
+  [available Markdown commands](https://support.atlassian.com/confluence-cloud/docs/available-markdown-commands/),
+  and [legacy wiki markup](https://support.atlassian.com/confluence-cloud/docs/insert-confluence-wiki-markup/)
+  — current editor formatting, Markdown shortcuts, and the legacy-editor
+  boundary.
+- [GitLab Flavored Markdown](https://docs.gitlab.com/user/markdown/)
+  — supported syntax, native references, and title limitations.
+
+The public Thomas Frank Notion block-reference page was reachable when this
+policy was designed, but it is unofficial. It is supplementary and does not
+override Notion's documentation or an active connector schema.

@@ -414,11 +414,45 @@ class Package(unittest.TestCase):
         self.assertEqual(payload["agent_name"], "controller")
         self.assertGreaterEqual(len(payload["evals"]), 3)
 
+    def test_alan_wake_consults_official_destination_references(self) -> None:
+        prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
+        sources = (ROOT / "docs" / "sources.md").read_text(encoding="utf-8")
+        normalized = " ".join(prompt.split())
+        urls = (
+            "https://docs.slack.dev/messaging/formatting-message-text/",
+            "https://developers.notion.com/reference/block",
+            "https://developers.notion.com/guides/data-apis/working-with-markdown-content",
+            "https://www.notion.com/help/what-is-a-block",
+            "https://support.atlassian.com/confluence-cloud/docs/format-text/",
+            "https://support.atlassian.com/confluence-cloud/docs/available-markdown-commands/",
+            "https://support.atlassian.com/confluence-cloud/docs/insert-confluence-wiki-markup/",
+            "https://docs.gitlab.com/user/markdown/",
+        )
+        self.assertIn("consult the applicable official reference", normalized)
+        self.assertIn("before finalizing", normalized)
+        self.assertIn("temporarily unavailable", normalized)
+        for url in urls:
+            with self.subTest(url=url):
+                self.assertIn(url, prompt)
+                self.assertIn(url, sources)
+
+    def test_alan_wake_uses_destination_native_format_contracts(self) -> None:
+        prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
+        normalized = " ".join(prompt.split())
+        self.assertIn("Notion-flavored Markdown", normalized)
+        self.assertIn("ordinary Markdown does not represent every Notion block", normalized)
+        self.assertIn("legacy wiki markup", normalized)
+        self.assertIn("current Confluence editor", normalized)
+        self.assertIn("GitLab Flavored Markdown", normalized)
+        self.assertIn("titles do not support full GitLab Flavored Markdown", normalized)
+
     def test_alan_wake_writes_destination_native_slack_mrkdwn(self) -> None:
         prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
         normalized = " ".join(prompt.split())
         self.assertIn("`<url|label>`", normalized)
-        self.assertIn("`[text](url)` does not render in Slack", normalized)
+        self.assertIn("`[text](url)` does not render in raw Slack messages", normalized)
+        self.assertIn("active tool contract explicitly documents", normalized)
+        self.assertNotIn("Slack MCP draft/send tools", prompt)
         self.assertIn("named link", normalized)
         self.assertIn("never invent a URL", normalized)
         self.assertIn("bold headline", normalized)
