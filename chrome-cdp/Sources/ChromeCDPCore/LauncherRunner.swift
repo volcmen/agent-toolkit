@@ -58,7 +58,7 @@ public struct LauncherRunner: Sendable {
 
         switch initialDecision {
         case .createProfile, .repairProfileMode:
-            throw LauncherRunnerInternalError.profilePreparationDidNotConverge
+            throw LauncherFailure.profilePreparationFailed
         case .launch:
             try system.launchChrome(configuration: configuration)
             launched = true
@@ -97,6 +97,9 @@ public struct LauncherRunner: Sendable {
             }
 
             try await clock.sleep(for: min(configuration.pollInterval, remaining))
+            guard clock.now < deadline else {
+                throw LauncherFailure.readinessTimeout(lastFailure: lastFailure)
+            }
             let decision = classifier.classify(
                 try await system.snapshot(configuration: configuration)
             )
@@ -115,7 +118,7 @@ public struct LauncherRunner: Sendable {
             case .launch:
                 break
             case .createProfile, .repairProfileMode:
-                throw LauncherRunnerInternalError.profilePreparationDidNotConverge
+                throw LauncherFailure.profilePreparationFailed
             }
         }
     }
@@ -131,8 +134,4 @@ public struct LauncherRunner: Sendable {
         try system.activate(pid: pid)
         return launched ? .launched(pid: pid) : .reused(pid: pid)
     }
-}
-
-private enum LauncherRunnerInternalError: Error {
-    case profilePreparationDidNotConverge
 }

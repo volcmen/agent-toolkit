@@ -84,6 +84,7 @@ private final class FakeLauncherClock: LauncherClock, @unchecked Sendable {
     private let recorder: RunnerEventRecorder
     private var elapsedNanoseconds: Int64 = 0
     var sleepError: LauncherRunnerTestError?
+    var sleepAdvanceOverride: TimeInterval?
     private(set) var sleeps: [TimeInterval] = []
 
     init(recorder: RunnerEventRecorder) {
@@ -100,7 +101,44 @@ private final class FakeLauncherClock: LauncherClock, @unchecked Sendable {
         if let sleepError {
             throw sleepError
         }
-        elapsedNanoseconds += Int64((interval * 1_000_000_000).rounded())
+        let advance = sleepAdvanceOverride ?? interval
+        elapsedNanoseconds += Int64((advance * 1_000_000_000).rounded())
+    }
+}
+
+private final class SuspendingLauncherClock: LauncherClock, @unchecked Sendable {
+    private let lock = NSLock()
+    private let recorder: RunnerEventRecorder
+    private var enteredSleep = false
+
+    init(recorder: RunnerEventRecorder) {
+        self.recorder = recorder
+    }
+
+    var now: TimeInterval { 0 }
+
+    func sleep(for interval: TimeInterval) async throws {
+        recorder.record(.sleep(interval))
+        markSleepEntered()
+        try await Task.sleep(for: .seconds(60))
+    }
+
+    func waitUntilSleepEntered() async {
+        while !hasEnteredSleep() {
+            await Task.yield()
+        }
+    }
+
+    private func markSleepEntered() {
+        lock.lock()
+        enteredSleep = true
+        lock.unlock()
+    }
+
+    private func hasEnteredSleep() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return enteredSleep
     }
 }
 
@@ -109,6 +147,8 @@ private final class FakeLauncherSystem: LauncherSystem, @unchecked Sendable {
     var snapshots: [SystemSnapshot]
     var repeatLastSnapshot = false
     var failingEvent: RunnerEvent?
+    var observationTime: (@Sendable () -> TimeInterval)?
+    private(set) var snapshotObservationTimes: [TimeInterval] = []
     private let recorder: RunnerEventRecorder
     private var lastSnapshot: SystemSnapshot?
 
@@ -128,6 +168,9 @@ private final class FakeLauncherSystem: LauncherSystem, @unchecked Sendable {
 
     func snapshot(configuration: LauncherConfiguration) async throws -> SystemSnapshot {
         try perform(.snapshot)
+        if let observationTime {
+            snapshotObservationTimes.append(observationTime())
+        }
         if !snapshots.isEmpty {
             let snapshot = snapshots.removeFirst()
             lastSnapshot = snapshot
@@ -208,7 +251,7 @@ private func readySnapshot(pid: Int32, pageCount: Int = 1) -> SystemSnapshot {
 private func makeRunner(
     system: FakeLauncherSystem,
     lock: FakeLaunchLock,
-    clock: FakeLauncherClock
+    clock: any LauncherClock
 ) -> LauncherRunner {
     LauncherRunner(
         configuration: runnerConfiguration,
@@ -294,16 +337,9 @@ func launcherRunnerDoesNotPrepareProfileRecursivelyTest() throws {
         recorder: recorder
     )
 
-    let failed = try awaitValue {
-        do {
-            _ = try await makeRunner(system: system, lock: lock, clock: clock).run()
-            return false
-        } catch {
-            return true
-        }
-    }
+    let failure = try captureLauncherFailure(makeRunner(system: system, lock: lock, clock: clock))
 
-    try expectEqual(failed, true)
+    try expectEqual(failure, .profilePreparationFailed)
     try expectEqual(recorder.events, [
         .acquire(timeout: 10, pollInterval: 0.2), .chromeIsInstalled, .snapshot,
         .prepareProfile, .snapshot, .release,
@@ -363,7 +399,25 @@ func launcherRunnerReadyStateReusesWithoutLaunchingTest() throws {
 }
 
 func launcherRunnerBlankTargetOnlyForZeroPagesTest() throws {
-    for (pageCount, expectedTargetCalls) in [(0, 1), (1, 0), (4, 0)] {
+    let zeroPageRecorder = RunnerEventRecorder()
+    let zeroPageLock = FakeLaunchLock(recorder: zeroPageRecorder)
+    let zeroPageClock = FakeLauncherClock(recorder: zeroPageRecorder)
+    let zeroPageSystem = FakeLauncherSystem(
+        snapshots: [readySnapshot(pid: 200, pageCount: 0)],
+        recorder: zeroPageRecorder
+    )
+
+    let zeroPageOutcome = try awaitValue {
+        try await makeRunner(system: zeroPageSystem, lock: zeroPageLock, clock: zeroPageClock).run()
+    }
+
+    try expectEqual(zeroPageOutcome, .reused(pid: 200))
+    try expectEqual(zeroPageRecorder.events, [
+        .acquire(timeout: 10, pollInterval: 0.2), .chromeIsInstalled, .snapshot,
+        .createBlankTarget, .activate(200), .release,
+    ])
+
+    for pageCount in [1, 4] {
         let recorder = RunnerEventRecorder()
         let lock = FakeLaunchLock(recorder: recorder)
         let clock = FakeLauncherClock(recorder: recorder)
@@ -374,7 +428,7 @@ func launcherRunnerBlankTargetOnlyForZeroPagesTest() throws {
 
         _ = try awaitValue { try await makeRunner(system: system, lock: lock, clock: clock).run() }
 
-        try expectEqual(recorder.events.filter { $0 == .createBlankTarget }.count, expectedTargetCalls)
+        try expectEqual(recorder.events.filter { $0 == .createBlankTarget }.count, 0)
         try expectEqual(lock.lease.releaseCount, 1)
     }
 }
@@ -454,6 +508,7 @@ func launcherRunnerReadinessUsesBoundedMonotonicDeadlineAndLastFailureTest() thr
         recorder: recorder
     )
     system.repeatLastSnapshot = true
+    system.observationTime = { clock.now }
 
     let failure = try captureLauncherFailure(makeRunner(system: system, lock: lock, clock: clock))
 
@@ -464,8 +519,60 @@ func launcherRunnerReadinessUsesBoundedMonotonicDeadlineAndLastFailureTest() thr
     let totalSleep = clock.sleeps.reduce(0, +)
     try expectEqual(totalSleep <= 10, true, "total readiness sleep must not exceed ten seconds")
     try expectEqual(totalSleep >= 9.999_999, true, "readiness polling must reach the ten-second deadline")
+    try expectEqual(system.snapshotObservationTimes.count, 50)
+    try expectEqual(system.snapshotObservationTimes.allSatisfy { $0 < 10 }, true)
+    try expectEqual(system.snapshotObservationTimes.last, 9.8)
     try expectEqual(recorder.events.contains(.launchChrome), false)
     try expectEqual(lock.lease.releaseCount, 1)
+}
+
+func launcherRunnerOversleepSkipsBoundarySnapshotAndPreservesFailureTest() throws {
+    let recorder = RunnerEventRecorder()
+    let lock = FakeLaunchLock(recorder: recorder)
+    let clock = FakeLauncherClock(recorder: recorder)
+    clock.sleepAdvanceOverride = 10.1
+    let system = FakeLauncherSystem(
+        snapshots: [startingSnapshot(pid: 502, failure: .malformedVersion)],
+        recorder: recorder
+    )
+    system.observationTime = { clock.now }
+
+    let failure = try captureLauncherFailure(makeRunner(system: system, lock: lock, clock: clock))
+
+    try expectEqual(failure, .readinessTimeout(lastFailure: .malformedVersion))
+    try expectEqual(clock.sleeps, [0.2])
+    try expectEqual(system.snapshotObservationTimes, [0])
+    try expectEqual(recorder.events, [
+        .acquire(timeout: 10, pollInterval: 0.2), .chromeIsInstalled, .snapshot,
+        .sleep(0.2), .release,
+    ])
+}
+
+func launcherRunnerCancellationDuringSleepReleasesWithoutLaterEffectsTest() throws {
+    let recorder = RunnerEventRecorder()
+    let lock = FakeLaunchLock(recorder: recorder)
+    let clock = SuspendingLauncherClock(recorder: recorder)
+    let system = FakeLauncherSystem(snapshots: [startingSnapshot(pid: 503)], recorder: recorder)
+    let runner = makeRunner(system: system, lock: lock, clock: clock)
+
+    let cancellationObserved = try awaitValue {
+        let task = Task { try await runner.run() }
+        await clock.waitUntilSleepEntered()
+        task.cancel()
+        do {
+            _ = try await task.value
+            return false
+        } catch is CancellationError {
+            return true
+        }
+    }
+
+    try expectEqual(cancellationObserved, true)
+    try expectEqual(lock.lease.releaseCount, 1)
+    try expectEqual(recorder.events, [
+        .acquire(timeout: 10, pollInterval: 0.2), .chromeIsInstalled, .snapshot,
+        .sleep(0.2), .release,
+    ])
 }
 
 func launcherRunnerReleasesLeaseOnEveryPostAcquireFailureTest() throws {
@@ -579,6 +686,8 @@ func launcherRunnerTests() throws {
     try launcherRunnerActivatesOnlyValidatedPIDTest()
     try launcherRunnerConflictsProduceNoBrowserEffectsTest()
     try launcherRunnerReadinessUsesBoundedMonotonicDeadlineAndLastFailureTest()
+    try launcherRunnerOversleepSkipsBoundarySnapshotAndPreservesFailureTest()
+    try launcherRunnerCancellationDuringSleepReleasesWithoutLaterEffectsTest()
     try launcherRunnerReleasesLeaseOnEveryPostAcquireFailureTest()
     try launcherRunnerResolvedLockWaitUsesFreshSnapshotTest()
     try launcherRunnerLockTimeoutMapsAndPerformsNoEffectsTest()
@@ -598,6 +707,8 @@ func registerLauncherRunnerTests(_ runner: inout TestRunner) {
     runner.register("LauncherRunnerTests.ActivatesOnlyValidatedPID", launcherRunnerActivatesOnlyValidatedPIDTest)
     runner.register("LauncherRunnerTests.ConflictsProduceNoBrowserEffects", launcherRunnerConflictsProduceNoBrowserEffectsTest)
     runner.register("LauncherRunnerTests.ReadinessUsesBoundedMonotonicDeadlineAndLastFailure", launcherRunnerReadinessUsesBoundedMonotonicDeadlineAndLastFailureTest)
+    runner.register("LauncherRunnerTests.OversleepSkipsBoundarySnapshotAndPreservesFailure", launcherRunnerOversleepSkipsBoundarySnapshotAndPreservesFailureTest)
+    runner.register("LauncherRunnerTests.CancellationDuringSleepReleasesWithoutLaterEffects", launcherRunnerCancellationDuringSleepReleasesWithoutLaterEffectsTest)
     runner.register("LauncherRunnerTests.ReleasesLeaseOnEveryPostAcquireFailure", launcherRunnerReleasesLeaseOnEveryPostAcquireFailureTest)
     runner.register("LauncherRunnerTests.ResolvedLockWaitUsesFreshSnapshot", launcherRunnerResolvedLockWaitUsesFreshSnapshotTest)
     runner.register("LauncherRunnerTests.LockTimeoutMapsAndPerformsNoEffects", launcherRunnerLockTimeoutMapsAndPerformsNoEffectsTest)

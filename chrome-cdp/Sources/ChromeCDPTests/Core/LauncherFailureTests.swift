@@ -14,7 +14,8 @@ func launcherFailureExitCodesAreStableTest() throws {
         (.invalidWebSocket(.nonLoopbackWebSocket), 18),
         (.launchFailed, 19),
         (.targetCreationFailed, 20),
-        (.activationFailed(pid: 44), 21)
+        (.activationFailed(pid: 44), 21),
+        (.profilePreparationFailed, 22)
     ]
 
     for (failure, expectedCode) in failures {
@@ -23,6 +24,17 @@ func launcherFailureExitCodesAreStableTest() throws {
             throw TestAssertionFailure("\(failure) must have an actionable description")
         }
     }
+}
+
+func launcherFailureProfilePreparationFailureIsStableAndActionableTest() throws {
+    let failure = LauncherFailure.profilePreparationFailed
+
+    try expectEqual(failure, .profilePreparationFailed)
+    try expectEqual(failure.exitCode, 22)
+    try expectEqual(
+        failure.errorDescription,
+        "Chrome's dedicated profile could not be prepared safely. Verify the profile directory is user-owned and writable, then try again."
+    )
 }
 
 func launcherFailureConflictDescriptionsStateNonTerminationTest() throws {
@@ -61,6 +73,7 @@ func launcherFailureTests() throws {
     try launcherFailureConflictDescriptionsStateNonTerminationTest()
     try launcherFailureTimeoutDescriptionsStateNonTerminationTest()
     try launcherFailureWrongProfileDescriptionSuppressesSecretLikeProfileValueTest()
+    try launcherFailureProfilePreparationFailureIsStableAndActionableTest()
 }
 
 func registerLauncherFailureTests(_ runner: inout TestRunner) {
@@ -69,4 +82,5 @@ func registerLauncherFailureTests(_ runner: inout TestRunner) {
     runner.register("LauncherFailureTests.ConflictDescriptionsStateNonTermination", launcherFailureConflictDescriptionsStateNonTerminationTest)
     runner.register("LauncherFailureTests.TimeoutDescriptionsStateNonTermination", launcherFailureTimeoutDescriptionsStateNonTerminationTest)
     runner.register("LauncherFailureTests.WrongProfileDescriptionSuppressesSecretLikeProfileValue", launcherFailureWrongProfileDescriptionSuppressesSecretLikeProfileValueTest)
+    runner.register("LauncherFailureTests.ProfilePreparationFailureIsStableAndActionable", launcherFailureProfilePreparationFailureIsStableAndActionableTest)
 }

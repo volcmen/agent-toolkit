@@ -13,6 +13,7 @@ public enum LauncherFailure: Error, Equatable, Sendable, LocalizedError {
     case launchFailed
     case targetCreationFailed
     case activationFailed(pid: Int32)
+    case profilePreparationFailed
 
     public var exitCode: Int32 {
         switch self {
@@ -40,6 +41,8 @@ public enum LauncherFailure: Error, Equatable, Sendable, LocalizedError {
             return 20
         case .activationFailed:
             return 21
+        case .profilePreparationFailed:
+            return 22
         }
     }
 
@@ -72,6 +75,8 @@ public enum LauncherFailure: Error, Equatable, Sendable, LocalizedError {
             return "Chrome was ready, but a blank page target could not be created. Try again."
         case let .activationFailed(pid):
             return "Chrome PID \(pid) was ready but could not be foregrounded. Bring that Chrome window to the front manually."
+        case .profilePreparationFailed:
+            return "Chrome's dedicated profile could not be prepared safely. Verify the profile directory is user-owned and writable, then try again."
         }
     }
 
