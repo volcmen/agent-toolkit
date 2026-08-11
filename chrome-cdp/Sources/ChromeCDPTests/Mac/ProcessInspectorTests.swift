@@ -1,5 +1,6 @@
 @_spi(Testing) import ChromeCDPMac
 import ChromeCDPTestSupport
+import Darwin
 import Foundation
 
 private func kernelArgumentsFixture(executable: String, arguments: [String]) -> Data {
@@ -19,8 +20,8 @@ func processInspectorParsesExactNULDelimitedArgumentsTest() throws {
     let arguments = [
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "--user-data-dir=/Users/tester/Chrome CDP Profile",
-        "--remote-debugging-port=9222",
-        "--remote-debugging-port=9222",
+        "--remote-debugging-port=9333",
+        "--remote-debugging-port=9333",
         "--type=renderer",
         "--field-trial-handle=123,456,789,131072"
     ]
@@ -178,6 +179,23 @@ func processInspectorSkipsVanishedPIDButRejectsAccessibleMalformedArgumentsTest(
     try expectProcessArgumentParseFailure { _ = try inspector.inspect() }
 }
 
+func processInspectorReadsCurrentExecutablePathTest() throws {
+    guard let expectedPath = Bundle.main.executablePath else {
+        throw TestAssertionFailure("test runner executable path is unavailable")
+    }
+    try expectEqual(try ProcessInspector.systemExecutablePath(pid: getpid()), expectedPath)
+}
+
+func processInspectorSkipsProtectedProcessWhoseKernelArgumentsAreUnavailableTest() throws {
+    let inspector = ProcessInspector(
+        candidatePIDs: { [1] },
+        executablePath: { _ in "/sbin/launchd" },
+        argumentData: { _ in throw POSIXError(.EINVAL) }
+    )
+
+    try expectEqual(try inspector.inspect(), [])
+}
+
 private func expectProcessArgumentParseFailure(_ operation: () throws -> Void) throws {
     do {
         try operation()
@@ -203,6 +221,8 @@ func processInspectorTests() throws {
     try processInspectorRejectsTruncatedKernelArgumentsTest()
     try processInspectorRejectsMalformedUTF8KernelArgumentsTest()
     try processInspectorSkipsVanishedPIDButRejectsAccessibleMalformedArgumentsTest()
+    try processInspectorReadsCurrentExecutablePathTest()
+    try processInspectorSkipsProtectedProcessWhoseKernelArgumentsAreUnavailableTest()
 }
 
 func registerProcessInspectorTests(_ runner: inout TestRunner) {
@@ -220,4 +240,6 @@ func registerProcessInspectorTests(_ runner: inout TestRunner) {
     runner.register("ProcessInspectorTests.RejectsTruncatedKernelArguments", processInspectorRejectsTruncatedKernelArgumentsTest)
     runner.register("ProcessInspectorTests.RejectsMalformedUTF8KernelArguments", processInspectorRejectsMalformedUTF8KernelArgumentsTest)
     runner.register("ProcessInspectorTests.SkipsVanishedPIDButRejectsAccessibleMalformedArguments", processInspectorSkipsVanishedPIDButRejectsAccessibleMalformedArgumentsTest)
+    runner.register("ProcessInspectorTests.ReadsCurrentExecutablePath", processInspectorReadsCurrentExecutablePathTest)
+    runner.register("ProcessInspectorTests.SkipsProtectedProcessWhoseKernelArgumentsAreUnavailable", processInspectorSkipsProtectedProcessWhoseKernelArgumentsAreUnavailableTest)
 }

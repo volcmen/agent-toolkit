@@ -87,7 +87,7 @@ func helperSelfCheckIsStableJSONAndHasNoLauncherEffectsTest() throws {
     try expectEqual(state.errors(), [])
     try expectEqual(
         state.output(),
-        [#"{"appName":"Google Chrome","host":"127.0.0.1","pollInterval":0.2,"port":9222,"profileSuffix":"chrome-cdp-profile","timeout":10,"version":"1.0.0"}"# + "\n"]
+        [#"{"appName":"Google Chrome","host":"127.0.0.1","pollInterval":0.2,"port":9333,"profileSuffix":"chrome-cdp-profile","timeout":10,"version":"1.0.0"}"# + "\n"]
     )
 }
 

@@ -40,7 +40,7 @@ public struct LauncherConfiguration: Equatable, Sendable {
             chromeExecutableURL: URL(fileURLWithPath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
             profileURL: homeDirectory.appendingPathComponent("chrome-cdp-profile"),
             host: "127.0.0.1",
-            port: 9222,
+            port: 9333,
             readinessTimeout: 10,
             pollInterval: 0.2,
             lockTimeout: 10,

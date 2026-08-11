@@ -6,8 +6,8 @@ func launcherFailureExitCodesAreStableTest() throws {
         (.missingChrome(applicationPath: "/Applications/Google Chrome.app"), 10),
         (.lockTimeout, 11),
         (.unsafeProfile(.symlink), 12),
-        (.foreignListener(pid: 41, port: 9222), 13),
-        (.nonLoopbackListener(address: "0.0.0.0", port: 9222), 14),
+        (.foreignListener(pid: 41, port: 9333), 13),
+        (.nonLoopbackListener(address: "0.0.0.0", port: 9333), 14),
         (.wrongProfileChrome(pid: 42, profilePath: "/Users/tester/other-profile"), 15),
         (.profileConflict(pid: 43, profilePath: "/Users/tester/chrome-cdp-profile"), 16),
         (.readinessTimeout(lastFailure: .malformedVersion), 17),
@@ -55,8 +55,8 @@ func launcherFailureProfilePreparationFailureIsStableAndActionableTest() throws 
 func launcherFailureConflictDescriptionsStateNonTerminationTest() throws {
     let sentence = "Chrome CDP did not terminate or replace another process."
     for failure in [
-        LauncherFailure.foreignListener(pid: 41, port: 9222),
-        .nonLoopbackListener(address: "0.0.0.0", port: 9222),
+        LauncherFailure.foreignListener(pid: 41, port: 9333),
+        .nonLoopbackListener(address: "0.0.0.0", port: 9333),
         .wrongProfileChrome(pid: 42, profilePath: "/Users/tester/other-profile"),
         .profileConflict(pid: 43, profilePath: "/Users/tester/chrome-cdp-profile")
     ] {

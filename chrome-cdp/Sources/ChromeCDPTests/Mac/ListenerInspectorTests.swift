@@ -4,37 +4,37 @@ import ChromeCDPTestSupport
 import Foundation
 
 func listenerInspectorParsesMachineRecordsWithoutNormalizingAddressesTest() throws {
-    let fixture = Data("p42\nf9\nn127.0.0.1:9222\nf10\nn*:9222\np88\nf4\nn[::1]:9222\np\nf2\nn[::]:9222\n".utf8)
+    let fixture = Data("p42\nf9\nn127.0.0.1:9333\nf10\nn*:9333\np88\nf4\nn[::1]:9333\np\nf2\nn[::]:9333\n".utf8)
 
     try expectEqual(
-        try ListenerInspector.parseLsofRecords(fixture, port: 9222),
+        try ListenerInspector.parseLsofRecords(fixture, port: 9333),
         [
-            ListenerBinding(pid: 42, address: "127.0.0.1", port: 9222),
-            ListenerBinding(pid: 42, address: "*", port: 9222),
-            ListenerBinding(pid: 88, address: "::1", port: 9222),
-            ListenerBinding(pid: nil, address: "::", port: 9222)
+            ListenerBinding(pid: 42, address: "127.0.0.1", port: 9333),
+            ListenerBinding(pid: 42, address: "*", port: 9333),
+            ListenerBinding(pid: 88, address: "::1", port: 9333),
+            ListenerBinding(pid: nil, address: "::", port: 9333)
         ]
     )
 }
 
 func listenerInspectorRetainsOnlyExactConfiguredPortTest() throws {
-    let fixture = Data("p42\nf9\nn127.0.0.1:9223\nf10\nn127.0.0.1:9222\n".utf8)
+    let fixture = Data("p42\nf9\nn127.0.0.1:9223\nf10\nn127.0.0.1:9333\n".utf8)
 
     try expectEqual(
-        try ListenerInspector.parseLsofRecords(fixture, port: 9222),
-        [ListenerBinding(pid: 42, address: "127.0.0.1", port: 9222)]
+        try ListenerInspector.parseLsofRecords(fixture, port: 9333),
+        [ListenerBinding(pid: 42, address: "127.0.0.1", port: 9333)]
     )
 }
 
 func listenerInspectorRejectsNonemptyMalformedMachineRecordsTest() throws {
     try expectListenerParseFailure {
-        _ = try ListenerInspector.parseLsofRecords(Data("pnot-a-pid\nf1\nn127.0.0.1:9222\n".utf8), port: 9222)
+        _ = try ListenerInspector.parseLsofRecords(Data("pnot-a-pid\nf1\nn127.0.0.1:9333\n".utf8), port: 9333)
     }
 }
 
 func listenerInspectorAcceptsOnlyExactIPv4LoopbackBindingTest() throws {
-    let fixture = Data("p42\nf1\nn127.0.0.1:9222\nf2\nnlocalhost:9222\nf3\nn[::1]:9222\nf4\nn*:9222\n".utf8)
-    let bindings = try ListenerInspector.parseLsofRecords(fixture, port: 9222)
+    let fixture = Data("p42\nf1\nn127.0.0.1:9333\nf2\nnlocalhost:9333\nf3\nn[::1]:9333\nf4\nn*:9333\n".utf8)
+    let bindings = try ListenerInspector.parseLsofRecords(fixture, port: 9333)
 
     try expectEqual(bindings.filter { $0.address == "127.0.0.1" }.count, 1)
     try expectEqual(bindings.filter { $0.address != "127.0.0.1" }.map(\.address), ["localhost", "::1", "*"])

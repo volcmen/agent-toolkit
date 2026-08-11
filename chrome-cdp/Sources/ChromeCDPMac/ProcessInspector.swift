@@ -209,9 +209,14 @@ public struct ProcessInspector: Sendable {
         }
     }
 
-    private static func systemExecutablePath(pid: Int32) throws -> String {
-        var buffer = [CChar](repeating: 0, count: 16_384)
-        let byteCount = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+    @_spi(Testing)
+    public static func systemExecutablePath(pid: Int32) throws -> String {
+        // proc_pidpath rejects buffers larger than PROC_PIDPATHINFO_MAXSIZE
+        // (4 * MAXPATHLEN) with EOVERFLOW.
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        let byteCount = buffer.withUnsafeMutableBufferPointer { storage in
+            proc_pidpath(pid, storage.baseAddress, UInt32(storage.count))
+        }
         guard byteCount > 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .ESRCH)
         }
@@ -247,6 +252,6 @@ public struct ProcessInspector: Sendable {
 
     private static func isGoneOrInaccessible(_ error: Error) -> Bool {
         guard let posix = error as? POSIXError else { return false }
-        return posix.code == .ESRCH || posix.code == .EPERM || posix.code == .EACCES
+        return posix.code == .ESRCH || posix.code == .EPERM || posix.code == .EACCES || posix.code == .EINVAL
     }
 }

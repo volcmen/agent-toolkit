@@ -77,7 +77,7 @@ func macLauncherSystemUsesExactOpenCommandTest() throws {
     try expectEqual(command.1, [
         "-na", "Google Chrome", "--args",
         "--remote-debugging-address=127.0.0.1",
-        "--remote-debugging-port=9222",
+        "--remote-debugging-port=9333",
         "--user-data-dir=/Users/tester/chrome-cdp-profile",
         "--no-first-run",
         "--no-default-browser-check"
@@ -129,9 +129,9 @@ func macLauncherSystemMapsActivationRefusalTest() throws {
 func macLauncherSystemComposesSnapshotTest() throws {
     let profile = ProfileObservation.valid(mode: 0o700)
     let processes = [ProcessObservation(pid: 71, executablePath: "/chrome", arguments: ["Chrome"])]
-    let listeners = [ListenerBinding(pid: 71, address: "127.0.0.1", port: 9222)]
+    let listeners = [ListenerBinding(pid: 71, address: "127.0.0.1", port: 9333)]
     let endpoint = EndpointObservation.healthy(
-        webSocketURL: URL(string: "ws://127.0.0.1:9222/devtools/browser/id")!,
+        webSocketURL: URL(string: "ws://127.0.0.1:9333/devtools/browser/id")!,
         pageTargetCount: 1
     )
     let system = makeMacSystem(
