@@ -28,6 +28,7 @@ registerListenerInspectorTests(&runner)
 registerCDPClientTests(&runner)
 registerMacLauncherSystemTests(&runner)
 registerHelperContractTests(&runner)
+registerAppBundleBuildTests(&runner)
 runner.register("ChromeCDPCoreTests") {
     try launcherConfigurationProductionTest()
     try launcherClassifierTests()
@@ -42,6 +43,7 @@ runner.register("ChromeCDPMacTests") {
     try cdpClientTests()
     try macLauncherSystemTests()
     try helperContractTests()
+    try appBundleBuildTests()
 }
 exit(Int32(runner.run(arguments: CommandLine.arguments)))
 
