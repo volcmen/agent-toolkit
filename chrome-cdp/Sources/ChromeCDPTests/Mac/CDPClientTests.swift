@@ -99,23 +99,24 @@ private final class CDPStubStore: @unchecked Sendable {
 }
 
 private final class CDPStubURLProtocol: URLProtocol, @unchecked Sendable {
-    private let lifecycleLock = NSLock()
+    private let lifecycleCondition = NSCondition()
     private var stopped = false
     private var completed = false
+    private var inFlightDeliveries = 0
     private var delayedWorkItem: DispatchWorkItem?
+    private let deliveryThreadKey = "chrome-cdp-stub-delivery-\(UUID().uuidString)"
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        CDPStubLifecycleHooks.shared.invokeAfterStart(self)
         guard let stub = CDPStubStore.shared.response(for: request), let url = request.url else {
-            guard claimDelivery() else { return }
-            client?.urlProtocol(self, didFailWithError: URLError(.resourceUnavailable))
+            deliverFailure(URLError(.resourceUnavailable))
             return
         }
         if let error = stub.error {
-            guard claimDelivery() else { return }
-            client?.urlProtocol(self, didFailWithError: URLError(error))
+            deliverFailure(URLError(error))
             return
         }
         if stub.hangs {
@@ -125,13 +126,13 @@ private final class CDPStubURLProtocol: URLProtocol, @unchecked Sendable {
             let workItem = DispatchWorkItem { [weak self] in
                 self?.deliver(stub: stub, url: url)
             }
-            lifecycleLock.lock()
+            lifecycleCondition.lock()
             guard !stopped, !completed else {
-                lifecycleLock.unlock()
+                lifecycleCondition.unlock()
                 return
             }
             delayedWorkItem = workItem
-            lifecycleLock.unlock()
+            lifecycleCondition.unlock()
             DispatchQueue.global().asyncAfter(deadline: .now() + stub.delay, execute: workItem)
         } else {
             deliver(stub: stub, url: url)
@@ -139,26 +140,76 @@ private final class CDPStubURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     override func stopLoading() {
-        lifecycleLock.lock()
+        defer { CDPStubLifecycleHooks.shared.invokeAfterStopReturns() }
+        lifecycleCondition.lock()
         stopped = true
         let workItem = delayedWorkItem
         delayedWorkItem = nil
-        lifecycleLock.unlock()
+        let mustWaitForDelivery = !isDeliveringOnCurrentThread()
+        lifecycleCondition.unlock()
+        CDPStubLifecycleHooks.shared.invokeAfterStopMarked()
         workItem?.cancel()
+        guard mustWaitForDelivery else { return }
+
+        lifecycleCondition.lock()
+        while inFlightDeliveries > 0 {
+            lifecycleCondition.wait()
+        }
+        lifecycleCondition.unlock()
     }
 
     private func claimDelivery() -> Bool {
-        lifecycleLock.lock()
-        defer { lifecycleLock.unlock() }
+        lifecycleCondition.lock()
+        defer { lifecycleCondition.unlock() }
         guard !stopped, !completed else { return false }
         completed = true
+        inFlightDeliveries += 1
         delayedWorkItem = nil
         return true
     }
 
+    private func finishDelivery() {
+        lifecycleCondition.lock()
+        inFlightDeliveries -= 1
+        lifecycleCondition.broadcast()
+        lifecycleCondition.unlock()
+    }
+
+    private func isDeliveringOnCurrentThread() -> Bool {
+        Thread.current.threadDictionary[deliveryThreadKey] != nil
+    }
+
+    private func shouldContinueDelivery() -> Bool {
+        lifecycleCondition.lock()
+        defer { lifecycleCondition.unlock() }
+        return !stopped
+    }
+
+    private func beginDelivery() -> Bool {
+        guard claimDelivery() else { return false }
+        Thread.current.threadDictionary[deliveryThreadKey] = true
+        return true
+    }
+
+    private func endDelivery() {
+        Thread.current.threadDictionary.removeObject(forKey: deliveryThreadKey)
+        finishDelivery()
+    }
+
+    private func deliverFailure(_ error: Error) {
+        guard beginDelivery() else { return }
+        defer { endDelivery() }
+        guard shouldContinueDelivery() else { return }
+        client?.urlProtocol(self, didFailWithError: error)
+    }
+
     private func deliver(stub: CDPStubStore.Stub, url: URL) {
-        guard claimDelivery() else { return }
+        guard beginDelivery() else { return }
+        defer { endDelivery() }
+        CDPStubLifecycleHooks.shared.invokeBeforeDelivery()
+        guard shouldContinueDelivery() else { return }
         CDPStubStore.shared.recordDelivery(for: request)
+        guard shouldContinueDelivery() else { return }
         var headers = stub.headers
         headers["Content-Type"] = "application/json"
         let response = HTTPURLResponse(
@@ -168,8 +219,71 @@ private final class CDPStubURLProtocol: URLProtocol, @unchecked Sendable {
             headerFields: headers
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        guard shouldContinueDelivery() else { return }
         client?.urlProtocol(self, didLoad: stub.data)
+        guard shouldContinueDelivery() else { return }
         client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+private final class CDPStubLifecycleHooks: @unchecked Sendable {
+    static let shared = CDPStubLifecycleHooks()
+
+    private let lock = NSLock()
+    private var beforeDelivery: (@Sendable () -> Void)?
+    private var afterStart: (@Sendable (CDPStubURLProtocol) -> Void)?
+    private var afterStopMarked: (@Sendable () -> Void)?
+    private var afterStopReturns: (@Sendable () -> Void)?
+
+    func install(
+        beforeDelivery: @escaping @Sendable () -> Void,
+        afterStart: @escaping @Sendable (CDPStubURLProtocol) -> Void,
+        afterStopMarked: @escaping @Sendable () -> Void,
+        afterStopReturns: @escaping @Sendable () -> Void
+    ) {
+        lock.lock()
+        self.beforeDelivery = beforeDelivery
+        self.afterStart = afterStart
+        self.afterStopMarked = afterStopMarked
+        self.afterStopReturns = afterStopReturns
+        lock.unlock()
+    }
+
+    func clear() {
+        lock.lock()
+        beforeDelivery = nil
+        afterStart = nil
+        afterStopMarked = nil
+        afterStopReturns = nil
+        lock.unlock()
+    }
+
+    func invokeBeforeDelivery() {
+        invoke { $0.beforeDelivery }
+    }
+
+    func invokeAfterStart(_ stubProtocol: CDPStubURLProtocol) {
+        lock.lock()
+        let hook = afterStart
+        lock.unlock()
+        hook?(stubProtocol)
+    }
+
+    func invokeAfterStopMarked() {
+        invoke { $0.afterStopMarked }
+    }
+
+    func invokeAfterStopReturns() {
+        invoke { $0.afterStopReturns }
+    }
+
+    private func invoke(
+        _ selector: (CDPStubLifecycleHooks) -> (@Sendable () -> Void)?
+    ) {
+        lock.lock()
+        let hook = selector(self)
+        lock.unlock()
+        hook?()
     }
 }
 
@@ -208,6 +322,31 @@ private final class CancellationState: @unchecked Sendable {
 
     func waitForCompletion() -> Bool {
         completionSemaphore.wait(timeout: .now() + 0.2) == .success
+    }
+}
+
+private final class DeliveryBarrier: @unchecked Sendable {
+    let claimed = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+}
+
+private final class ProtocolCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private let started = DispatchSemaphore(value: 0)
+    private var instance: CDPStubURLProtocol?
+
+    func store(_ stubProtocol: CDPStubURLProtocol) {
+        lock.lock()
+        instance = stubProtocol
+        lock.unlock()
+        started.signal()
+    }
+
+    func waitForInstance() -> CDPStubURLProtocol? {
+        guard started.wait(timeout: .now() + 0.5) == .success else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        return instance
     }
 }
 
@@ -386,6 +525,58 @@ func cdpStubCancelsDelayedCallbacksBeforeLaterTestStateTest() throws {
     )
 }
 
+func cdpStubWaitsForClaimedDeliveryBeforeShutdownReturnsTest() throws {
+    let url = URL(string: "http://127.0.0.1:9222/json/version")!
+    let barrier = DeliveryBarrier()
+    let capture = ProtocolCapture()
+    let shutdownMarked = DispatchSemaphore(value: 0)
+    let shutdownReturned = DispatchSemaphore(value: 0)
+    CDPStubLifecycleHooks.shared.install(
+        beforeDelivery: {
+            barrier.claimed.signal()
+            _ = barrier.release.wait(timeout: .now() + 1)
+        },
+        afterStart: { stubProtocol in
+            capture.store(stubProtocol)
+        },
+        afterStopMarked: {
+            shutdownMarked.signal()
+        },
+        afterStopReturns: {
+            shutdownReturned.signal()
+        }
+    )
+    defer { CDPStubLifecycleHooks.shared.clear() }
+    CDPStubStore.shared.reset([url.relativeString: .init(status: 200, data: Data(#"{}"#.utf8))])
+    let session = cdpSession()
+    let taskFinished = DispatchSemaphore(value: 0)
+    let task = session.dataTask(with: url) { _, _, _ in
+        taskFinished.signal()
+    }
+    task.resume()
+    guard let stubProtocol = capture.waitForInstance() else {
+        throw TestAssertionFailure("URLSession did not construct the stub protocol")
+    }
+    guard barrier.claimed.wait(timeout: .now() + 0.5) == .success else {
+        throw TestAssertionFailure("stub delivery did not reach the claim barrier")
+    }
+
+    DispatchQueue.global().async {
+        stubProtocol.stopLoading()
+    }
+    try expectEqual(shutdownMarked.wait(timeout: .now() + 0.5), .success)
+    let returnedBeforeRelease = shutdownReturned.wait(timeout: .now() + 0.1)
+    barrier.release.signal()
+
+    try expectEqual(returnedBeforeRelease, .timedOut)
+    try expectEqual(shutdownReturned.wait(timeout: .now() + 0.5), .success)
+    task.cancel()
+    session.invalidateAndCancel()
+    try expectEqual(taskFinished.wait(timeout: .now() + 0.5), .success)
+    CDPStubStore.shared.reset([:])
+    try expectEqual(CDPStubStore.shared.recordedDeliveries(), [])
+}
+
 func cdpClientRejectsMissingVersionFieldsTest() throws {
     CDPStubStore.shared.reset(cdpResponses(version: #"{"Browser":"Chrome/126"}"#, targets: "[]"))
 
@@ -554,6 +745,7 @@ func cdpClientTests() throws {
     try cdpClientRejectsAlternateResponseURLTest()
     try cdpClientMapsTransportAndDelayedResponsesToUnavailableTest()
     try cdpStubCancelsDelayedCallbacksBeforeLaterTestStateTest()
+    try cdpStubWaitsForClaimedDeliveryBeforeShutdownReturnsTest()
     try cdpClientRejectsMissingVersionFieldsTest()
     try cdpClientRejectsMalformedVersionJSONTest()
     try cdpClientRejectsNonChromeBrowserTest()
@@ -578,6 +770,7 @@ func registerCDPClientTests(_ runner: inout TestRunner) {
     runner.register("CDPClientTests.RejectsAlternateResponseURL", cdpClientRejectsAlternateResponseURLTest)
     runner.register("CDPClientTests.MapsTransportAndDelayedResponsesToUnavailable", cdpClientMapsTransportAndDelayedResponsesToUnavailableTest)
     runner.register("CDPClientTests.StubCancelsDelayedCallbacksBeforeLaterTestState", cdpStubCancelsDelayedCallbacksBeforeLaterTestStateTest)
+    runner.register("CDPClientTests.StubWaitsForClaimedDeliveryBeforeShutdownReturns", cdpStubWaitsForClaimedDeliveryBeforeShutdownReturnsTest)
     runner.register("CDPClientTests.RejectsMissingVersionFields", cdpClientRejectsMissingVersionFieldsTest)
     runner.register("CDPClientTests.RejectsMalformedVersionJSON", cdpClientRejectsMalformedVersionJSONTest)
     runner.register("CDPClientTests.RejectsNonChromeBrowser", cdpClientRejectsNonChromeBrowserTest)
