@@ -10,7 +10,7 @@ definitions installed under `~/.claude/agents/`:
 
 - `controller`
 - `task-analyst`
-- `repo-explorer`
+- `Explore`
 - `alan-wake`
 
 The migration restores the earlier standalone user-agent layout while retaining
@@ -78,10 +78,43 @@ a plugin component. Claude Code discovers the installed copies as user-level
 agents available across projects. `controller` runs as the main thread through
 the existing Claude `agent` setting or the explicit `claude --agent controller`
 launcher. Its worker references use the bare names `task-analyst`,
-`repo-explorer`, and `alan-wake`.
+`Explore`, and `alan-wake`.
 
 This follows Claude Code's documented user-agent location and main-agent launch
 contract: <https://code.claude.com/docs/en/sub-agents>.
+
+### Built-in Explore override
+
+The repository specialist is rendered as `claude/agents/Explore.md` with the
+exact frontmatter identity `name: Explore`. Claude Code documents this exact
+user- or project-agent name as the supported way to override its built-in
+Explore agent. Although ordinary custom names use lowercase letters and
+hyphens, `Explore` is the documented built-in identity and is therefore an
+intentional special case. Permission rules and explicit delegation use the
+exact documented form `Agent(Explore)`.
+
+The override remains on Sonnet at medium effort instead of the documentation's
+cost-saving Haiku example. This preserves the current shared-agents design for
+deeper code and architecture analysis; the important documented behavior is
+that a custom `Explore` keeps its own pinned model rather than inheriting the
+Fable controller model.
+
+The Explore prompt accepts Claude Code's documented thoroughness shapes:
+
+- `quick` for a targeted file, symbol, or definition lookup;
+- `medium` for a bounded behavior, control-flow, or dependency question;
+- `very thorough` for an architecture, cross-cutting dependency, test-coverage,
+  or recent-history investigation.
+
+All levels remain read-only and return a compact evidence-based report. The
+description continues to encourage proactive delegation for repository search
+and analysis.
+
+`task-analyst` deliberately does not override the built-in `Plan` agent. Plan
+is reserved for read-only research during Claude Code plan mode, while the task
+analyst normalizes vague or risky requests and returns a decision-aware
+execution brief. Keeping the identities separate preserves built-in plan-mode
+behavior.
 
 ## Agent behavior
 
@@ -90,8 +123,9 @@ contract: <https://code.claude.com/docs/en/sub-agents>.
   final response.
 - `task-analyst` uses Sonnet with high effort and read-only tools to normalize
   vague, risky, or symptom-based work.
-- `repo-explorer` uses Sonnet with medium effort and read-only tools for one
-  bounded repository question.
+- `Explore` uses Sonnet with medium effort and read-only tools. It overrides
+  Claude Code's built-in Explore route and scales one repository question to
+  `quick`, `medium`, or `very thorough` investigation.
 - `alan-wake` uses Sonnet with medium effort and read-only tools for terminal
   drafting of requested human-facing prose.
 
@@ -174,6 +208,10 @@ The migration is complete when all of the following pass:
 - Fish parses the updated configuration.
 - Claude lists or successfully launches the bare `controller` agent in a
   bounded runtime probe.
+- A bounded `claude --agent Explore` probe and its debug trace resolve the
+  user-level Sonnet definition rather than the inherited-model built-in.
+- A bounded controller delegation uses `Agent(Explore)` and the agent cannot
+  modify files.
 - The live `shared-agents@ai-workspace` Claude plugin is absent.
 - No active Claude routing surface references `shared-agents:controller`,
   `shared-agents:task-analyst`, `shared-agents:repo-explorer`, or
