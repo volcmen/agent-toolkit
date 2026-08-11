@@ -14,6 +14,8 @@ public enum LauncherFailure: Error, Equatable, Sendable, LocalizedError {
     case targetCreationFailed
     case activationFailed(pid: Int32)
     case profilePreparationFailed
+    case lockFailed
+    case observationFailed
 
     public var exitCode: Int32 {
         switch self {
@@ -43,6 +45,10 @@ public enum LauncherFailure: Error, Equatable, Sendable, LocalizedError {
             return 21
         case .profilePreparationFailed:
             return 22
+        case .lockFailed:
+            return 23
+        case .observationFailed:
+            return 24
         }
     }
 
@@ -77,6 +83,10 @@ public enum LauncherFailure: Error, Equatable, Sendable, LocalizedError {
             return "Chrome PID \(pid) was ready but could not be foregrounded. Bring that Chrome window to the front manually."
         case .profilePreparationFailed:
             return "Chrome's dedicated profile could not be prepared safely. Verify the profile directory is user-owned and writable, then try again."
+        case .lockFailed:
+            return "Chrome's launch lock could not be accessed safely. Verify your user cache directory is writable, then try again."
+        case .observationFailed:
+            return "Chrome CDP could not inspect the local profile, process, and listener state safely. Try again."
         }
     }
 

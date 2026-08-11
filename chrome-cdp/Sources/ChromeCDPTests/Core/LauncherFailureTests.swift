@@ -15,7 +15,9 @@ func launcherFailureExitCodesAreStableTest() throws {
         (.launchFailed, 19),
         (.targetCreationFailed, 20),
         (.activationFailed(pid: 44), 21),
-        (.profilePreparationFailed, 22)
+        (.profilePreparationFailed, 22),
+        (.lockFailed, 23),
+        (.observationFailed, 24)
     ]
 
     for (failure, expectedCode) in failures {
@@ -24,6 +26,19 @@ func launcherFailureExitCodesAreStableTest() throws {
             throw TestAssertionFailure("\(failure) must have an actionable description")
         }
     }
+}
+
+func launcherFailureSystemFailuresAreStableAndActionableTest() throws {
+    try expectEqual(LauncherFailure.lockFailed.exitCode, 23)
+    try expectEqual(
+        LauncherFailure.lockFailed.errorDescription,
+        "Chrome's launch lock could not be accessed safely. Verify your user cache directory is writable, then try again."
+    )
+    try expectEqual(LauncherFailure.observationFailed.exitCode, 24)
+    try expectEqual(
+        LauncherFailure.observationFailed.errorDescription,
+        "Chrome CDP could not inspect the local profile, process, and listener state safely. Try again."
+    )
 }
 
 func launcherFailureProfilePreparationFailureIsStableAndActionableTest() throws {
@@ -74,6 +89,7 @@ func launcherFailureTests() throws {
     try launcherFailureTimeoutDescriptionsStateNonTerminationTest()
     try launcherFailureWrongProfileDescriptionSuppressesSecretLikeProfileValueTest()
     try launcherFailureProfilePreparationFailureIsStableAndActionableTest()
+    try launcherFailureSystemFailuresAreStableAndActionableTest()
 }
 
 func registerLauncherFailureTests(_ runner: inout TestRunner) {
@@ -83,4 +99,5 @@ func registerLauncherFailureTests(_ runner: inout TestRunner) {
     runner.register("LauncherFailureTests.TimeoutDescriptionsStateNonTermination", launcherFailureTimeoutDescriptionsStateNonTerminationTest)
     runner.register("LauncherFailureTests.WrongProfileDescriptionSuppressesSecretLikeProfileValue", launcherFailureWrongProfileDescriptionSuppressesSecretLikeProfileValueTest)
     runner.register("LauncherFailureTests.ProfilePreparationFailureIsStableAndActionable", launcherFailureProfilePreparationFailureIsStableAndActionableTest)
+    runner.register("LauncherFailureTests.SystemFailuresAreStableAndActionable", launcherFailureSystemFailuresAreStableAndActionableTest)
 }

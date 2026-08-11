@@ -23,7 +23,7 @@ let package = Package(
         .target(name: "ChromeCDPTestSupport"),
         .executableTarget(
             name: "ChromeCDPHelper",
-            dependencies: ["ChromeCDPCore"]
+            dependencies: ["ChromeCDPCore", "ChromeCDPMac"]
         ),
         .executableTarget(
             name: "ChromeCDPTests",
