@@ -12,18 +12,60 @@ private func lockMode(at url: URL) throws -> UInt16 {
     return UInt16(metadata.st_mode & 0o7777)
 }
 
-private func waitForChildStatus(_ statusURL: URL, process: Process, timeout: TimeInterval = 2) throws -> String {
-    let deadline = Date().addingTimeInterval(timeout)
-    while Date() < deadline {
-        if FileManager.default.fileExists(atPath: statusURL.path) {
-            return try String(contentsOf: statusURL, encoding: .utf8)
-        }
-        if !process.isRunning {
-            throw TestAssertionFailure("lock child exited before publishing a status")
-        }
-        usleep(5_000)
+private func readChildStatus(_ statusURL: URL) throws -> String? {
+    guard FileManager.default.fileExists(atPath: statusURL.path) else {
+        return nil
     }
-    throw TestAssertionFailure("lock child did not publish status before deadline")
+    return try String(contentsOf: statusURL, encoding: .utf8)
+}
+
+private func waitForChildStatus(_ statusURL: URL, process: Process, timeout: TimeInterval = 2) throws -> String {
+    try waitForObservedChildStatus(
+        readStatus: { try readChildStatus(statusURL) },
+        isRunning: { process.isRunning },
+        terminationStatus: { process.terminationStatus },
+        accepting: nil,
+        timeout: timeout
+    )
+}
+
+private func waitForObservedChildStatus(
+    readStatus: () throws -> String?,
+    isRunning: () -> Bool,
+    terminationStatus: () -> Int32,
+    accepting expected: Set<String>?,
+    timeout: TimeInterval = 2,
+    sleep: () -> Void = { usleep(5_000) }
+) throws -> String {
+    let deadline = Date().addingTimeInterval(timeout)
+    var lastStatus: String?
+    while Date() < deadline {
+        if let status = try readStatus() {
+            lastStatus = status
+            if status == "error" {
+                throw TestAssertionFailure("lock child reported generic error")
+            }
+            if expected?.contains(status) ?? true {
+                return status
+            }
+        }
+        if !isRunning() {
+            if let finalStatus = try readStatus() {
+                lastStatus = finalStatus
+                if finalStatus == "error" {
+                    throw TestAssertionFailure("lock child reported generic error after exit (termination status \(terminationStatus()), last status \(finalStatus))")
+                }
+                if expected?.contains(finalStatus) ?? true {
+                    return finalStatus
+                }
+            }
+            let expectation = expected == nil ? "a status" : "an expected status"
+            throw TestAssertionFailure("lock child exited before publishing \(expectation) (termination status \(terminationStatus()), last status \(lastStatus ?? "missing"))")
+        }
+        sleep()
+    }
+    let expectation = expected == nil ? "a status" : "an expected status"
+    throw TestAssertionFailure("lock child did not publish \(expectation) before deadline (last status \(lastStatus ?? "missing"))")
 }
 
 private func launchLockChild(action: String, lockURL: URL, statusURL: URL) throws -> Process {
@@ -48,23 +90,13 @@ private func waitForChildStatus(
     accepting expected: Set<String>,
     timeout: TimeInterval = 2
 ) throws -> String {
-    let deadline = Date().addingTimeInterval(timeout)
-    while Date() < deadline {
-        if FileManager.default.fileExists(atPath: statusURL.path) {
-            let status = try String(contentsOf: statusURL, encoding: .utf8)
-            if expected.contains(status) {
-                return status
-            }
-            if status == "error" {
-                throw TestAssertionFailure("lock child reported generic error")
-            }
-        }
-        if !process.isRunning {
-            throw TestAssertionFailure("lock child exited before publishing an expected status")
-        }
-        usleep(5_000)
-    }
-    throw TestAssertionFailure("lock child did not publish an expected status before deadline")
+    try waitForObservedChildStatus(
+        readStatus: { try readChildStatus(statusURL) },
+        isRunning: { process.isRunning },
+        terminationStatus: { process.terminationStatus },
+        accepting: expected,
+        timeout: timeout
+    )
 }
 
 private func waitForChildExit(_ process: Process, timeout: TimeInterval = 2) throws {
@@ -116,6 +148,25 @@ private func expectStabilizationIdentityChange(_ operation: () throws -> Void) t
 
 private let lockIdentityA = LockEntryIdentity(device: 1, inode: 10)
 private let lockIdentityB = LockEntryIdentity(device: 1, inode: 20)
+
+func launchLockWaitForChildStatusAcceptsExpectedTerminalStatusAfterExitTest() throws {
+    var statusReads = ["ready", "timeout"]
+    let status = try waitForObservedChildStatus(
+        readStatus: {
+            guard !statusReads.isEmpty else {
+                throw TestAssertionFailure("child-status regression fixture was read too many times")
+            }
+            return statusReads.removeFirst()
+        },
+        isRunning: { false },
+        terminationStatus: { 1 },
+        accepting: ["timeout"],
+        timeout: 0.1,
+        sleep: {}
+    )
+
+    try expectEqual(status, "timeout")
+}
 
 func launchLockStabilizationExistingEntryCannotFallBackToCreationTest() throws {
     var policy = LockEntryStabilizationPolicy()
@@ -441,6 +492,7 @@ func launchLockCooperatesDuringSimultaneousFirstCreationTest() throws {
 }
 
 func launchLockTests() throws {
+    try launchLockWaitForChildStatusAcceptsExpectedTerminalStatusAfterExitTest()
     try launchLockStabilizationExistingEntryCannotFallBackToCreationTest()
     try launchLockStabilizationRejectsExistingIdentityTransitionTest()
     try launchLockStabilizationLatchesPeerAfterCreationRaceTest()
@@ -467,6 +519,7 @@ func launchLockTests() throws {
 
 func registerLaunchLockTests(_ runner: inout TestRunner) {
     runner.register("LaunchLockTests", launchLockTests)
+    runner.register("LaunchLockTests.WaitForChildStatusAcceptsExpectedTerminalStatusAfterExit", launchLockWaitForChildStatusAcceptsExpectedTerminalStatusAfterExitTest)
     runner.register("LaunchLockTests.StabilizationExistingEntryCannotFallBackToCreation", launchLockStabilizationExistingEntryCannotFallBackToCreationTest)
     runner.register("LaunchLockTests.StabilizationRejectsExistingIdentityTransition", launchLockStabilizationRejectsExistingIdentityTransitionTest)
     runner.register("LaunchLockTests.StabilizationLatchesPeerAfterCreationRace", launchLockStabilizationLatchesPeerAfterCreationRaceTest)
