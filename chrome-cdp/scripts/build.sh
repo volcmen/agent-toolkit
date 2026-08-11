@@ -7,6 +7,7 @@ STAGE_ROOT="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/chrome-cdp-build.XXXXXX")"
 trap '/bin/rm -rf "$STAGE_ROOT"' EXIT HUP INT TERM
 
 /usr/bin/swift build --package-path "$PROJECT_ROOT" -c release --product chrome-cdp-helper
+/usr/bin/swift build --package-path "$PROJECT_ROOT" -c release --product chrome-cdp-installer
 BIN_ROOT="$(/usr/bin/swift build --package-path "$PROJECT_ROOT" -c release --show-bin-path)"
 /usr/bin/osacompile -o "$STAGE_ROOT/Chrome CDP.app" "$PROJECT_ROOT/app/Chrome CDP.applescript"
 /bin/cp "$PROJECT_ROOT/app/Info.plist" "$STAGE_ROOT/Chrome CDP.app/Contents/Info.plist"

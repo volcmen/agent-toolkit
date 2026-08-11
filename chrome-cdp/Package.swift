@@ -8,6 +8,7 @@ let package = Package(
         .library(name: "ChromeCDPCore", targets: ["ChromeCDPCore"]),
         .library(name: "ChromeCDPMac", targets: ["ChromeCDPMac"]),
         .executable(name: "chrome-cdp-helper", targets: ["ChromeCDPHelper"]),
+        .executable(name: "chrome-cdp-installer", targets: ["ChromeCDPInstaller"]),
         .executable(name: "chrome-cdp-tests", targets: ["ChromeCDPTests"])
     ],
     targets: [
@@ -24,6 +25,10 @@ let package = Package(
         .executableTarget(
             name: "ChromeCDPHelper",
             dependencies: ["ChromeCDPCore", "ChromeCDPMac"]
+        ),
+        .executableTarget(
+            name: "ChromeCDPInstaller",
+            dependencies: ["ChromeCDPMac"]
         ),
         .executableTarget(
             name: "ChromeCDPTests",
