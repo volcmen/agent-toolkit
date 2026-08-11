@@ -20,6 +20,7 @@ var runner = TestRunner()
 registerLauncherConfigurationTests(&runner)
 registerLauncherClassifierTests(&runner)
 registerLauncherFailureTests(&runner)
+registerLauncherRunnerTests(&runner)
 registerProfileGuardTests(&runner)
 registerLaunchLockTests(&runner)
 registerProcessInspectorTests(&runner)
@@ -29,6 +30,7 @@ runner.register("ChromeCDPCoreTests") {
     try launcherConfigurationProductionTest()
     try launcherClassifierTests()
     try launcherFailureTests()
+    try launcherRunnerTests()
 }
 runner.register("ChromeCDPMacTests") {
     try profileGuardTests()
