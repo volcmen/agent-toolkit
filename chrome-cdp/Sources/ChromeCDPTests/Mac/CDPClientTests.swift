@@ -59,11 +59,13 @@ private final class CDPStubStore: @unchecked Sendable {
     private let lock = NSLock()
     private var stubs: [String: Stub] = [:]
     private var requests: [URLRequest] = []
+    private var deliveries: [String] = []
 
     func reset(_ responses: [String: Stub]) {
         lock.lock()
         stubs = responses
         requests = []
+        deliveries = []
         lock.unlock()
     }
 
@@ -80,46 +82,95 @@ private final class CDPStubStore: @unchecked Sendable {
         defer { lock.unlock() }
         return requests
     }
+
+    func recordDelivery(for request: URLRequest) {
+        lock.lock()
+        if let url = request.url?.relativeString {
+            deliveries.append(url)
+        }
+        lock.unlock()
+    }
+
+    func recordedDeliveries() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return deliveries
+    }
 }
 
 private final class CDPStubURLProtocol: URLProtocol, @unchecked Sendable {
+    private let lifecycleLock = NSLock()
+    private var stopped = false
+    private var completed = false
+    private var delayedWorkItem: DispatchWorkItem?
+
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
         guard let stub = CDPStubStore.shared.response(for: request), let url = request.url else {
+            guard claimDelivery() else { return }
             client?.urlProtocol(self, didFailWithError: URLError(.resourceUnavailable))
             return
         }
         if let error = stub.error {
+            guard claimDelivery() else { return }
             client?.urlProtocol(self, didFailWithError: URLError(error))
             return
         }
         if stub.hangs {
             return
         }
-        let deliver: @Sendable () -> Void = { [weak self] in
-            guard let self else { return }
-            var headers = stub.headers
-            headers["Content-Type"] = "application/json"
-            let response = HTTPURLResponse(
-                url: stub.responseURL ?? url,
-                statusCode: stub.status,
-                httpVersion: "HTTP/1.1",
-                headerFields: headers
-            )!
-            self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            self.client?.urlProtocol(self, didLoad: stub.data)
-            self.client?.urlProtocolDidFinishLoading(self)
-        }
         if stub.delay > 0 {
-            DispatchQueue.global().asyncAfter(deadline: .now() + stub.delay, execute: deliver)
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.deliver(stub: stub, url: url)
+            }
+            lifecycleLock.lock()
+            guard !stopped, !completed else {
+                lifecycleLock.unlock()
+                return
+            }
+            delayedWorkItem = workItem
+            lifecycleLock.unlock()
+            DispatchQueue.global().asyncAfter(deadline: .now() + stub.delay, execute: workItem)
         } else {
-            deliver()
+            deliver(stub: stub, url: url)
         }
     }
 
-    override func stopLoading() {}
+    override func stopLoading() {
+        lifecycleLock.lock()
+        stopped = true
+        let workItem = delayedWorkItem
+        delayedWorkItem = nil
+        lifecycleLock.unlock()
+        workItem?.cancel()
+    }
+
+    private func claimDelivery() -> Bool {
+        lifecycleLock.lock()
+        defer { lifecycleLock.unlock() }
+        guard !stopped, !completed else { return false }
+        completed = true
+        delayedWorkItem = nil
+        return true
+    }
+
+    private func deliver(stub: CDPStubStore.Stub, url: URL) {
+        guard claimDelivery() else { return }
+        CDPStubStore.shared.recordDelivery(for: request)
+        var headers = stub.headers
+        headers["Content-Type"] = "application/json"
+        let response = HTTPURLResponse(
+            url: stub.responseURL ?? url,
+            statusCode: stub.status,
+            httpVersion: "HTTP/1.1",
+            headerFields: headers
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: stub.data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
 }
 
 private let cdpConfiguration = LauncherConfiguration.production(
@@ -140,14 +191,23 @@ private func cdpResponses(version: String, targets: String) -> [String: CDPStubS
 }
 
 private final class CancellationState: @unchecked Sendable {
-    private let semaphore = DispatchSemaphore(value: 0)
+    private let cancellationSemaphore = DispatchSemaphore(value: 0)
+    private let completionSemaphore = DispatchSemaphore(value: 0)
 
     func markCancelled() {
-        semaphore.signal()
+        cancellationSemaphore.signal()
     }
 
     func waitForCancellation() -> Bool {
-        semaphore.wait(timeout: .now() + 0.2) == .success
+        cancellationSemaphore.wait(timeout: .now() + 0.2) == .success
+    }
+
+    func markCompleted() {
+        completionSemaphore.signal()
+    }
+
+    func waitForCompletion() -> Bool {
+        completionSemaphore.wait(timeout: .now() + 0.2) == .success
     }
 }
 
@@ -156,8 +216,9 @@ func testSupportTimesOutAndCancelsHangingOperationsTest() throws {
     let started = Date()
     do {
         _ = try awaitValue(timeout: 0.01) {
-            await withTaskCancellationHandler(operation: {
-                try? await Task.sleep(for: .seconds(60))
+            try await withTaskCancellationHandler(operation: {
+                defer { state.markCompleted() }
+                try await Task.sleep(for: .seconds(60))
                 return 1
             }, onCancel: {
                 state.markCancelled()
@@ -166,10 +227,38 @@ func testSupportTimesOutAndCancelsHangingOperationsTest() throws {
     } catch let error as TestAssertionFailure {
         try expectEqual(error.description, "async operation timed out after 0.01 seconds")
         try expectEqual(state.waitForCancellation(), true)
+        try expectEqual(state.waitForCompletion(), true)
         try expectEqual(Date().timeIntervalSince(started) < 0.5, true)
         return
     }
     throw TestAssertionFailure("expected hanging operation to time out")
+}
+
+func testSupportContainsNonCooperativeTimeoutInChildProcessTest() throws {
+    let root = try makeTemporaryDirectory(prefix: "chrome-cdp-await-value-")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let laterTestMarker = root.appendingPathComponent("later-test-ran")
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+    child.arguments = ["--await-value-noncooperative-child", laterTestMarker.path]
+    let output = Pipe()
+    let error = Pipe()
+    child.standardOutput = output
+    child.standardError = error
+    try child.run()
+
+    let deadline = Date().addingTimeInterval(1)
+    while child.isRunning, Date() < deadline {
+        usleep(5_000)
+    }
+    guard !child.isRunning else {
+        child.terminate()
+        throw TestAssertionFailure("noncooperative awaitValue child did not exit")
+    }
+    try expectEqual(child.terminationStatus, 1)
+    try expectEqual(FileManager.default.fileExists(atPath: laterTestMarker.path), false)
+    _ = output.fileHandleForReading.readDataToEndOfFile()
+    _ = error.fileHandleForReading.readDataToEndOfFile()
 }
 
 func cdpClientAcceptsChromeVersionAndCountsOnlyPageTargetsTest() throws {
@@ -263,6 +352,38 @@ func cdpClientMapsTransportAndDelayedResponsesToUnavailableTest() throws {
             .unavailable
         )
     }
+}
+
+func cdpStubCancelsDelayedCallbacksBeforeLaterTestStateTest() throws {
+    let versionURL = "http://127.0.0.1:9222/json/version"
+    CDPStubStore.shared.reset([
+        versionURL: .init(
+            status: 200,
+            data: Data(#"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/id"}"#.utf8),
+            delay: 0.2
+        )
+    ])
+    try expectEqual(
+        try awaitValue(timeout: 0.5) { await CDPClient(session: cdpSession()).inspect(configuration: cdpConfiguration) },
+        .unavailable
+    )
+
+    CDPStubStore.shared.reset(cdpResponses(
+        version: #"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/id"}"#,
+        targets: "[]"
+    ))
+    try expectEqual(
+        try awaitValue { await CDPClient(session: cdpSession()).inspect(configuration: cdpConfiguration) },
+        .healthy(webSocketURL: URL(string: "ws://127.0.0.1:9222/devtools/browser/id")!, pageTargetCount: 0)
+    )
+    usleep(300_000)
+    try expectEqual(
+        CDPStubStore.shared.recordedDeliveries(),
+        [
+            "http://127.0.0.1:9222/json/version",
+            "http://127.0.0.1:9222/json/list"
+        ]
+    )
 }
 
 func cdpClientRejectsMissingVersionFieldsTest() throws {
@@ -425,12 +546,14 @@ func cdpClientRejectsNonPageBlankTargetResponseTest() throws {
 
 func cdpClientTests() throws {
     try testSupportTimesOutAndCancelsHangingOperationsTest()
+    try testSupportContainsNonCooperativeTimeoutInChildProcessTest()
     try cdpClientAcceptsChromeVersionAndCountsOnlyPageTargetsTest()
     try cdpClientUsesOnlyFixedSecureVersionAndListRequestsTest()
     try cdpClientMapsVersionAndListHTTPFailuresToUnavailableTest()
     try cdpClientRejectsRedirectWithoutFollowingTargetTest()
     try cdpClientRejectsAlternateResponseURLTest()
     try cdpClientMapsTransportAndDelayedResponsesToUnavailableTest()
+    try cdpStubCancelsDelayedCallbacksBeforeLaterTestStateTest()
     try cdpClientRejectsMissingVersionFieldsTest()
     try cdpClientRejectsMalformedVersionJSONTest()
     try cdpClientRejectsNonChromeBrowserTest()
@@ -447,12 +570,14 @@ func cdpClientTests() throws {
 func registerCDPClientTests(_ runner: inout TestRunner) {
     runner.register("CDPClientTests", cdpClientTests)
     runner.register("CDPClientTests.TestSupportTimesOutAndCancelsHangingOperations", testSupportTimesOutAndCancelsHangingOperationsTest)
+    runner.register("CDPClientTests.TestSupportContainsNonCooperativeTimeoutInChildProcess", testSupportContainsNonCooperativeTimeoutInChildProcessTest)
     runner.register("CDPClientTests.AcceptsChromeVersionAndCountsOnlyPageTargets", cdpClientAcceptsChromeVersionAndCountsOnlyPageTargetsTest)
     runner.register("CDPClientTests.UsesOnlyFixedSecureVersionAndListRequests", cdpClientUsesOnlyFixedSecureVersionAndListRequestsTest)
     runner.register("CDPClientTests.MapsVersionAndListHTTPFailuresToUnavailable", cdpClientMapsVersionAndListHTTPFailuresToUnavailableTest)
     runner.register("CDPClientTests.RejectsRedirectWithoutFollowingTarget", cdpClientRejectsRedirectWithoutFollowingTargetTest)
     runner.register("CDPClientTests.RejectsAlternateResponseURL", cdpClientRejectsAlternateResponseURLTest)
     runner.register("CDPClientTests.MapsTransportAndDelayedResponsesToUnavailable", cdpClientMapsTransportAndDelayedResponsesToUnavailableTest)
+    runner.register("CDPClientTests.StubCancelsDelayedCallbacksBeforeLaterTestState", cdpStubCancelsDelayedCallbacksBeforeLaterTestStateTest)
     runner.register("CDPClientTests.RejectsMissingVersionFields", cdpClientRejectsMissingVersionFieldsTest)
     runner.register("CDPClientTests.RejectsMalformedVersionJSON", cdpClientRejectsMalformedVersionJSONTest)
     runner.register("CDPClientTests.RejectsNonChromeBrowser", cdpClientRejectsNonChromeBrowserTest)

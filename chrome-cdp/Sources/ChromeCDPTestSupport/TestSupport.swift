@@ -9,6 +9,14 @@ public struct TestAssertionFailure: Error, CustomStringConvertible {
     }
 }
 
+public struct TestHarnessFailure: Error, CustomStringConvertible {
+    public let description: String
+
+    public init(_ description: String) {
+        self.description = description
+    }
+}
+
 public struct TestSkip: Error, CustomStringConvertible {
     public let description: String
 
@@ -60,23 +68,29 @@ private final class AsyncResultBox<Value: Sendable>: @unchecked Sendable {
 
 public func awaitValue<Value: Sendable>(
     timeout: TimeInterval = 1,
+    cancellationGrace: TimeInterval = 0.25,
     _ operation: @escaping @Sendable () async throws -> Value
 ) throws -> Value {
-    guard timeout > 0 else {
+    guard timeout > 0, cancellationGrace > 0 else {
         throw TestAssertionFailure("async test timeout must be positive")
     }
-    let semaphore = DispatchSemaphore(value: 0)
+    let completion = DispatchSemaphore(value: 0)
     let box = AsyncResultBox<Value>()
     let task = Task {
+        defer { completion.signal() }
         do {
             box.store(.success(try await operation()))
         } catch {
             box.store(.failure(error))
         }
-        semaphore.signal()
     }
-    guard semaphore.wait(timeout: .now() + timeout) == .success else {
+    guard completion.wait(timeout: .now() + timeout) == .success else {
         task.cancel()
+        guard completion.wait(timeout: .now() + cancellationGrace) == .success else {
+            throw TestHarnessFailure(
+                "async operation did not acknowledge cancellation within \(cancellationGrace) seconds; run noncooperative work in a killable subprocess"
+            )
+        }
         throw TestAssertionFailure("async operation timed out after \(timeout) seconds")
     }
     guard let result = box.take() else {
@@ -131,6 +145,11 @@ public struct TestRunner {
             } catch let error as TestSkip {
                 skipped += 1
                 print("SKIP \(test.name): \(error.description)")
+            } catch let error as TestHarnessFailure {
+                failed += 1
+                print("FATAL \(test.name): \(error.description)")
+                print("Summary: \(passed) passed, \(failed) failed, \(skipped) skipped")
+                return 1
             } catch {
                 failed += 1
                 print("FAIL \(test.name): \(error)")

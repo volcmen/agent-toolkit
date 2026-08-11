@@ -12,6 +12,9 @@ if CommandLine.arguments.dropFirst().first == "--launch-lock-race-child" {
 if CommandLine.arguments.dropFirst().first == "--process-output-child" {
     exit(runProcessOutputChild(arguments: Array(CommandLine.arguments.dropFirst(2))))
 }
+if CommandLine.arguments.dropFirst().first == "--await-value-noncooperative-child" {
+    exit(runAwaitValueNonCooperativeChild(arguments: Array(CommandLine.arguments.dropFirst(2))))
+}
 
 var runner = TestRunner()
 registerLauncherConfigurationTests(&runner)
@@ -79,6 +82,21 @@ func runProcessOutputChild(arguments: [String]) -> Int32 {
     FileHandle.standardOutput.write(output)
     FileHandle.standardError.write(output)
     return 0
+}
+
+func runAwaitValueNonCooperativeChild(arguments: [String]) -> Int32 {
+    guard arguments.count == 1 else { return 2 }
+    let laterTestMarker = URL(fileURLWithPath: arguments[0])
+    var runner = TestRunner()
+    runner.register("noncooperative") {
+        let _: Int = try awaitValue(timeout: 0.01, cancellationGrace: 0.01) {
+            await withUnsafeContinuation { (_: UnsafeContinuation<Int, Never>) in }
+        }
+    }
+    runner.register("must-not-run") {
+        try "ran".write(to: laterTestMarker, atomically: true, encoding: .utf8)
+    }
+    return Int32(runner.run(arguments: ["await-value-noncooperative-child"]))
 }
 
 func runLaunchLockRaceChild(arguments: [String]) -> Int32 {
