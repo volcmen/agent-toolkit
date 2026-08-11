@@ -16,6 +16,7 @@ and local agent tools behind one catalog and one validation workflow.
   Wake routing for requested human-facing prose.
 - [`bun-global-tools`](bun-global-tools/): exact-pinned Bun global CLI tools,
   lifecycle trust policy, and npm-global drift detection.
+- [`chrome-cdp`](chrome-cdp/): safe Spotlight launcher for a headed, dedicated-profile Chrome CDP session.
 
 Each project owns its implementation, plugin directory, tests, and documentation.
 The repository root owns the shared marketplace catalog and release checks.
