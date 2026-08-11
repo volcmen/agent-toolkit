@@ -32,6 +32,14 @@ func appBundleBuildProducesVerifiedSignedArtifactTest() throws {
     )
     try expectEqual(verify.status, 0)
 
+    let installerStage = temporaryDirectory.appendingPathComponent(".Chrome CDP.app.stage-test", isDirectory: true)
+    try FileManager.default.copyItem(at: app, to: installerStage)
+    let stagedVerify = try ProcessInspector.capture(
+        executableURL: projectRoot.appendingPathComponent("scripts/verify.sh"),
+        arguments: ["--app", installerStage.path, "--staged"]
+    )
+    try expectEqual(stagedVerify.status, 0)
+
     let helper = app.appendingPathComponent("Contents/Resources/chrome-cdp-helper")
     let version = try ProcessInspector.capture(executableURL: helper, arguments: ["--version"])
     try expectEqual(String(data: version.standardOutput, encoding: .utf8), "chrome-cdp-helper 1.0.0\n")

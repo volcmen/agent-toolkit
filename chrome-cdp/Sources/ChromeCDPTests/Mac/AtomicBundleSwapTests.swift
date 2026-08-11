@@ -10,7 +10,7 @@ private func writeBundle(_ url: URL, marker: String) throws {
 func atomicBundleSwapExchangesAndRollsBackExistingBundlesTest() throws {
     let parent = try makeTemporaryDirectory(prefix: "chrome-cdp-swap-")
     defer { try? FileManager.default.removeItem(at: parent) }
-    let staged = parent.appendingPathComponent("staged.app", isDirectory: true)
+    let staged = parent.appendingPathComponent(".Chrome CDP.app.stage-test", isDirectory: true)
     let installed = parent.appendingPathComponent("installed.app", isDirectory: true)
     try writeBundle(staged, marker: "new")
     try writeBundle(installed, marker: "old")

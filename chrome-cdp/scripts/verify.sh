@@ -9,7 +9,9 @@ usage() {
 [[ $# -eq 3 && "$1" == "--app" ]] || usage
 APP_PATH="$2"
 MODE="$3"
-[[ "$APP_PATH" == /* && "$APP_PATH" == *.app ]] || usage
+APP_NAME="${APP_PATH##*/}"
+[[ "$APP_PATH" == /* ]] || usage
+[[ "$APP_NAME" == "Chrome CDP.app" || "$APP_NAME" == .Chrome\ CDP.app.stage-* ]] || usage
 [[ "$MODE" == "--staged" || "$MODE" == "--installed" ]] || usage
 [[ -d "$APP_PATH" && ! -L "$APP_PATH" ]] || { echo "invalid app bundle: $APP_PATH" >&2; exit 1; }
 

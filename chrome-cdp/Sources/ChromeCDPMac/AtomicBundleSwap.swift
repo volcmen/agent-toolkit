@@ -26,10 +26,11 @@ public enum AtomicBundleSwap {
         }
         let stagedURL = staged.standardizedFileURL
         let installedURL = installed.standardizedFileURL
+        let stagedName = stagedURL.lastPathComponent
         guard stagedURL != installedURL,
               stagedURL.deletingLastPathComponent() == parent,
               installedURL.deletingLastPathComponent() == parent,
-              stagedURL.pathExtension == "app",
+              (stagedURL.pathExtension == "app" || stagedName.hasPrefix(".Chrome CDP.app.stage-")),
               installedURL.pathExtension == "app",
               try isDirectoryWithoutFollowingLinks(stagedURL) else {
             throw AtomicBundleSwapError.invalidBundlePath
