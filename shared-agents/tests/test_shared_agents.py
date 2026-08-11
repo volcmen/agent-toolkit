@@ -12,7 +12,6 @@ from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 from unittest import mock
 
 if sys.version_info < (3, 11):
@@ -40,9 +39,69 @@ class Rendering(unittest.TestCase):
         catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
         controller = next(agent for agent in catalog if agent["id"] == "controller")
         self.assertEqual(controller["claude"]["model"], "fable")
+        self.assertEqual(controller["claude"]["effort"], "high")
+        rendered = (ROOT / "claude" / "agents" / "controller.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("\neffort: high\n", rendered)
         for agent in catalog:
             if agent.get("codex"):
                 self.assertTrue(agent["codex"]["model"].startswith("gpt-"))
+
+    def test_empty_claude_name_is_rejected(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt = root / "prompt.md"
+            prompt.write_text("Prompt\n", encoding="utf-8")
+            catalog = root / "agents.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "agents": [
+                            {
+                                "id": "explorer",
+                                "description": "Explore repositories",
+                                "prompt": str(prompt),
+                                "claude": {"name": ""},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(render, "CATALOG", catalog):
+                with self.assertRaisesRegex(
+                    render.Problem, "claude.name must be a non-empty string"
+                ):
+                    render.load_catalog()
+
+    def test_duplicate_claude_names_are_rejected(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt = root / "prompt.md"
+            prompt.write_text("Prompt\n", encoding="utf-8")
+            catalog = root / "agents.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "agents": [
+                            {
+                                "id": agent_id,
+                                "description": f"{agent_id} agent",
+                                "prompt": str(prompt),
+                                "claude": {"name": "Explore"},
+                            }
+                            for agent_id in ("first", "second")
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(render, "CATALOG", catalog):
+                with self.assertRaisesRegex(
+                    render.Problem, "duplicate Claude name Explore"
+                ):
+                    render.load_catalog()
 
     def test_codex_agents_use_the_required_schema(self) -> None:
         for path in (ROOT / "codex" / "agents").glob("*.toml"):
@@ -64,9 +123,24 @@ class Rendering(unittest.TestCase):
         self.assertEqual(profile["model_reasoning_effort"], "max")
         self.assertIn("active shared-agents controller", profile["developer_instructions"])
 
-    def test_claude_plugin_agents_do_not_use_unsupported_permission_mode(self) -> None:
-        for path in (ROOT / "plugins" / "shared-agents" / "agents").glob("*.md"):
+    def test_claude_agents_do_not_use_unsupported_permission_mode(self) -> None:
+        for path in (ROOT / "claude" / "agents").glob("*.md"):
             self.assertNotIn("permissionMode:", path.read_text(encoding="utf-8"), str(path))
+
+    def test_claude_agents_render_to_standalone_source_directory(self) -> None:
+        expected = {"controller.md", "task-analyst.md", "Explore.md", "alan-wake.md"}
+        actual = {path.name for path in (ROOT / "claude" / "agents").glob("*.md")}
+        self.assertEqual(actual, expected)
+
+    def test_explore_overrides_the_builtin_with_a_pinned_model(self) -> None:
+        text = (ROOT / "claude" / "agents" / "Explore.md").read_text(encoding="utf-8")
+        self.assertIn("\nname: Explore\n", text)
+        self.assertIn("\nmodel: sonnet\n", text)
+        self.assertIn("\neffort: medium\n", text)
+        self.assertIn("tools: Read, Grep, Glob, LSP", text)
+        self.assertIn("disallowedTools: Write, Edit, NotebookEdit", text)
+        for thoroughness in ("quick", "medium", "very thorough"):
+            self.assertIn(thoroughness, text.lower())
 
     def test_read_only_claude_agents_do_not_receive_shell_access(self) -> None:
         catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
@@ -78,21 +152,19 @@ class Rendering(unittest.TestCase):
 
 
 class ClaudeRoutingSurfaces(unittest.TestCase):
-    SURFACES = (
-        "prompts/controller.md",
-        "policy/claude-orchestration.md",
-        "policy/claude-global.md",
-        "plugins/shared-agents/skills/shared-agents/SKILL.md",
-    )
-    DETAILED_SURFACES = (
-        "prompts/controller.md",
-        "policy/claude-orchestration.md",
-        "plugins/shared-agents/skills/shared-agents/SKILL.md",
-    )
+    SURFACES = ("prompts/controller.md",)
+    DETAILED_SURFACES = ("prompts/controller.md",)
 
     def surface(self, relative_path: str) -> str:
         text = (ROOT / relative_path).read_text(encoding="utf-8")
         return " ".join(text.split()).lower()
+
+    def test_controller_uses_bare_standalone_agent_names(self) -> None:
+        text = (ROOT / "prompts" / "controller.md").read_text(encoding="utf-8")
+        self.assertIn("`Explore` on Sonnet", text)
+        self.assertIn("`task-analyst` on Sonnet", text)
+        self.assertIn("`alan-wake` on Sonnet", text)
+        self.assertNotIn("shared-agents:", text)
 
     def test_every_surface_requires_an_explicit_model_per_agent_call(self) -> None:
         for relative_path in self.SURFACES:
@@ -191,11 +263,7 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
             self.assertIn("listagents", text.replace("`", ""), relative_path)
             self.assertIn("sendmessage", text.replace("`", ""), relative_path)
             self.assertIn("evidence, not authority", text, relative_path)
-        for relative_path in (
-            "prompts/controller.md",
-            "policy/claude-orchestration.md",
-            "plugins/shared-agents/skills/shared-agents/SKILL.md",
-        ):
+        for relative_path in ("prompts/controller.md",):
             text = self.surface(relative_path)
             self.assertRegex(
                 text, r"(not user consent|never user consent)", relative_path
@@ -203,8 +271,6 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
         for relative_path in self.DETAILED_SURFACES:
             text = self.surface(relative_path)
             self.assertIn("delivery is not guaranteed", text, relative_path)
-        policy = self.surface("policy/claude-orchestration.md")
-        self.assertIn("crosssessioninbound", policy.replace("`", ""))
         codex = self.surface("policy/codex-global.md")
         self.assertNotIn("sendmessage", codex.replace("`", ""))
 
@@ -216,203 +282,96 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
             self.assertEqual(agent["claude"]["model"], "sonnet", agent["id"])
 
 
-class ManagedBlocks(unittest.TestCase):
-    def test_sync_is_idempotent_and_preserves_human_text(self) -> None:
-        with TemporaryDirectory() as tmp:
-            path = Path(tmp) / "AGENTS.md"
-            path.write_text("# Human rules\n", encoding="utf-8")
-            self.assertTrue(manage.sync_managed_block(path, "# Controller\n\nPolicy"))
-            first = path.read_text(encoding="utf-8")
-            self.assertFalse(manage.sync_managed_block(path, "# Controller\n\nPolicy"))
-            self.assertEqual(path.read_text(encoding="utf-8"), first)
-            self.assertIn("# Human rules", first)
-
-    def test_sync_updates_only_the_managed_block(self) -> None:
-        with TemporaryDirectory() as tmp:
-            path = Path(tmp) / "CLAUDE.md"
-            manage.sync_managed_block(path, "old")
-            manage.sync_managed_block(path, "new")
-            text = path.read_text(encoding="utf-8")
-            self.assertIn("new", text)
-            self.assertNotIn("old", text)
-            self.assertEqual(text.count(manage.START), 1)
-
-    def test_incomplete_markers_are_refused(self) -> None:
-        with TemporaryDirectory() as tmp:
-            path = Path(tmp) / "AGENTS.md"
-            path.write_text(f"{manage.START}\nbroken\n", encoding="utf-8")
-            with self.assertRaisesRegex(manage.Problem, "incomplete"):
-                manage.sync_managed_block(path, "new")
-
-    def test_duplicate_managed_blocks_are_refused(self) -> None:
-        with TemporaryDirectory() as tmp:
-            path = Path(tmp) / "AGENTS.md"
-            block = manage.render_managed("policy")
-            path.write_text(f"{block}\n\n{block}\n", encoding="utf-8")
-            with self.assertRaisesRegex(manage.Problem, "multiple"):
-                manage.sync_managed_block(path, "new")
-            with self.assertRaisesRegex(manage.Problem, "multiple"):
-                manage.remove_managed_block(path)
-
-
-class Symlinks(unittest.TestCase):
-    def test_conflicting_file_is_backed_up_before_linking(self) -> None:
+class StandaloneCopies(unittest.TestCase):
+    def test_install_copies_regular_files_and_is_idempotent(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            source = root / "source.toml"
-            target = root / "agents" / "source.toml"
-            source.write_text("name = 'source'\n", encoding="utf-8")
-            target.parent.mkdir()
-            target.write_text("name = 'old'\n", encoding="utf-8")
-            backups = manage.BackupStore(root / "backups")
-            self.assertTrue(manage.ensure_symlink(source, target, backups))
-            self.assertEqual(target.resolve(), source.resolve())
+            source = root / "source"
+            target = root / "live"
+            source.mkdir()
+            (source / "controller.md").write_text("controller\n", encoding="utf-8")
+            backups = manage.BackupStore(root / "backups" / "first")
+            with mock.patch.multiple(
+                manage,
+                CLAUDE_SOURCE=source,
+                CLAUDE_TARGET=target,
+                create=True,
+            ):
+                changed = manage.install_claude_agents(backups)
+                self.assertEqual(changed, [target / "controller.md"])
+                self.assertFalse((target / "controller.md").is_symlink())
+                self.assertEqual((target / "controller.md").read_text(), "controller\n")
+                self.assertEqual(manage.install_claude_agents(backups), [])
+
+    def test_idempotent_install_reports_unchanged_agent_files(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "live"
+            source.mkdir()
+            target.mkdir()
+            (source / "controller.md").write_text("controller\n", encoding="utf-8")
+            (target / "controller.md").write_text("controller\n", encoding="utf-8")
+            output = StringIO()
+            with (
+                mock.patch.multiple(
+                    manage,
+                    CLAUDE_SOURCE=source,
+                    CLAUDE_TARGET=target,
+                    BACKUP_ROOT=root / "backups",
+                ),
+                mock.patch.object(manage, "run"),
+                mock.patch.object(manage, "package_problems", return_value=[]),
+                mock.patch.object(manage, "cmd_status", return_value=0),
+                redirect_stdout(output),
+            ):
+                self.assertEqual(manage.cmd_install(unittest.mock.Mock()), 0)
+            self.assertIn("unchanged 1 agent file(s)", output.getvalue())
+
+    def test_non_object_claude_settings_are_reported_as_invalid(self) -> None:
+        with TemporaryDirectory() as tmp:
+            settings_path = Path(tmp) / "settings.json"
+            for value in (None, "controller", ["controller"], 42, True):
+                with self.subTest(value=value):
+                    settings_path.write_text(json.dumps(value), encoding="utf-8")
+                    with (
+                        mock.patch.object(manage, "CLAUDE_SETTINGS", settings_path),
+                        mock.patch.object(manage, "claude_agent_sources", return_value=[]),
+                        mock.patch.object(manage, "package_problems", return_value=[]),
+                    ):
+                        self.assertEqual(
+                            manage.live_problems(),
+                            [f"{settings_path}: must contain a JSON object"],
+                        )
+
+    def test_install_backs_up_a_conflicting_target(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "live"
+            source.mkdir()
+            target.mkdir()
+            (source / "Explore.md").write_text("new\n", encoding="utf-8")
+            (target / "Explore.md").write_text("personal\n", encoding="utf-8")
+            backups = manage.BackupStore(root / "backups" / "install")
+            with mock.patch.multiple(manage, CLAUDE_SOURCE=source, CLAUDE_TARGET=target):
+                manage.install_claude_agents(backups)
+            self.assertEqual((target / "Explore.md").read_text(), "new\n")
             self.assertEqual(len(backups.created), 1)
-            self.assertIn("name = 'old'", backups.created[0].read_text(encoding="utf-8"))
+            self.assertEqual(backups.created[0].read_text(), "personal\n")
 
-    def test_install_uninstall_round_trip_restores_claude_state(self) -> None:
+    def test_uninstall_preserves_a_user_modified_copy(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            claude_settings = root / ".claude" / "settings.json"
-            claude_settings.parent.mkdir(parents=True)
-            claude_settings.write_text(
-                json.dumps({"agent": "legacy", "theme": "dark"}) + "\n",
-                encoding="utf-8",
-            )
-            claude_standalone = root / ".claude" / "agents"
-            claude_standalone.mkdir(parents=True)
-            legacy_controller = claude_standalone / "controller.md"
-            legacy_controller.write_text("legacy controller\n", encoding="utf-8")
-            replacements = {
-                "CODEX_TARGET": root / ".codex" / "agents",
-                "CODEX_CONTROLLER_TARGET": root / ".codex" / "controller.config.toml",
-                "CLAUDE_STANDALONE": claude_standalone,
-                "CLAUDE_RULE": root / ".claude" / "rules" / "orchestration.md",
-                "CLAUDE_GLOBAL": root / ".claude" / "CLAUDE.md",
-                "CODEX_GLOBAL": root / ".codex" / "AGENTS.md",
-                "CLAUDE_SETTINGS": claude_settings,
-                "STATE_FILE": root / ".config" / "shared-agents" / "install-state.json",
-                "BACKUP_ROOT": root / ".config" / "shared-agents" / "backups",
-            }
-            backups = manage.BackupStore(replacements["BACKUP_ROOT"] / "install")
-            with mock.patch.multiple(manage, **replacements, create=True), mock.patch.object(
-                manage.shutil, "which", return_value=None
-            ):
-                manage.install_native_files(backups)
-                installed = json.loads(claude_settings.read_text(encoding="utf-8"))
-                self.assertEqual(installed["agent"], "controller")
-                self.assertFalse(legacy_controller.exists())
-
-                with redirect_stdout(StringIO()):
-                    manage.cmd_uninstall(SimpleNamespace())
-
-            restored = json.loads(claude_settings.read_text(encoding="utf-8"))
-            self.assertEqual(restored, {"agent": "legacy", "theme": "dark"})
-            self.assertEqual(legacy_controller.read_text(encoding="utf-8"), "legacy controller\n")
-
-    def test_install_adopts_retired_agent_backup_from_older_installer(self) -> None:
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            claude_settings = root / ".claude" / "settings.json"
-            claude_settings.parent.mkdir(parents=True)
-            claude_settings.write_text('{"agent": "controller"}\n', encoding="utf-8")
-            claude_standalone = root / ".claude" / "agents"
-            legacy_controller = claude_standalone / "controller.md"
-            backup_root = root / ".config" / "shared-agents" / "backups"
-            prior_backups = manage.BackupStore(backup_root / "older")
-            preserved = prior_backups.destination(legacy_controller)
-            preserved.parent.mkdir(parents=True)
-            preserved.write_text("legacy controller\n", encoding="utf-8")
-            replacements = {
-                "CODEX_TARGET": root / ".codex" / "agents",
-                "CODEX_CONTROLLER_TARGET": root / ".codex" / "controller.config.toml",
-                "CLAUDE_STANDALONE": claude_standalone,
-                "CLAUDE_RULE": root / ".claude" / "rules" / "orchestration.md",
-                "CLAUDE_GLOBAL": root / ".claude" / "CLAUDE.md",
-                "CODEX_GLOBAL": root / ".codex" / "AGENTS.md",
-                "CLAUDE_SETTINGS": claude_settings,
-                "STATE_FILE": root / ".config" / "shared-agents" / "install-state.json",
-                "BACKUP_ROOT": backup_root,
-            }
-            with mock.patch.multiple(manage, **replacements), mock.patch.object(
-                manage.shutil, "which", return_value=None
-            ):
-                manage.install_native_files(manage.BackupStore(backup_root / "new"))
-                with redirect_stdout(StringIO()):
-                    manage.cmd_uninstall(SimpleNamespace())
-
-            self.assertTrue(legacy_controller.is_file(), "older installer backup was not adopted")
-            self.assertEqual(legacy_controller.read_text(encoding="utf-8"), "legacy controller\n")
-
-    def test_install_adopts_prior_agent_setting_from_older_installer(self) -> None:
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            claude_settings = root / ".claude" / "settings.json"
-            claude_settings.parent.mkdir(parents=True)
-            claude_settings.write_text(
-                '{"agent": "controller", "theme": "current"}\n', encoding="utf-8"
-            )
-            backup_root = root / ".config" / "shared-agents" / "backups"
-            prior_backups = manage.BackupStore(backup_root / "older")
-            preserved = prior_backups.destination(claude_settings)
-            preserved.parent.mkdir(parents=True)
-            preserved.write_text(
-                '{"agent": "legacy", "theme": "old"}\n', encoding="utf-8"
-            )
-            replacements = {
-                "CODEX_TARGET": root / ".codex" / "agents",
-                "CODEX_CONTROLLER_TARGET": root / ".codex" / "controller.config.toml",
-                "CLAUDE_STANDALONE": root / ".claude" / "agents",
-                "CLAUDE_RULE": root / ".claude" / "rules" / "orchestration.md",
-                "CLAUDE_GLOBAL": root / ".claude" / "CLAUDE.md",
-                "CODEX_GLOBAL": root / ".codex" / "AGENTS.md",
-                "CLAUDE_SETTINGS": claude_settings,
-                "STATE_FILE": root / ".config" / "shared-agents" / "install-state.json",
-                "BACKUP_ROOT": backup_root,
-            }
-            with mock.patch.multiple(manage, **replacements), mock.patch.object(
-                manage.shutil, "which", return_value=None
-            ):
-                manage.install_native_files(manage.BackupStore(backup_root / "new"))
-                with redirect_stdout(StringIO()):
-                    manage.cmd_uninstall(SimpleNamespace())
-
-            restored = json.loads(claude_settings.read_text(encoding="utf-8"))
-            self.assertEqual(restored, {"agent": "legacy", "theme": "current"})
-
-    def test_install_adopts_absent_agent_setting_from_older_installer(self) -> None:
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            claude_settings = root / ".claude" / "settings.json"
-            claude_settings.parent.mkdir(parents=True)
-            claude_settings.write_text(
-                '{"agent": "controller", "theme": "current"}\n', encoding="utf-8"
-            )
-            backup_root = root / ".config" / "shared-agents" / "backups"
-            prior_backups = manage.BackupStore(backup_root / "older")
-            preserved = prior_backups.destination(claude_settings)
-            preserved.parent.mkdir(parents=True)
-            preserved.write_text('{"theme": "old"}\n', encoding="utf-8")
-            replacements = {
-                "CODEX_TARGET": root / ".codex" / "agents",
-                "CODEX_CONTROLLER_TARGET": root / ".codex" / "controller.config.toml",
-                "CLAUDE_STANDALONE": root / ".claude" / "agents",
-                "CLAUDE_RULE": root / ".claude" / "rules" / "orchestration.md",
-                "CLAUDE_GLOBAL": root / ".claude" / "CLAUDE.md",
-                "CODEX_GLOBAL": root / ".codex" / "AGENTS.md",
-                "CLAUDE_SETTINGS": claude_settings,
-                "STATE_FILE": root / ".config" / "shared-agents" / "install-state.json",
-                "BACKUP_ROOT": backup_root,
-            }
-            with mock.patch.multiple(manage, **replacements), mock.patch.object(
-                manage.shutil, "which", return_value=None
-            ):
-                manage.install_native_files(manage.BackupStore(backup_root / "new"))
-                with redirect_stdout(StringIO()):
-                    manage.cmd_uninstall(SimpleNamespace())
-
-            restored = json.loads(claude_settings.read_text(encoding="utf-8"))
-            self.assertEqual(restored, {"theme": "current"})
+            source = root / "source"
+            target = root / "live"
+            source.mkdir()
+            target.mkdir()
+            (source / "controller.md").write_text("managed\n", encoding="utf-8")
+            (target / "controller.md").write_text("user changed\n", encoding="utf-8")
+            with mock.patch.multiple(manage, CLAUDE_SOURCE=source, CLAUDE_TARGET=target):
+                self.assertEqual(manage.uninstall_claude_agents(), [])
+            self.assertTrue((target / "controller.md").exists())
 
 
 class Package(unittest.TestCase):
@@ -434,11 +393,26 @@ class Package(unittest.TestCase):
 
     def test_codex_named_agent_route_uses_a_non_inheriting_fork(self) -> None:
         policy = (ROOT / "policy" / "codex-global.md").read_text(encoding="utf-8")
-        skill = (
-            ROOT / "plugins" / "shared-agents" / "skills" / "shared-agents" / "SKILL.md"
-        ).read_text(encoding="utf-8")
         self.assertIn('fork_turns = "none"', policy)
-        self.assertIn('fork_turns = "none"', skill)
+
+    def test_shared_agents_is_not_a_workspace_plugin(self) -> None:
+        catalog = json.loads((ROOT.parent / "plugins.json").read_text(encoding="utf-8"))
+        names = {entry["name"] for entry in catalog["plugins"]}
+        self.assertNotIn("shared-agents", names)
+        self.assertFalse((ROOT / "plugins" / "shared-agents").exists())
+
+    def test_claude_routing_has_one_canonical_surface(self) -> None:
+        self.assertFalse((ROOT / "policy" / "claude-global.md").exists())
+        self.assertFalse((ROOT / "policy" / "claude-orchestration.md").exists())
+        controller = (ROOT / "prompts" / "controller.md").read_text(encoding="utf-8")
+        self.assertIn("`Explore` on Sonnet", controller)
+        self.assertNotIn("shared-agents:", controller)
+
+    def test_routing_evals_live_outside_the_plugin_tree(self) -> None:
+        path = ROOT / "evals" / "controller-routing.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["agent_name"], "controller")
+        self.assertGreaterEqual(len(payload["evals"]), 3)
 
     def test_alan_wake_writes_destination_native_slack_mrkdwn(self) -> None:
         prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")

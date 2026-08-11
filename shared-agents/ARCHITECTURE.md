@@ -3,7 +3,7 @@
 ## Design
 
 The shared layer owns behavior, while each provider owns execution syntax and
-model selection:
+model selection. Only the Claude adapter is installed:
 
 ```text
 agents.json + prompts/*.md
@@ -13,35 +13,33 @@ agents.json + prompts/*.md
        /          \
       v            v
 Claude agent MD   Codex profile + agent TOML
-plugin agents/    ~/.codex/*.config.toml + agents/
+~/.claude/agents/ source adapters only
       |            |
       v            v
 Fable controller  GPT-5.6 Sol controller
 Sonnet workers    GPT-5.6 Sol/Terra workers
 ```
 
-This is deliberate. Claude Code plugins can package custom agents and can set a
-plugin agent as the main thread. Codex custom agents are standalone TOML files
-under `~/.codex/agents`; Codex plugins currently package skills and other plugin
-components, but not custom-agent TOMLs. Codex also has no custom-agent selector
-for the primary thread. The installed `~/.codex/controller.config.toml` launch
-profile explicitly activates the controller on a native Codex model. Global
-`~/.codex/AGENTS.md` supplies the complete controller contract to Codex threads;
-the project does not install provider-specific shell aliases.
+`agents.json` and `prompts/` render Claude Markdown into `claude/agents/`.
+`manage.py install` validates those sources and copies them as regular files to
+`~/.claude/agents/`. `Explore.md` intentionally overrides the built-in Explore
+agent and pins Sonnet. The project is not a plugin and has no plugin lifecycle.
+
+The Codex TOMLs, controller profile, and Codex policy remain source-controlled
+adapters for future use, but this project performs no Codex installation.
+Likewise, the project never owns Fish aliases; the local `clauded` alias is
+user-managed.
 
 ## Lifecycle
 
 1. Edit the canonical catalog or prompt.
 2. Render both provider adapters.
-3. Validate the package and TOML/frontmatter contracts.
-4. Regenerate marketplace manifests from the workspace `plugins.json`.
-5. Refresh only the `shared-agents` plugin in Claude Code and Codex.
-6. Link the Codex controller profile, worker TOMLs, and provider policies into
-   personal configuration.
-7. Start a new client thread so configuration is reloaded.
+3. Validate the source and TOML/frontmatter contracts.
+4. Run `manage.py install` to copy the Claude agents into `~/.claude/agents/`.
 
-The installer never invokes Agent Board and does not create or update board
-cards. It does not reinstall unrelated workspace plugins.
+Source edits do not update the copied user agents until installation is rerun.
+The installer neither invokes Agent Board nor creates or updates board cards.
+It does not install marketplace plugins or modify Codex configuration.
 
 ## Writing route
 
@@ -59,7 +57,6 @@ exact transcription, and explicit opt-out.
 
 ## Safety and recovery
 
-Read-only agents use provider-native read-only boundaries. The installer
-preserves replaced files beneath `~/.config/shared-agents/backups/`. Managed
-global instructions are fenced with markers so future installs update only the
-owned block and preserve surrounding human content.
+Read-only agents use Claude-native read-only boundaries. The installer preserves
+replaced files beneath `~/.config/shared-agents/backups/`. It owns only the four
+copied agent files and does not alter user-owned aliases or global policies.

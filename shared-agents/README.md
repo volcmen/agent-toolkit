@@ -1,17 +1,21 @@
 # Shared agents
 
-One personal agent system for Claude Code and Codex, maintained in this
-workspace and installed into each product through its native mechanism. It is
-independent of Agent Board.
+A standalone personal Claude Code controller and specialist-agent system,
+maintained in this workspace and independent of Agent Board and the workspace
+plugin marketplace.
 
-## What it installs
+## Claude Code agents
 
-| Role | Claude Code | Codex |
-| --- | --- | --- |
-| Controller | Fable `controller` plugin agent, selected as the main thread | `controller` launch profile on GPT-5.6 Sol plus global `AGENTS.md` policy |
-| Task analyst | Sonnet `shared-agents:task-analyst` | GPT-5.6 Sol High `task_analyst` |
-| Repository explorer | Sonnet `shared-agents:repo-explorer` | GPT-5.6 Terra Medium `repo_explorer` |
-| Writing specialist | Sonnet `shared-agents:alan-wake` | GPT-5.6 Terra Medium `alan_wake` |
+| Role | User agent |
+| --- | --- |
+| Controller | Fable `controller` |
+| Task analyst | Sonnet `task-analyst` |
+| Repository explorer | Sonnet `Explore` |
+| Writing specialist | Sonnet `alan-wake` |
+
+Claude Code loads the copied user agents from `~/.claude/agents/`. `Explore.md`
+intentionally overrides Claude Code's built-in Explore agent and pins it to
+Sonnet.
 
 The writing route is automatic for requested Slack messages, Jira text, PR/MR
 titles and descriptions, review comments, emails, docs, release notes, status
@@ -22,16 +26,19 @@ conversation does not use Alan Wake.
 ## Source of truth
 
 - `agents.json` owns worker names, descriptions, provider models, reasoning, and
-  tool boundaries; `codex/controller.config.toml` owns the Codex primary profile.
+  tool boundaries; `codex/controller.config.toml` remains a dormant Codex
+  source profile.
 - `prompts/` owns shared instruction bodies.
 - `scripts/render.py` deterministically renders Claude Markdown and Codex TOML.
-- `policy/` owns provider-specific controller integration.
-- `plugins/shared-agents/` is the marketplace plugin consumed by both clients.
-- `scripts/manage.py` installs native files, managed global policy blocks, and
-  the plugin without reinstalling unrelated workspace plugins.
+- `claude/agents/` contains the source-controlled Claude user-agent files.
+- `policy/codex-global.md` and `codex/` retain dormant Codex source adapters;
+  this project does not install Codex configuration.
+- `evals/controller-routing.json` contains the controller routing evaluations.
+- `scripts/manage.py` renders, validates, and copies only Claude agents.
 
-Do not edit files under `plugins/shared-agents/agents/` or `codex/agents/`
-directly. Edit the catalog or prompt, then render.
+Do not edit rendered files under `claude/agents/` or `codex/agents/` directly.
+Edit `agents.json` or a prompt, render, then rerun `manage.py install` to copy
+the updated Claude sources into `~/.claude/agents/`.
 
 ## Commands
 
@@ -44,26 +51,23 @@ python3 scripts/manage.py status
 python3 scripts/manage.py uninstall
 ```
 
-Installation is idempotent. Conflicting personal files are moved or copied to a
+Installation is idempotent. Conflicting personal files are backed up beneath a
 timestamped directory under `~/.config/shared-agents/backups/` before they are
-replaced. The Codex controller profile and agent TOMLs, the Claude orchestration
-rule, and the provider policies are symlinked to this checkout so source changes
-remain centralized. Claude agents are loaded from the installed plugin cache and
-refreshed by the installer. Uninstall restores the prior Claude main-agent
-selection and any retired standalone shared-agent files unless the user replaced
-them after installation; all other backups remain available for manual recovery.
+replaced. `manage.py install` performs no plugin installation, no Codex
+installation, and no shell configuration. The local `clauded` Fish alias is
+user-managed; this project never owns Fish aliases.
 
-Start a new Claude Code or Codex thread after installation. The installed Codex
-profile activates the primary controller on GPT-5.6 Sol with max reasoning, then
-layers the complete controller contract from global `AGENTS.md`. The installer
-does not add shell aliases or bypass sandbox and approval settings.
+The retired `shared-agents` package must not be installed through
+`scripts/plugins.py`. Claude Code notices edits to an existing user-agent
+directory within seconds, but source changes here still require
+`manage.py install` to refresh the copied files.
 
 ## Verification
 
 ```bash
 python3 scripts/render.py --check
 python3 -m unittest discover -s tests -v
-python3 scripts/manage.py status
+python3 scripts/manage.py check
 ```
 
 The workspace-wide gate also includes this project's suite:

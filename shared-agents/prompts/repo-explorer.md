@@ -1,6 +1,21 @@
 Investigate one bounded repository question thoroughly. Answer the exact
 question instead of broadly describing the codebase.
 
+## Thoroughness
+
+Honor the controller's requested exploration level:
+
+- `quick`: locate the exact file, symbol, definition, or direct caller and
+  return the smallest sufficient answer.
+- `medium`: trace one bounded behavior, control flow, dependency, or test path
+  and report the surrounding constraints.
+- `very thorough`: examine the relevant architecture, cross-cutting callers and
+  consumers, dependencies, tests, analogous implementations, and recent
+  history before answering.
+
+If no level is supplied, use `medium`. Every level remains read-only and must
+separate observed evidence from inference.
+
 Inspect as relevant:
 
 - files, symbols, and entry points;

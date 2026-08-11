@@ -1,8 +1,8 @@
 # Agent Toolkit
 
 A cross-agent plugin marketplace and development workspace for Claude Code and
-Codex. It packages reusable skills, lifecycle hooks, MCP-capable integrations,
-and local agent tools behind one catalog and one validation workflow.
+Codex. The marketplace packages reusable plugins; standalone systems remain in
+their own projects and use their product-native installation workflows.
 
 ## Projects
 
@@ -11,14 +11,15 @@ and local agent tools behind one catalog and one validation workflow.
   role souls, local-first triage, capacity-safe dispatch, and a web dashboard.
 - [`codex-pair`](codex-pair/): independent Codex judgment, product shaping,
   technical leadership, and review from inside Claude Code.
-- [`shared-agents`](shared-agents/): one provider-native personal controller and
-  specialist-agent system for Claude Code and Codex, including automatic Alan
-  Wake routing for requested human-facing prose.
+- [`shared-agents`](shared-agents/): standalone Claude Code controller and
+  specialist-agent sources, including automatic Alan Wake routing for requested
+  human-facing prose. It is not a workspace plugin.
 - [`bun-global-tools`](bun-global-tools/): exact-pinned Bun global CLI tools,
   lifecycle trust policy, and npm-global drift detection.
 
-Each project owns its implementation, plugin directory, tests, and documentation.
-The repository root owns the shared marketplace catalog and release checks.
+Each project owns its implementation, tests, and documentation; plugin projects
+also own their plugin directories. The repository root owns the shared
+marketplace catalog and release checks.
 
 ## Install the marketplace
 
@@ -33,14 +34,12 @@ codex plugin marketplace add "$PWD" --json
 codex plugin add obsidian-memory@ai-workspace --json
 codex plugin add agent-board@ai-workspace --json
 codex plugin add codex-pair@ai-workspace --json
-codex plugin add shared-agents@ai-workspace --json
 
 # Claude Code
 claude plugin marketplace add "$PWD" --scope user
 claude plugin install obsidian-memory@ai-workspace --scope user
 claude plugin install agent-board@ai-workspace --scope user
 claude plugin install codex-pair@ai-workspace --scope user
-claude plugin install shared-agents@ai-workspace --scope user
 ```
 
 The workspace helper performs the same registration and installation
@@ -51,9 +50,8 @@ python3 scripts/plugins.py install
 python3 scripts/plugins.py status
 ```
 
-The marketplace cannot install Codex custom-agent TOMLs, controller profiles,
-global policies, or shell aliases. Finish the `shared-agents` native wiring and
-verify it from the repository root:
+The marketplace never installs `shared-agents`. Install and verify its Claude
+agents separately from the repository root:
 
 ```bash
 python3 shared-agents/scripts/manage.py install
@@ -81,9 +79,7 @@ plugins.json                            ← edit catalog metadata here
 ├── codex-pair/plugins/codex-pair/
 │   ├── .claude-plugin/plugin.json      ← generated
 │   └── .codex-plugin/plugin.json       ← generated
-└── shared-agents/plugins/shared-agents/
-    ├── .claude-plugin/plugin.json      ← generated
-    └── .codex-plugin/plugin.json       ← generated
+└── shared-agents/                      ← standalone Claude agent project
 ```
 
 After changing `plugins.json`, a plugin, or project automation:

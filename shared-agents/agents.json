@@ -7,7 +7,7 @@
       "prompt": "prompts/controller.md",
       "claude": {
         "model": "fable",
-        "effort": "medium"
+        "effort": "high"
       }
     },
     {
@@ -40,9 +40,10 @@
     },
     {
       "id": "repo-explorer",
-      "description": "Use proactively for focused repository research, architecture discovery, file and symbol location, dependency tracing, behavior analysis, and implementation-context gathering. Answers one bounded question and never modifies files.",
+      "description": "Use proactively for quick, medium, or very thorough read-only repository research, file and symbol discovery, architecture analysis, dependency tracing, behavior analysis, and implementation-context gathering. Answers one bounded question and never modifies files.",
       "prompt": "prompts/repo-explorer.md",
       "claude": {
+        "name": "Explore",
         "model": "sonnet",
         "effort": "medium",
         "tools": [

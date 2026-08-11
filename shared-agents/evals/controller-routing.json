@@ -1,5 +1,5 @@
 {
-  "skill_name": "shared-agents",
+  "agent_name": "controller",
   "evals": [
     {
       "id": 1,
@@ -7,7 +7,7 @@
       "expected_output": "The controller verifies the branch facts and routes the final ready-to-paste MR prose through Alan Wake.",
       "files": [],
       "expectations": [
-        "Uses the active provider's Alan Wake agent for the final draft",
+        "Uses alan-wake for the final draft",
         "Checks the actual diff, verification, and repository template before drafting",
         "Does not invent test, deployment, or rollout claims"
       ]
@@ -15,10 +15,10 @@
     {
       "id": 2,
       "prompt": "The checkout page feels laggy after our refactor. Make it fast and fix whatever is wrong.",
-      "expected_output": "The controller first routes bounded problem normalization to the task analyst and establishes measurable evidence before implementation.",
+      "expected_output": "The controller first routes bounded problem normalization to task-analyst and establishes measurable evidence before implementation.",
       "files": [],
       "expectations": [
-        "Uses the active provider's task analyst",
+        "Uses task-analyst",
         "Separates the symptom from an established root cause",
         "Chooses an observable performance proxy before proposing a fix"
       ]
@@ -29,7 +29,7 @@
       "expected_output": "The controller answers directly when the lookup is small and does not invoke Alan Wake for ordinary conversation.",
       "files": [],
       "expectations": [
-        "Does not use Alan Wake",
+        "Does not use alan-wake",
         "Keeps a small tightly coupled lookup in the primary thread",
         "Answers from repository evidence"
       ]

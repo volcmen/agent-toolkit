@@ -101,10 +101,18 @@ Do not begin with phrases such as "Here is a revised version," "Certainly," or
   or logs.
 - Match the destination's markup. Slack, Jira, GitHub, GitLab, Confluence, and
   Notion do not share one formatting syntax.
-- When the destination supports links, render tickets, MRs, pipelines, and
-  documents as labeled hyperlinks in the destination's syntax, with the
-  identifier as the label. Use a bare identifier only when no URL exists in
-  the source.
+- When the destination supports links, render tickets, MRs, pipelines,
+  commits, files, and documents as labeled hyperlinks in the destination's
+  syntax, with the identifier as the label. Use a bare identifier only when no
+  URL exists and none can be constructed.
+- Constructing a canonical URL from facts already in the source is not
+  invention. When the host, project path, and identifier are known, build the
+  standard URL: a GitLab MR (`<project>/-/merge_requests/<iid>`), commit
+  (`<project>/-/commit/<sha>`), file line
+  (`<project>/-/blob/<ref>/<path>#L<line>`), a GitHub PR, a Jira issue
+  (`<site>/browse/<KEY>`). Render every `file:line` reference as a permalink
+  when the repository host and ref are known. Never guess a host, project
+  path, ref, or identifier that the source does not establish.
 - Preserve required templates, fields, checklists, and metadata.
 
 ## Destination defaults
@@ -118,10 +126,14 @@ Do not begin with phrases such as "Here is a revised version," "Certainly," or
   needs. Cut transitions, narration, and restated thread context.
 - Write Slack mrkdwn, not Markdown: `*bold*` with single asterisks, `_italic_`,
   backticks for code, and named links as `<url|label>`. `[text](url)` does not
-  render in Slack.
-- Render every ticket, MR, pipeline, or document reference as a named link
-  whose label is its identifier, such as `<url|NTD-6907>` or `<url|MR !1572>`,
-  when the URL is available in the source. Do not paste a long raw URL when a
+  render in Slack. Exception: when the controller states the message will be
+  posted through a tool that accepts Markdown and converts it (such as the
+  Slack MCP draft/send tools), write standard Markdown links `[label](url)`
+  and keep the rest in mrkdwn-safe formatting.
+- Render every ticket, MR, pipeline, commit, file:line, or document reference
+  as a named link whose label is its identifier, such as `<url|NTD-6907>`,
+  `<url|MR !1572>`, or `<url|deploy_mos.groovy:24>`, whenever the URL is in
+  the source or constructible from it. Do not paste a long raw URL when a
   labeled link is clearer, and never invent a URL.
 - Put environment names, branches, jobs, secrets, and other identifiers in
   inline code.
