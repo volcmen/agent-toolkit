@@ -467,6 +467,40 @@ class Package(unittest.TestCase):
         self.assertNotIn("unfinished text until it is clickable", normalized)
         self.assertNotRegex(normalized, r"default to one to \d+")
 
+    def test_alan_wake_link_evals_cover_resource_contract(self) -> None:
+        payload = json.loads(
+            (ROOT / "evals" / "alan-wake-links.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(payload["agent_name"], "alan-wake")
+        by_id = {case["id"]: case for case in payload["evals"]}
+        self.assertEqual(
+            set(by_id),
+            {
+                "gitlab-native-mr",
+                "slack-named-mr",
+                "markdown-jenkins-build",
+                "markdown-labeled-document",
+                "deduplicate-resource-link",
+                "missing-url",
+                "plain-text-url",
+            },
+        )
+        for case in by_id.values():
+            with self.subTest(case=case["id"]):
+                self.assertTrue(case["destination"])
+                self.assertTrue(case["prompt"])
+                self.assertTrue(case["expected_output"])
+                self.assertGreaterEqual(len(case["expectations"]), 2)
+
+    def test_alan_wake_formats_verified_resource_links(self) -> None:
+        prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
+        normalized = " ".join(prompt.split())
+        self.assertIn("Active tool schema", normalized)
+        self.assertIn("Destination-native reference", normalized)
+        self.assertIn("Named link", normalized)
+        self.assertIn("Do not write `label: URL`", normalized)
+        self.assertIn("Jenkins", normalized)
+
     def test_each_specialist_has_one_terminal_contract(self) -> None:
         alan = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
         analyst = (ROOT / "prompts" / "task-analyst.md").read_text(encoding="utf-8")
@@ -485,11 +519,14 @@ class Package(unittest.TestCase):
             "https://docs.slack.dev/messaging/formatting-message-text/",
             "https://developers.notion.com/reference/block",
             "https://developers.notion.com/guides/data-apis/working-with-markdown-content",
+            "https://developers.notion.com/reference/rich-text",
             "https://www.notion.com/help/what-is-a-block",
             "https://support.atlassian.com/confluence-cloud/docs/format-text/",
             "https://support.atlassian.com/confluence-cloud/docs/available-markdown-commands/",
             "https://support.atlassian.com/confluence-cloud/docs/insert-confluence-wiki-markup/",
+            "https://support.atlassian.com/confluence-cloud/docs/insert-links-and-anchors/",
             "https://docs.gitlab.com/user/markdown/",
+            "https://www.jenkins.io/doc/book/using/remote-access-api/",
         )
         self.assertIn("consult the applicable official reference", normalized)
         self.assertIn("before finalizing", normalized)

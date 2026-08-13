@@ -1,0 +1,79 @@
+{
+  "agent_name": "alan-wake",
+  "evals": [
+    {
+      "id": "gitlab-native-mr",
+      "destination": "GitLab merge request comment in group/project",
+      "prompt": "Rewrite for a GitLab MR comment in group/project: Review merge request !123 at the verified URL https://gitlab.example.com/group/project/-/merge_requests/123. Return only the comment.",
+      "expected_output": "Review !123.",
+      "expectations": [
+        "Uses the native clickable !123 reference",
+        "Does not append or expose the raw URL",
+        "Does not change the merge request identifier"
+      ]
+    },
+    {
+      "id": "slack-named-mr",
+      "destination": "Raw Slack mrkdwn message",
+      "prompt": "Rewrite for raw Slack mrkdwn: Review merge request !123 at the verified URL https://gitlab.example.com/group/project/-/merge_requests/123. Return only the message.",
+      "expected_output": "Review <https://gitlab.example.com/group/project/-/merge_requests/123|MR !123>.",
+      "expectations": [
+        "Uses Slack <url|label> syntax",
+        "Uses MR !123 as the readable label",
+        "Does not show the URL outside the named link"
+      ]
+    },
+    {
+      "id": "markdown-jenkins-build",
+      "destination": "Markdown status update",
+      "prompt": "Rewrite for Markdown: Jenkins job payments-deploy build 482 passed. Verified build URL: https://ci.example.com/job/payments-deploy/482/. Return only the update.",
+      "expected_output": "[payments-deploy #482](https://ci.example.com/job/payments-deploy/482/) passed.",
+      "expectations": [
+        "Links the useful job and build label",
+        "Preserves the observed passed result",
+        "Does not emit a label followed by a bare URL"
+      ]
+    },
+    {
+      "id": "markdown-labeled-document",
+      "destination": "Markdown documentation",
+      "prompt": "Rewrite for Markdown: Use the rollback runbook: https://docs.example.com/runbooks/rollback. Return only the sentence.",
+      "expected_output": "Use the [rollback runbook](https://docs.example.com/runbooks/rollback).",
+      "expectations": [
+        "Places the verified URL behind the descriptive label",
+        "Does not retain the label-colon-URL form"
+      ]
+    },
+    {
+      "id": "deduplicate-resource-link",
+      "destination": "Markdown incident update",
+      "prompt": "Rewrite for Markdown: See the checkout dashboard at https://metrics.example.com/d/checkout. The checkout dashboard shows an error rate of 2.1%. Return only the update.",
+      "expected_output": "The [checkout dashboard](https://metrics.example.com/d/checkout) shows an error rate of 2.1%.",
+      "expectations": [
+        "Links the resource at its first useful mention",
+        "Uses the verified URL once",
+        "Preserves the measured error rate"
+      ]
+    },
+    {
+      "id": "missing-url",
+      "destination": "Markdown status update",
+      "prompt": "Rewrite for Markdown: Deployment status is in Jenkins build #482. No build URL or job name is available. Return only the update.",
+      "expected_output": "Deployment status is in Jenkins build #482.",
+      "expectations": [
+        "Keeps the exact bare identifier",
+        "Does not invent a Jenkins host, job path, or URL"
+      ]
+    },
+    {
+      "id": "plain-text-url",
+      "destination": "Plain-text pager message with no hyperlink syntax",
+      "prompt": "Rewrite for a plain-text pager that does not support named links: On-call dashboard: https://metrics.example.com/d/on-call. Return only the message.",
+      "expected_output": "On-call dashboard: https://metrics.example.com/d/on-call",
+      "expectations": [
+        "Keeps the useful label and raw URL",
+        "Does not emit Markdown or Slack link syntax"
+      ]
+    }
+  ]
+}
