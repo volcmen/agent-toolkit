@@ -33,6 +33,28 @@
         "Keeps a small tightly coupled lookup in the primary thread",
         "Answers from repository evidence"
       ]
+    },
+    {
+      "id": 4,
+      "prompt": "Rewrite this rough deployment update for Slack. Keep every supplied fact, make it concise, and return only the message.",
+      "expected_output": "The controller sends the verified source packet to Alan Wake on Opus and returns the artifact without drafting commentary.",
+      "files": [],
+      "expectations": [
+        "Uses alan-wake on Opus for the final draft",
+        "Preserves supplied facts and uncertainty",
+        "Returns only destination-ready Slack text"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Trace how request IDs reach the audit logger. Do not edit anything.",
+      "expected_output": "The controller uses Explore at a bounded depth when the trace would consume substantial main-thread context.",
+      "files": [],
+      "expectations": [
+        "Uses Explore on Sonnet when delegation provides useful isolation",
+        "Keeps the investigation read-only",
+        "Returns paths, symbols, flow, and relevant uncertainty"
+      ]
     }
   ]
 }

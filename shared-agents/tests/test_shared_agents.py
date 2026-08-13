@@ -163,7 +163,7 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
         text = (ROOT / "prompts" / "controller.md").read_text(encoding="utf-8")
         self.assertIn("`Explore` on Sonnet", text)
         self.assertIn("`task-analyst` on Sonnet", text)
-        self.assertIn("`alan-wake` on Sonnet", text)
+        self.assertIn("`alan-wake` on Opus", text)
         self.assertNotIn("shared-agents:", text)
 
     def test_every_surface_requires_an_explicit_model_per_agent_call(self) -> None:
@@ -274,12 +274,16 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
         codex = self.surface("policy/codex-global.md")
         self.assertNotIn("sendmessage", codex.replace("`", ""))
 
-    def test_worker_catalog_pins_cheaper_claude_models(self) -> None:
+    def test_worker_catalog_pins_expected_claude_models(self) -> None:
         catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
+        expected = {
+            "controller": "fable",
+            "alan-wake": "opus",
+            "repo-explorer": "sonnet",
+            "task-analyst": "sonnet",
+        }
         for agent in catalog:
-            if agent["id"] == "controller":
-                continue
-            self.assertEqual(agent["claude"]["model"], "sonnet", agent["id"])
+            self.assertEqual(agent["claude"]["model"], expected[agent["id"]], agent["id"])
 
 
 class StandaloneCopies(unittest.TestCase):
@@ -412,7 +416,70 @@ class Package(unittest.TestCase):
         path = ROOT / "evals" / "controller-routing.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(payload["agent_name"], "controller")
-        self.assertGreaterEqual(len(payload["evals"]), 3)
+        by_id = {case["id"]: case for case in payload["evals"]}
+        self.assertEqual(set(by_id), {1, 2, 3, 4, 5})
+        alan_case = " ".join(
+            [
+                by_id[4]["expected_output"],
+                *by_id[4]["expectations"],
+            ]
+        )
+        self.assertIn("alan-wake", alan_case)
+        self.assertIn("Opus", alan_case)
+
+    def test_agent_catalog_has_focused_routing_descriptions(self) -> None:
+        catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))
+        by_id = {agent["id"]: agent for agent in catalog["agents"]}
+        expected = {
+            "controller": (
+                "Main-thread Fable technical lead for repository work. Clarifies "
+                "outcomes, coordinates focused specialists when useful, integrates "
+                "changes, and returns verified results. Run as the primary agent; "
+                "never dispatch it as a worker."
+            ),
+            "alan-wake": (
+                "Final-draft specialist for developer and workplace writing. Use for "
+                "Slack, issues, PR/MR text, reviews, email, docs, release notes, status "
+                "updates, decisions, requests, and handoffs. Preserves facts, matches "
+                "destination formatting, and returns ready-to-use prose. Never "
+                "implements or publishes."
+            ),
+            "repo-explorer": (
+                "Read-only repository explorer for one bounded question: file and "
+                "symbol discovery, behavior and dependency tracing, architecture, "
+                "tests, or implementation context. Supports quick, medium, and very "
+                "thorough depth. Never edits."
+            ),
+            "task-analyst": (
+                "Read-only task shaper for vague, symptom-based, conflicting, risky, "
+                "or solution-first requests. Establishes evidence, scope, acceptance "
+                "criteria, and the one decision needed before work. Never edits."
+            ),
+        }
+        for agent_id, description in expected.items():
+            self.assertEqual(by_id[agent_id]["description"], description)
+
+    def test_alan_wake_uses_judgment_not_rigid_prose_limits(self) -> None:
+        prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
+        normalized = " ".join(prompt.split())
+        self.assertIn("Use plain, familiar words", normalized)
+        self.assertIn(
+            "A missing URL must not block an otherwise correct draft", normalized
+        )
+        self.assertIn("Return one ready-to-use artifact", normalized)
+        self.assertNotIn("a bare name is a defect", normalized)
+        self.assertNotIn("unfinished text until it is clickable", normalized)
+        self.assertNotRegex(normalized, r"default to one to \d+")
+
+    def test_each_specialist_has_one_terminal_contract(self) -> None:
+        alan = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
+        analyst = (ROOT / "prompts" / "task-analyst.md").read_text(encoding="utf-8")
+        explorer = (ROOT / "prompts" / "repo-explorer.md").read_text(encoding="utf-8")
+        self.assertIn("Return one ready-to-use artifact", alan)
+        self.assertIn("Return a concise execution brief", analyst)
+        self.assertIn("Return a compact report", explorer)
+        self.assertNotIn("ready-to-use artifact", analyst)
+        self.assertNotIn("execution brief", explorer)
 
     def test_alan_wake_consults_official_destination_references(self) -> None:
         prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
@@ -455,8 +522,8 @@ class Package(unittest.TestCase):
         self.assertNotIn("Slack MCP draft/send tools", prompt)
         self.assertIn("named link", normalized)
         self.assertIn("never invent a URL", normalized)
-        self.assertIn("bold headline", normalized)
-        self.assertIn("identifier as the label", normalized)
+        self.assertIn("lead with the current state, result, or request", normalized)
+        self.assertIn("Use verified, descriptive link labels", normalized)
 
     def test_alan_wake_is_a_terminal_writer(self) -> None:
         prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
