@@ -500,6 +500,9 @@ class Package(unittest.TestCase):
         self.assertIn("Named link", normalized)
         self.assertIn("Do not write `label: URL`", normalized)
         self.assertIn("Jenkins", normalized)
+        self.assertIn("do not repeat its URL or add a second link", normalized)
+        self.assertIn("Missing link metadata is not an essential gap", normalized)
+        self.assertIn("Do not ask for link metadata", normalized)
 
     def test_each_specialist_has_one_terminal_contract(self) -> None:
         alan = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")

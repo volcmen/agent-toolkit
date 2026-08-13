@@ -9,6 +9,7 @@
       "expectations": [
         "Uses the native clickable !123 reference",
         "Does not append or expose the raw URL",
+        "Does not add a second link or a Needs from you section",
         "Does not change the merge request identifier"
       ]
     },
@@ -62,6 +63,7 @@
       "expected_output": "Deployment status is in Jenkins build #482.",
       "expectations": [
         "Keeps the exact bare identifier",
+        "Does not add a Needs from you section for optional link metadata",
         "Does not invent a Jenkins host, job path, or URL"
       ]
     },
