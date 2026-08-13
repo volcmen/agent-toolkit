@@ -3,7 +3,7 @@
   "agents": [
     {
       "id": "controller",
-      "description": "Default Fable main-thread technical lead for repository work. Turns rough intent into a grounded outcome, coordinates specialized workers, integrates changes, and delivers verified results. Run as the main agent; never delegate to controller as a subagent.",
+      "description": "Main-thread Fable technical lead for repository work. Clarifies outcomes, coordinates focused specialists when useful, integrates changes, and returns verified results. Run as the primary agent; never dispatch it as a worker.",
       "prompt": "prompts/controller.md",
       "claude": {
         "model": "fable",
@@ -12,16 +12,17 @@
     },
     {
       "id": "alan-wake",
-      "description": "Use automatically whenever a workplace or developer-facing prose artifact must be written, rewritten, shortened, polished, summarized, or formatted. Covers Slack, Jira, pull or merge requests, review comments, emails, technical documentation, status updates, release notes, changelogs, decisions, requests, and handoffs. Produces the final draft; never implements code or publishes externally.",
+      "description": "Final-draft specialist for developer and workplace writing. Use for Slack, issues, PR/MR text, reviews, email, docs, release notes, status updates, decisions, requests, and handoffs. Preserves facts, matches destination formatting, and returns ready-to-use prose. Never implements or publishes.",
       "prompt": "prompts/alan-wake.md",
       "claude": {
-        "model": "sonnet",
+        "model": "opus",
         "effort": "medium",
-        "maxTurns": 8,
+        "maxTurns": 12,
         "tools": [
           "Read",
           "Grep",
           "Glob",
+          "ToolSearch",
           "WebSearch",
           "WebFetch"
         ],
@@ -40,7 +41,7 @@
     },
     {
       "id": "repo-explorer",
-      "description": "Use proactively for quick, medium, or very thorough read-only repository research, file and symbol discovery, architecture analysis, dependency tracing, behavior analysis, and implementation-context gathering. Answers one bounded question and never modifies files.",
+      "description": "Read-only repository explorer for one bounded question: file and symbol discovery, behavior and dependency tracing, architecture, tests, or implementation context. Supports quick, medium, and very thorough depth. Never edits.",
       "prompt": "prompts/repo-explorer.md",
       "claude": {
         "name": "Explore",
@@ -67,7 +68,7 @@
     },
     {
       "id": "task-analyst",
-      "description": "Use proactively before planning or implementation when a request is vague, symptom-based, contradictory, technically uncertain, risky, or proposes a solution without establishing the underlying problem. Produces a grounded execution brief and never modifies files.",
+      "description": "Read-only task shaper for vague, symptom-based, conflicting, risky, or solution-first requests. Establishes evidence, scope, acceptance criteria, and the one decision needed before work. Never edits.",
       "prompt": "prompts/task-analyst.md",
       "claude": {
         "model": "sonnet",

@@ -226,23 +226,19 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
             self.assertIn("claude_code_subagent_model", text, relative_path)
             self.assertIn("unset", text, relative_path)
 
-    def test_specialist_contracts_override_the_generic_packet(self) -> None:
+    def test_specialists_have_distinct_terminal_contracts(self) -> None:
         for relative_path in self.DETAILED_SURFACES:
             text = self.surface(relative_path)
             self.assertIn("execution brief", text, relative_path)
             self.assertIn("compact report", text, relative_path)
             self.assertIn("ready-to-use artifact", text, relative_path)
-            self.assertIn(
-                "request the generic packet from any worker without a stronger "
-                "terminal contract",
-                text,
-                relative_path,
-            )
+            self.assertNotIn("generic packet", text, relative_path)
 
-    def test_economics_never_overrides_the_mandatory_prose_route(self) -> None:
-        for relative_path in ("prompts/controller.md", "policy/codex-global.md"):
-            text = self.surface(relative_path)
-            self.assertIn("never overrides a mandatory route", text, relative_path)
+    def test_controller_keeps_the_mandatory_prose_route(self) -> None:
+        text = self.surface("prompts/controller.md")
+        self.assertIn("automatically delegate its final draft", text)
+        self.assertIn("`alan-wake` on opus", text)
+        self.assertIn("drafting never authorizes sending or publishing", text)
 
     def test_codex_contract_mirrors_the_claude_delegation_rules(self) -> None:
         text = self.surface("policy/codex-global.md")
@@ -528,7 +524,10 @@ class Package(unittest.TestCase):
     def test_alan_wake_is_a_terminal_writer(self) -> None:
         prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
         policy = (ROOT / "policy" / "codex-global.md").read_text(encoding="utf-8")
-        self.assertIn("not spawn, delegate to, or ask for another writing agent", prompt)
+        normalized = " ".join(prompt.split())
+        self.assertIn(
+            "not spawn, delegate to, or ask for another writing agent", normalized
+        )
         self.assertIn("already `alan_wake`", policy)
 
     def test_check_command_runs_unit_suite(self) -> None:

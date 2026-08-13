@@ -169,7 +169,9 @@ def package_problems() -> list[str]:
         )
     if by_id.get("controller", {}).get("claude", {}).get("model") != "fable":
         problems.append("Claude controller must use fable")
-    for agent_id in ("alan-wake", "repo-explorer", "task-analyst"):
+    if by_id.get("alan-wake", {}).get("claude", {}).get("model") != "opus":
+        problems.append("Claude alan-wake must use opus")
+    for agent_id in ("repo-explorer", "task-analyst"):
         if by_id.get(agent_id, {}).get("claude", {}).get("model") != "sonnet":
             problems.append(f"Claude {agent_id} must use sonnet")
 

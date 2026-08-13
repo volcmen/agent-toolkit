@@ -16,8 +16,8 @@ Claude agent MD   Codex profile + agent TOML
 ~/.claude/agents/ source adapters only
       |            |
       v            v
-Fable controller  GPT-5.6 Sol controller
-Sonnet workers    GPT-5.6 Sol/Terra workers
+Fable controller        GPT-5.6 Sol controller
+Sonnet/Opus specialists GPT-5.6 Sol/Terra specialists
 ```
 
 `agents.json` and `prompts/` render Claude Markdown into `claude/agents/`.
@@ -43,7 +43,8 @@ It does not install marketplace plugins or modify Codex configuration.
 
 ## Writing route
 
-Alan Wake is a draft-only specialist. The primary controller:
+Alan Wake is a draft-only Opus specialist at medium effort. The primary
+controller:
 
 1. establishes the artifact, audience, destination format, and desired action;
 2. gathers authoritative facts and verification evidence;

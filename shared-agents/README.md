@@ -11,7 +11,7 @@ plugin marketplace.
 | Controller | Fable `controller` (medium effort) |
 | Task analyst | Sonnet `task-analyst` |
 | Repository explorer | Sonnet `Explore` |
-| Writing specialist | Sonnet `alan-wake` |
+| Writing specialist | Opus `alan-wake` (medium effort) |
 
 Claude Code loads the copied user agents from `~/.claude/agents/`. `Explore.md`
 intentionally overrides Claude Code's built-in Explore agent and pins it to
@@ -20,8 +20,8 @@ Sonnet.
 The writing route is automatic for requested Slack messages, Jira text, PR/MR
 titles and descriptions, review comments, emails, docs, release notes, status
 updates, decisions, requests, and handoffs. The controller verifies the facts
-before delegation and validates the final draft afterward. Ordinary
-conversation does not use Alan Wake.
+before delegation and validates the final draft afterward. Alan Wake remains
+read-only and never publishes. Ordinary conversation does not use it.
 
 ## Source of truth
 

@@ -1,12 +1,17 @@
 # Official sources
 
-Standalone design verified locally with Claude Code 2.1.227 on 2026-08-11.
+Standalone design verified locally with Claude Code 2.1.231 on 2026-08-13.
 
 - [Claude Code: create custom subagents](https://code.claude.com/docs/en/sub-agents)
   — the current source for user-agent locations, precedence, frontmatter,
   models, and file watching.
 - [Claude Code: model configuration](https://code.claude.com/docs/en/model-config)
   — current Fable, Sonnet, Opus, and Haiku aliases and effort behavior.
+- [Claude Code: best practices](https://code.claude.com/docs/en/best-practices)
+  — focused context, clear tasks, bounded subagent research, and verifiable
+  outcomes.
+- [Claude Code: memory and effective instructions](https://code.claude.com/docs/en/memory)
+  — concise, specific, structured instructions and current loading behavior.
 - [Claude Code: cross-session messaging](https://code.claude.com/docs/en/cross-session-messaging)
   — `ListAgents`/`SendMessage` between local sessions, inbound controls
   (`crossSessionInbound`, `isolatePeerMachines`), consent boundaries, and
@@ -20,6 +25,14 @@ Standalone design verified locally with Claude Code 2.1.227 on 2026-08-11.
   GPT-5.6 model-routing guidance.
 - [Codex: configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
   — global model, reasoning, `developer_instructions`, and `[agents]` settings.
+- [Anthropic: prompting best practices](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices)
+  — clear roles, direct instructions, relevant context, and examples.
+- [Google: short sentences](https://developers.google.com/tech-writing/one/short-sentences)
+  — one main idea per sentence and removal of unnecessary words.
+- [Google: active voice](https://developers.google.com/tech-writing/one/active-voice)
+  — direct actor-and-action phrasing for clear technical prose.
+- [Google: lists and tables](https://developers.google.com/tech-writing/one/lists-and-tables)
+  — parallel lists, ordered steps, and concise comparison tables.
 
 ## Claude user-agent contract
 
