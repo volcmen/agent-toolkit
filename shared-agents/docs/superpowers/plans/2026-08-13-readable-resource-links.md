@@ -211,15 +211,24 @@ python3.14 -m unittest \
 
 Expected: PASS.
 
-- [ ] **Step 5: Run the full shared-agents unit suite**
+- [ ] **Step 5: Run the complete Alan Wake contract group**
 
 Run:
 
 ```bash
-python3 -m unittest discover -s shared-agents/tests -v
+cd shared-agents
+python3.14 -m unittest \
+  tests.test_shared_agents.Package.test_alan_wake_uses_judgment_not_rigid_prose_limits \
+  tests.test_shared_agents.Package.test_alan_wake_link_evals_cover_resource_contract \
+  tests.test_shared_agents.Package.test_alan_wake_formats_verified_resource_links \
+  tests.test_shared_agents.Package.test_alan_wake_consults_official_destination_references \
+  tests.test_shared_agents.Package.test_alan_wake_uses_destination_native_format_contracts \
+  tests.test_shared_agents.Package.test_alan_wake_writes_destination_native_slack_mrkdwn \
+  tests.test_shared_agents.Package.test_alan_wake_is_a_terminal_writer -v
 ```
 
-Expected: all tests pass with no failures or errors.
+Expected: all Alan Wake contract tests pass. The full suite follows rendering in
+Task 3 because it intentionally fails on generated-file drift.
 
 - [ ] **Step 6: Commit the canonical behavior**
 
@@ -264,7 +273,17 @@ rg -n '^model: opus$|^effort: medium$|^disallowedTools:' \
 Expected: the generated prompt changes only; Claude remains Opus, medium, and
 read-only.
 
-- [ ] **Step 3: Commit generated adapters**
+- [ ] **Step 3: Run the full shared-agents unit suite**
+
+Run:
+
+```bash
+python3 -m unittest discover -s shared-agents/tests -v
+```
+
+Expected: all tests pass with no failures or errors.
+
+- [ ] **Step 4: Commit generated adapters**
 
 ```bash
 git add shared-agents/claude/agents/alan-wake.md \
@@ -272,7 +291,7 @@ git add shared-agents/claude/agents/alan-wake.md \
 git commit -m "build(shared-agents): render readable links"
 ```
 
-- [ ] **Step 4: Install the live Claude agents**
+- [ ] **Step 5: Install the live Claude agents**
 
 Run:
 
