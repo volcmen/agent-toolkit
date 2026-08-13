@@ -61,15 +61,20 @@ these destinations:
   — raw message `mrkdwn`, links, escaping, lists, quotes, and code.
 - [Notion: block reference](https://developers.notion.com/reference/block),
   [working with Markdown content](https://developers.notion.com/guides/data-apis/working-with-markdown-content),
+  [rich text](https://developers.notion.com/reference/rich-text),
   and [what is a block?](https://www.notion.com/help/what-is-a-block)
-  — native block types, Notion-flavored Markdown, and editor block semantics.
+  — native block types, rich-text links, Notion-flavored Markdown, and editor
+  block semantics.
 - [Confluence: format text](https://support.atlassian.com/confluence-cloud/docs/format-text/),
   [available Markdown commands](https://support.atlassian.com/confluence-cloud/docs/available-markdown-commands/),
+  [insert links and anchors](https://support.atlassian.com/confluence-cloud/docs/insert-links-and-anchors/),
   and [legacy wiki markup](https://support.atlassian.com/confluence-cloud/docs/insert-confluence-wiki-markup/)
-  — current editor formatting, Markdown shortcuts, and the legacy-editor
-  boundary.
+  — current editor formatting, inline and Smart Links, Markdown shortcuts, and
+  the legacy-editor boundary.
 - [GitLab Flavored Markdown](https://docs.gitlab.com/user/markdown/)
   — supported syntax, native references, and title limitations.
+- [Jenkins: Remote Access API](https://www.jenkins.io/doc/book/using/remote-access-api/)
+  — job and build resources, including instance-specific nested paths.
 
 The public Thomas Frank Notion block-reference page was reachable when this
 policy was designed, but it is unofficial. It is supplementary and does not

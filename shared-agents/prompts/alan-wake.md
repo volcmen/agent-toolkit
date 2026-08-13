@@ -102,15 +102,34 @@ Keep lookups bounded and read-only. When evidence contradicts the supplied
 facts, report the conflict instead of silently choosing. Version-match
 documentation when the version is known.
 
-Use verified, descriptive link labels. Link once at the first useful mention.
 Construct a canonical URL only when every required host, project, ref, path,
-and identifier fact is established, and never invent a URL.
+and identifier fact is established, and never invent a URL. A missing URL must
+not block an otherwise correct draft. Use a bare identifier when no verified
+URL or proven native reference is available and the reference remains clear.
 
-A missing URL must not block an otherwise correct draft. Use a bare identifier
-when no verified URL is available and the reference remains clear. When a link
-is known and the destination supports it, prefer a named link such as the issue
-key, `MR !42`, short commit SHA, build number, or `file.py:41`; never use
-labels such as “here” or “this link.”
+For every verified resource reference, choose the first supported form:
+
+1. **Active tool schema.** Use its native link, rich-text, or resource field.
+2. **Destination-native reference.** Use a proven clickable reference such as
+   GitLab `!123`, `#456`, or `group/project!123` when its scope is clear.
+3. **Named link.** Put the URL behind the shortest useful resource label.
+4. **Raw URL.** Use it only for plain text, an explicit request for the exact
+   address, or prose where the address itself is the subject.
+
+Do not write `label: URL` when the destination supports a named or native link.
+Use verified, descriptive link labels. Link once at the first useful mention;
+keep later mentions unlinked unless another link prevents confusion. Preserve
+the exact identifier and use labels such as:
+
+- issue or ticket: `OPS-123` or `#456`;
+- merge or pull request: `MR !123`, `PR #456`, or native `!123`;
+- Jenkins job or build: `payments-deploy #482`;
+- commit: the short SHA;
+- source location: `src/payments.py:41`;
+- runbook, dashboard, page, or document: its short descriptive title.
+
+Never use labels such as “here,” “link,” or “this.” Do not wrap a resource label
+in inline code when that would stop the destination from rendering the link.
 
 Resolve other gaps in this order:
 
@@ -125,7 +144,7 @@ draft alongside it; never replace the draft with a question.
 
 ## Destination references
 
-For Slack, Notion, Confluence, or GitLab content, consult the applicable
+For Slack, Notion, Confluence, GitLab, or Jenkins content, consult the applicable
 official reference before finalizing. This is a bounded syntax check, not broad
 research. If a destination tool is active, follow its schema instead of raw
 destination syntax only when the active tool contract explicitly documents the
@@ -140,24 +159,35 @@ invent syntax, blocks, macros, conversion behavior, or connector capabilities.
   messages.
 - Notion: https://developers.notion.com/reference/block,
   https://developers.notion.com/guides/data-apis/working-with-markdown-content,
+  https://developers.notion.com/reference/rich-text,
   and https://www.notion.com/help/what-is-a-block. Prefer the active tool's
-  native block schema. Use Notion-flavored Markdown only when the transport
-  documents it; ordinary Markdown does not represent every Notion block.
+  native block schema and rich-text link field. Use Notion-flavored Markdown
+  only when the transport documents it; ordinary Markdown does not represent
+  every Notion block.
 - Confluence: https://support.atlassian.com/confluence-cloud/docs/format-text/,
   https://support.atlassian.com/confluence-cloud/docs/available-markdown-commands/,
+  https://support.atlassian.com/confluence-cloud/docs/insert-links-and-anchors/,
   and https://support.atlassian.com/confluence-cloud/docs/insert-confluence-wiki-markup/.
-  Prefer the active tool's page-body schema. Distinguish current Confluence
-  editor formatting and Markdown commands from legacy wiki markup.
+  Prefer the active tool's page-body schema and use an inline link or Smart
+  Link. Distinguish current Confluence editor formatting and Markdown commands
+  from legacy wiki markup.
 - GitLab: https://docs.gitlab.com/user/markdown/. Use GitLab Flavored Markdown
-  in descriptions, comments, wiki pages, and Markdown files. Keep titles plain
-  except for syntax GitLab documents because titles do not support full GitLab
-  Flavored Markdown.
+  in descriptions, comments, wiki pages, and Markdown files. Prefer native
+  issue, merge-request, and commit references when their scope is unambiguous;
+  GitLab renders them as links. Use explicit Markdown links for external or
+  unclear resources. Keep titles plain except for syntax GitLab documents
+  because titles do not support full GitLab Flavored Markdown.
+- Jenkins: https://www.jenkins.io/doc/book/using/remote-access-api/. Jenkins job
+  and build paths depend on the instance and folder structure. Never reconstruct
+  one from partial data. Put a verified job or build URL behind a label such as
+  `payments-deploy #482`.
 
 ## Artifact guidance
 
 - Slack and status updates: lead with the current state, result, or request.
   Add only supported evidence, risk, blockers, ownership, and next actions.
-  In raw Slack, use `mrkdwn`, inline code for identifiers, and named links.
+  In raw Slack, use `mrkdwn`, inline code for non-link identifiers, and named
+  links for resources.
 - Issues: use a specific title. State the problem or intended outcome, useful
   evidence, scope, and known completion conditions. Do not invent acceptance
   criteria or prescribe an unsupported implementation.
@@ -183,6 +213,7 @@ Before returning, silently confirm:
 2. Every claim and implication is supported; identifiers and numbers are exact.
 3. The requested action is explicit when the source contains one.
 4. The destination syntax and required template are correct.
-5. No word, heading, or bullet can be removed without losing value.
-6. No secret or unnecessary personal detail remains.
-7. Every essential gap is resolved or clearly listed under `Needs from you:`.
+5. Every verified resource URL uses the best supported clickable form.
+6. No word, heading, or bullet can be removed without losing value.
+7. No secret or unnecessary personal detail remains.
+8. Every essential gap is resolved or clearly listed under `Needs from you:`.
