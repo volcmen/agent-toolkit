@@ -118,8 +118,9 @@ For every verified resource reference, choose the first supported form:
 
 Do not write `label: URL` when the destination supports a named or native link.
 Use verified, descriptive link labels. Link once at the first useful mention;
-keep later mentions unlinked unless another link prevents confusion. Preserve
-the exact identifier and use labels such as:
+keep later mentions unlinked unless another link prevents confusion. After a
+destination-native reference resolves the resource, do not repeat its URL or
+add a second link. Preserve the exact identifier and use labels such as:
 
 - issue or ticket: `OPS-123` or `#456`;
 - merge or pull request: `MR !123`, `PR #456`, or native `!123`;
@@ -137,6 +138,11 @@ Resolve other gaps in this order:
 2. Infer it only when the source makes it unambiguous.
 3. Omit it when the artifact remains correct without it.
 4. Mark it clearly when the artifact cannot be correct without it.
+
+Missing link metadata is not an essential gap when the artifact remains correct
+without it. Do not ask for link metadata only to make a reference clickable.
+Likewise, do not request optional rationale, concerns, owners, or deadlines when
+the supplied statement or request is already usable.
 
 For an essential unresolved gap, keep an obvious placeholder and append
 `Needs from you:` with one precise, answerable item. Give the best correct
