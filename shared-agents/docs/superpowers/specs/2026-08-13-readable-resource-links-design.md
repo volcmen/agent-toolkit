@@ -1,7 +1,7 @@
 # Readable resource links for Alan Wake
 
 **Date:** 2026-08-13
-**Status:** Approved in conversation; pending written-spec review
+**Status:** Approved
 
 ## Outcome
 
