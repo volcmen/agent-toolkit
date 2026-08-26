@@ -42,6 +42,7 @@ class MemoryOperationsContractTests(unittest.TestCase):
         *,
         dangling_target: str | None = None,
         symlinked_source: str | None = None,
+        nonregular_source: tuple[str, str] | None = None,
     ) -> tuple[subprocess.CompletedProcess[str], Path, Path, Path]:
         cache = root / "cache"
         qmd_dir = cache / "qmd"
@@ -68,6 +69,14 @@ class MemoryOperationsContractTests(unittest.TestCase):
             real_source = outside / f"saved-{symlinked_source}"
             real_source.write_text("outside-source", encoding="utf-8")
             source.symlink_to(real_source)
+        if nonregular_source:
+            source_name, kind = nonregular_source
+            source = backup / f"index.sqlite-{source_name}"
+            source.unlink()
+            if kind == "directory":
+                source.mkdir()
+            else:
+                os.mkfifo(source)
 
         env = {
             **os.environ,
@@ -273,6 +282,48 @@ class MemoryOperationsContractTests(unittest.TestCase):
                 "memory recovery omits saved-input symlink guard",
             ):
                 MODULE.validate_memory_operations(mutation)
+
+    def test_recovery_contract_requires_complete_saved_sidecar_predicates(
+        self,
+    ) -> None:
+        for sidecar in ("wal", "shm"):
+            with self.subTest(sidecar=sidecar), tempfile.TemporaryDirectory() as temporary:
+                mutation = Path(temporary) / "memory-operations.md"
+                full_guard = (
+                    f'if [ -L "$qmd_backup_dir/index.sqlite-{sidecar}" ] || '
+                    f'{{ [ -e "$qmd_backup_dir/index.sqlite-{sidecar}" ] && '
+                    f'[ ! -f "$qmd_backup_dir/index.sqlite-{sidecar}" ]; }}; then'
+                )
+                mutation.write_text(
+                    OPERATIONS.read_text(encoding="utf-8").replace(
+                        full_guard,
+                        f'if [ -L "$qmd_backup_dir/index.sqlite-{sidecar}" ] || false; then',
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(
+                    MODULE.ValidationError,
+                    "memory recovery omits complete saved-sidecar guard",
+                ):
+                    MODULE.validate_memory_operations(mutation)
+
+    def test_recovery_shell_rejects_directory_and_fifo_saved_sidecars(self) -> None:
+        cases = (("wal", "directory"), ("shm", "fifo"))
+        for sidecar, kind in cases:
+            with (
+                self.subTest(sidecar=sidecar, kind=kind),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                result, index, backup, _outside = self.run_recovery_shell(
+                    Path(temporary), nonregular_source=(sidecar, kind)
+                )
+
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                source = backup / f"index.sqlite-{sidecar}"
+                self.assertTrue(source.exists())
+                self.assertFalse(index.exists())
+                self.assertFalse(index.is_symlink())
 
     def test_installed_package_rejects_an_escaping_relative_link(self) -> None:
         with tempfile.TemporaryDirectory(dir=MODULE.PLUGIN / "skills") as temporary:

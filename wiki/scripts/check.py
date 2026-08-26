@@ -454,6 +454,18 @@ def validate_memory_operations(operations: Path) -> None:
         all(term in before_saved_restore for term in saved_input_guards),
         "memory recovery omits saved-input symlink guard",
     )
+    saved_sidecar_guards = (
+        'if [ -L "$qmd_backup_dir/index.sqlite-wal" ] || '
+        '{ [ -e "$qmd_backup_dir/index.sqlite-wal" ] && '
+        '[ ! -f "$qmd_backup_dir/index.sqlite-wal" ]; }; then',
+        'if [ -L "$qmd_backup_dir/index.sqlite-shm" ] || '
+        '{ [ -e "$qmd_backup_dir/index.sqlite-shm" ] && '
+        '[ ! -f "$qmd_backup_dir/index.sqlite-shm" ]; }; then',
+    )
+    require(
+        all(term in before_saved_restore for term in saved_sidecar_guards),
+        "memory recovery omits complete saved-sidecar guard",
+    )
     recovery_required_before_restore = (
         "exact upgraded plugin commit",
         "QMD 2.8.3",
@@ -465,8 +477,8 @@ def validate_memory_operations(operations: Path) -> None:
         'qmd_index="${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}/qmd/index.sqlite"',
         'qmd_backup_dir="/recorded/pre-rollback/backup-directory"',
         saved_input_guards[0],
-        saved_input_guards[1],
-        saved_input_guards[2],
+        saved_sidecar_guards[0],
+        saved_sidecar_guards[1],
         'if [ -L "$qmd_index" ] || { [ -e "$qmd_index" ] && [ ! -f "$qmd_index" ]; }; then',
         'if [ -L "${qmd_index}-wal" ] || { [ -e "${qmd_index}-wal" ] && [ ! -f "${qmd_index}-wal" ]; }; then',
         'if [ -L "${qmd_index}-shm" ] || { [ -e "${qmd_index}-shm" ] && [ ! -f "${qmd_index}-shm" ]; }; then',
