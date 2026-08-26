@@ -15,7 +15,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Union
 
 
 CONFIG_ENV = "OBSIDIAN_MEMORY_CONFIG"
@@ -894,26 +894,102 @@ def recall_provider_status(config: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def parse_frontmatter(path: Path, limit: int = 12_000) -> dict[str, str]:
-    """Parse the scalar fields used for recall governance without a YAML dependency."""
+FrontmatterValue = Union[str, list[str]]
+_FRONTMATTER_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(.*?)\s*$")
+_FRONTMATTER_LIST_ITEM_RE = re.compile(r"^[ \t]+-[ \t]+(.*?)\s*$")
+
+
+def _without_yaml_comment(value: str) -> str:
+    """Remove an unquoted YAML comment without interpreting YAML values."""
+    quote = ""
+    escaped = False
+    for index, character in enumerate(value):
+        if quote:
+            if quote == '"' and character == "\\" and not escaped:
+                escaped = True
+                continue
+            if character == quote and not escaped:
+                quote = ""
+            escaped = False
+            continue
+        if character in {"'", '"'}:
+            quote = character
+        elif character == "#":
+            return value[:index].rstrip()
+    return value.rstrip()
+
+
+def _frontmatter_scalar(value: str) -> str | None:
+    """Accept one inert scalar and reject YAML constructs this parser does not own."""
+    value = _without_yaml_comment(value).strip()
+    if not value:
+        return None
+    if value[0] in "&!*[{>|":
+        return None
+    if value[0] in {"'", '"'} and len(value) >= 2 and value[-1] == value[0]:
+        return value[1:-1]
+    return value
+
+
+def parse_frontmatter_document(
+    path: Path, limit: int = 12_000
+) -> dict[str, FrontmatterValue]:
+    """Read only bounded, inert scalar and list metadata from the first block."""
     text = read_text(path, limit)
     if not text.startswith("---"):
         return {}
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return {}
-    metadata: dict[str, str] = {}
-    for line in lines[1:]:
-        if line.strip() == "---":
-            break
-        match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*?)\s*$", line)
+    closing_index = next(
+        (index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"),
+        None,
+    )
+    if closing_index is None:
+        return {}
+
+    metadata: dict[str, FrontmatterValue] = {}
+    list_key: str | None = None
+    list_values: list[str] = []
+
+    def finish_list() -> None:
+        nonlocal list_key, list_values
+        if list_key is not None and list_values:
+            metadata[list_key] = list_values
+        list_key = None
+        list_values = []
+
+    for line in lines[1:closing_index]:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if list_key is not None:
+            item = _FRONTMATTER_LIST_ITEM_RE.match(line)
+            if item:
+                value = _frontmatter_scalar(item.group(1))
+                if value is not None:
+                    list_values.append(value)
+                continue
+            finish_list()
+
+        match = _FRONTMATTER_KEY_RE.match(line)
         if not match:
             continue
-        key, value = match.groups()
-        if value.startswith(("'", '"')) and value.endswith(value[:1]):
-            value = value[1:-1]
-        metadata[key] = value.strip()
+        key, raw_value = match.groups()
+        if not _without_yaml_comment(raw_value).strip():
+            list_key = key
+            continue
+        value = _frontmatter_scalar(raw_value)
+        if value is not None:
+            metadata[key] = value
+    finish_list()
     return metadata
+
+
+def parse_frontmatter(path: Path, limit: int = 12_000) -> dict[str, str]:
+    """Return scalar recall metadata without executing or depending on YAML."""
+    document = parse_frontmatter_document(path, limit)
+    return {key: value for key, value in document.items() if isinstance(value, str)}
 
 
 def qmd_segment_key(segment: str, *, is_file: bool) -> str:

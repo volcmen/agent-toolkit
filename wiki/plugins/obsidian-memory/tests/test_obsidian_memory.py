@@ -973,6 +973,134 @@ Prior: old unrelated outcome.
             self.assertEqual(results, [])
             self.assertEqual(filtered, 1)
 
+    def test_frontmatter_document_parses_bounded_scalar_and_list_values(self) -> None:
+        """Governance metadata accepts only first-block scalar/list values."""
+        with tempfile.TemporaryDirectory() as temp:
+            note = Path(temp) / "note.md"
+            note.write_text(
+                "---\n"
+                "memory_class: fact\n"
+                "status: verified\n"
+                "source:\n"
+                "  - https://example.test/primary\n"
+                "  - explicit user confirmation\n"
+                "verified_by: deterministic test\n"
+                "---\n"
+                "BODY MUST NOT ENTER METADATA\n"
+                "---\n"
+                "status: superseded\n"
+                "---\n",
+                encoding="utf-8",
+            )
+
+            metadata = MODULE.parse_frontmatter_document(note)
+
+        self.assertEqual(metadata["memory_class"], "fact")
+        self.assertEqual(metadata["status"], "verified")
+        self.assertEqual(
+            metadata["source"],
+            ["https://example.test/primary", "explicit user confirmation"],
+        )
+        self.assertEqual(metadata["verified_by"], "deterministic test")
+        self.assertNotIn("BODY MUST NOT ENTER METADATA", repr(metadata))
+
+    def test_frontmatter_document_removes_only_matching_outer_quotes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            note = Path(temp) / "quotes.md"
+            note.write_text(
+                "---\n"
+                "single: 'single value'\n"
+                'double: "double value"\n'
+                "unmatched: 'keep this double quote\"\n"
+                "source:\n"
+                "  - 'single source'\n"
+                '  - "double source"\n'
+                "---\n",
+                encoding="utf-8",
+            )
+
+            metadata = MODULE.parse_frontmatter_document(note)
+
+        self.assertEqual(metadata["single"], "single value")
+        self.assertEqual(metadata["double"], "double value")
+        self.assertEqual(metadata["unmatched"], "'keep this double quote\"")
+        self.assertEqual(metadata["source"], ["single source", "double source"])
+
+    def test_frontmatter_document_ignores_non_scalar_yaml_constructs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            note = Path(temp) / "untrusted.md"
+            note.write_text(
+                "---\n"
+                "# An untrusted YAML comment\n"
+                "safe: value # ignored inline comment\n"
+                "nested:\n"
+                "  child: ignored\n"
+                "folded: >\n"
+                "  this must not be read\n"
+                "anchored: &unsafe value\n"
+                "tagged: !unsafe value\n"
+                "alias: *unsafe\n"
+                "mapping: {key: value}\n"
+                "sequence: [value]\n"
+                "source:\n"
+                "  - allowed\n"
+                "  - !tagged ignored\n"
+                "  - {object: ignored}\n"
+                "---\n",
+                encoding="utf-8",
+            )
+
+            metadata = MODULE.parse_frontmatter_document(note)
+
+        self.assertEqual(metadata, {"safe": "value", "source": ["allowed"]})
+
+    def test_frontmatter_document_requires_a_complete_block_within_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            exact = Path(temp) / "exact.md"
+            exact_text = "---\nstatus: accepted\n---\n"
+            exact.write_text(exact_text, encoding="utf-8")
+            truncated = Path(temp) / "truncated.md"
+            truncated.write_text(exact_text + "x", encoding="utf-8")
+
+            exact_metadata = MODULE.parse_frontmatter_document(
+                exact, limit=len(exact_text)
+            )
+            truncated_metadata = MODULE.parse_frontmatter_document(
+                truncated, limit=len(exact_text)
+            )
+
+        self.assertEqual(exact_metadata, {"status": "accepted"})
+        self.assertEqual(truncated_metadata, {})
+
+    def test_scalar_frontmatter_wrapper_preserves_recall_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            note = Path(temp) / "legacy.md"
+            note.write_text(
+                "---\n"
+                "status: superseded\n"
+                "superseded_by: '[[current-decision]]'\n"
+                "valid_from: 2026-01-01\n"
+                "valid_until: 2026-12-31\n"
+                "source:\n"
+                "  - https://example.test/primary\n"
+                "---\n",
+                encoding="utf-8",
+            )
+
+            metadata = MODULE.parse_frontmatter(note)
+
+        self.assertEqual(
+            metadata,
+            {
+                "status": "superseded",
+                "superseded_by": "[[current-decision]]",
+                "valid_from": "2026-01-01",
+                "valid_until": "2026-12-31",
+            },
+        )
+        self.assertEqual(MODULE.memory_state(metadata), "stale")
+        self.assertEqual(MODULE.validity_warning(metadata), "")
+
     def test_supersession_follows_source_relative_chain_to_current_decision(self) -> None:
         """A sibling wikilink chain resolves relative to each predecessor."""
         with tempfile.TemporaryDirectory() as temp:
