@@ -897,6 +897,7 @@ def recall_provider_status(config: dict[str, Any]) -> dict[str, Any]:
 FrontmatterValue = Union[str, list[str]]
 _FRONTMATTER_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*):[ \t]*(.*?)\s*$")
 _FRONTMATTER_LIST_ITEM_RE = re.compile(r"^[ \t]+-[ \t]+(.*?)\s*$")
+_OBSIDIAN_WIKILINK_TOKEN_RE = re.compile(r"\[\[[^\[\]\r\n]+\]\]")
 
 
 def _without_yaml_comment(value: str) -> str:
@@ -926,7 +927,7 @@ def _frontmatter_scalar(value: str) -> str | None:
         return None
     if value[0] in {"'", '"'} and len(value) >= 2 and value[-1] == value[0]:
         return value[1:-1]
-    if value.startswith("[[") and value.endswith("]]"):
+    if _OBSIDIAN_WIKILINK_TOKEN_RE.fullmatch(value):
         return value
     if value[0] in "&!*[{>|" or value.startswith(("- ", "-\t", "? ", "?\t")):
         return None

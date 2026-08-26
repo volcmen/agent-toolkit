@@ -1045,6 +1045,27 @@ Prior: old unrelated outcome.
             metadata["source"], ["https://example.test/evidence#provenance"],
         )
 
+    def test_frontmatter_document_accepts_only_one_complete_wikilink_token(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            note = Path(temp) / "wikilinks.md"
+            valid_link = "[[note#heading|label]]"
+            note.write_text(
+                "---\n"
+                f"superseded_by: {valid_link}\n"
+                "source:\n"
+                f"  - {valid_link}\n"
+                "  - [[first], [second]]\n"
+                "  - [[]]\n"
+                "  - [[one]][[two]]\n"
+                "---\n",
+                encoding="utf-8",
+            )
+
+            metadata = MODULE.parse_frontmatter_document(note)
+
+        self.assertEqual(metadata["superseded_by"], valid_link)
+        self.assertEqual(metadata["source"], [valid_link])
+
     def test_frontmatter_document_ignores_non_scalar_yaml_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             note = Path(temp) / "untrusted.md"
