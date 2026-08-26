@@ -5,7 +5,7 @@ description: Use a configured Obsidian vault as durable, cross-session memory fo
 
 # Obsidian Memory
 
-Use the vault configured in `~/.config/obsidian-memory/config.json`. Resolve `~` and operate with absolute paths so the workflow works from any project directory.
+Use the vault configured in `~/.config/obsidian-memory/config.json`. Resolve `~` to an absolute path.
 
 ## Choose the operation
 
@@ -49,10 +49,10 @@ all three references above and follow the four-stage sequence in the evaluation
 reference. Run the requested read-only audit; refuse only automatic remediation
 or mutation.
 
-When QMD is enabled in local configuration, read
-[references/qmd-retrieval.md](references/qmd-retrieval.md) before using it.
-QMD is a local retrieval index over selected vault folders; Obsidian Markdown
-remains canonical.
+For QMD upgrade, installation, explicit maintenance, or rollback requests,
+read [references/memory-operations.md](references/memory-operations.md).
+For ordinary QMD retrieval, read
+[references/qmd-retrieval.md](references/qmd-retrieval.md).
 
 ## Work safely
 
@@ -88,7 +88,5 @@ After meaningful mutations:
 - For action-driving memories, check provenance, status, validity, and
   supersession metadata.
 - For promoted heuristics, record the evaluation evidence and rollback target.
-- Native recall is immediately fresh. When QMD is enabled, refresh its lexical
-  index after substantive writes; add incremental embeddings when semantic
-  freshness matters.
+- Native recall is immediately fresh; QMD maintenance is explicit.
 - Report what was persisted and where; do not claim a commit succeeded unless Git confirms it.

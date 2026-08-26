@@ -275,7 +275,8 @@ def validate_memory_policy() -> None:
     evaluation = skill_root / "references" / "evaluation.md"
     providers = skill_root / "references" / "recall-providers.md"
     qmd_retrieval = skill_root / "references" / "qmd-retrieval.md"
-    for path in (skill, governance, evaluation, providers, qmd_retrieval):
+    operations = skill_root / "references" / "memory-operations.md"
+    for path in (skill, governance, evaluation, providers, qmd_retrieval, operations):
         require(path.is_file(), f"missing memory reference: {path.relative_to(ROOT)}")
 
     skill_text = skill.read_text(encoding="utf-8")
@@ -283,11 +284,24 @@ def validate_memory_policy() -> None:
         "combined release gate",
         "four-stage sequence",
         "run the requested read-only audit",
+        "QMD upgrade, installation, explicit maintenance, or rollback",
+        "references/memory-operations.md",
     ):
         require(
-            term in skill_text.casefold(),
+            term.casefold() in skill_text.casefold(),
             f"SKILL.md: missing combined-flow contract: {term}",
         )
+
+    require(len(skill_text.split()) <= 700, "SKILL.md exceeds 700 words")
+    expected_frontmatter = """---
+name: obsidian-memory
+description: Use a configured Obsidian vault as durable, cross-session memory for Codex and Claude Code. Use when the user asks to remember, save, file, recall, or query knowledge; when work produces a durable decision, task, fact, design, daily update, or handoff context; or when prior project context from the shared vault would materially improve the current task.
+---
+"""
+    require(
+        skill_text.startswith(expected_frontmatter),
+        "SKILL.md frontmatter changed",
+    )
 
     policy = governance.read_text(encoding="utf-8")
     for term in (
@@ -312,24 +326,100 @@ def validate_memory_policy() -> None:
             f"architecture omits memory hardening contract: {term}",
         )
 
-    combined = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in (
-            ROOT / "README.md",
-            ROOT / "ARCHITECTURE.md",
-            providers,
-            qmd_retrieval,
+    validate_memory_operations(operations)
+    validate_skill_package_links(skill_root)
+    qmd_text = qmd_retrieval.read_text(encoding="utf-8").casefold()
+    for term in ("bun-owned", "install --force", "evaluate ... --json", "rollback"):
+        require(
+            term not in qmd_text,
+            f"qmd-retrieval.md must not contain rollout operations: {term}",
         )
+    validate_memory_research_and_evals(governance, evaluation, providers)
+
+
+def validate_memory_operations(operations: Path) -> None:
+    """Keep the installed skill's release procedure complete and ordered."""
+    text = operations.read_text(encoding="utf-8")
+    required_in_order = (
+        "## 1. Repository gates",
+        "python3 wiki/scripts/check.py",
+        "python3 scripts/plugins.py check",
+        "## 2. Bun-owned QMD 2.8.3",
+        "python3 bun-global-tools/sync.py apply",
+        "qmd --version",
+        "qmd status",
+        "qmd doctor",
+        "python3 bun-global-tools/sync.py check --deep",
+        "## 3. Post-integration plugin install",
+        "python3 scripts/plugins.py install --force",
+        "python3 scripts/plugins.py status",
+        "## 4. Pre-refresh read-only proof",
+        "providers --json",
+        "doctor --json",
+        "audit --json",
+        "evaluate path/to/private-recall-evals.json --json",
+        "## 5. Explicit derived-index maintenance",
+        "refresh-index --embed",
+        "## 6. Repeat proof",
+        "## 7. Derived-only rollback",
+        "QMD 2.5.3",
+        "prior plugin commit",
+        "python3 bun-global-tools/sync.py apply",
+        "python3 scripts/plugins.py install --force",
+        "refresh-index --embed",
+    )
+    cursor = -1
+    for term in required_in_order:
+        position = text.find(term, cursor + 1)
+        require(position >= 0, f"memory operations omits ordered contract: {term}")
+        cursor = position
+
+    for command in ("providers --json", "doctor --json", "audit --json"):
+        require(
+            text.count(command) >= 2,
+            f"memory operations must repeat post-maintenance proof: {command}",
+        )
+    require(
+        text.count("evaluate path/to/private-recall-evals.json --json") >= 2,
+        "memory operations must repeat post-maintenance private evaluation",
     )
     for term in (
-        "QMD 2.8.3",
         "local derived accelerator",
-        "explicit maintenance",
+        "Markdown/Git is the recovery authority",
         "no vault content is mirrored",
-        "refresh-index --embed",
+        "QMD HTTP/MCP",
+        "project-local configuration",
+        "external source paths",
+        "custom model URIs",
+        "Lifecycle hooks never run QMD model/index work, evaluator, or audit",
+        "without rewriting Markdown",
     ):
-        require(term in combined, f"memory operations documentation omits: {term}")
+        require(
+            term.casefold() in text.casefold(),
+            f"memory operations omits required boundary: {term}",
+        )
 
+
+def validate_skill_package_links(skill_root: Path) -> None:
+    """Installed skill Markdown may only link to assets installed with it."""
+    link_pattern = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
+    package_root = skill_root.resolve()
+    for document in sorted(skill_root.rglob("*.md")):
+        for target in link_pattern.findall(document.read_text(encoding="utf-8")):
+            reference = target.split("#", 1)[0].split(" ", 1)[0].strip()
+            if not reference or "://" in reference or reference.startswith("mailto:"):
+                continue
+            resolved = (document.parent / reference).resolve()
+            require(
+                resolved.is_relative_to(package_root) and resolved.exists(),
+                f"{document.relative_to(ROOT)}: link escapes installed skill package: {reference}",
+            )
+
+
+def validate_memory_research_and_evals(
+    governance: Path, evaluation: Path, providers: Path
+) -> None:
+    """Validate the existing memory research and evaluation contracts."""
     research = (ROOT / "docs" / "research" / "2026-08-01-agent-memory-systems.md").read_text(
         encoding="utf-8"
     )
