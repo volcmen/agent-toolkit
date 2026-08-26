@@ -104,10 +104,18 @@ installed QMD version/health, and configured versus active provider policy.
 strict `qmd` failures are errors.
 
 Reports contain counts plus at most 200 deterministic, fixed-code findings.
-They use vault-relative paths and never note bodies, snippets, frontmatter
-values, raw provider output, or machine paths. Human output escapes controls
-and caps each displayed path at 180 characters; JSON retains the exact
-vault-relative path within the finding bound.
+Note and traversal findings use vault-relative paths; configuration/provider
+findings use the fixed `configuration` locator rather than a file path. Reports
+never contain note bodies, snippets, frontmatter values, raw provider output,
+or machine paths. Human output escapes controls and caps each displayed
+locator at 180 characters; JSON retains the exact vault-relative note locator
+or fixed `configuration` locator within the finding bound.
+
+Configuration loading bounds the audit projection before scanning: at most 64
+recall roots, 64 QMD collection names, and 64 QMD root mappings; collection
+names are at most 120 characters and projected relative paths at most 1,000.
+Oversized local configuration fails closed with exit `2`. Findings remain
+capped at 200 regardless of the number of notes scanned.
 
 Exit `0` means no errors (warnings may remain), exit `1` means findings contain
 errors, and exit `2` means configuration prevented the audit. The command is

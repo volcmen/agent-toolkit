@@ -40,14 +40,22 @@ boundary as normal recall. It compares only safe vault-relative Markdown paths
 and emits bounded case IDs, requested/effective provider and mode, degradation,
 timing, token/stale counts, fixed failure reasons, and result paths. Queries,
 note bodies, snippets, tracebacks, and resolved fixture or vault paths do not
-enter its report.
+enter its report. Operator-authored IDs use the opaque portable grammar
+`[A-Za-z0-9][A-Za-z0-9._-]{0,119}`, are emitted verbatim, and therefore must be
+non-sensitive. Omitted `allow_degraded` is false. Runtime and repository checks
+share the 1,000,000-character fixture, 200-case, 20-path-per-array, and
+1,000-character path bounds.
 
 The manual `audit [--json]` command walks configured safe recall roots without
 following symlinks. It checks explicitly action-driving metadata, declared
 supersession routes, recall/commit/QMD root safety, and configured-versus-active
 provider health. Reports contain fixed, value-free findings and vault-relative
-paths; findings are capped at 200, while human path rendering escapes control
-characters and is capped at 180 characters.
+note/traversal paths; configuration/provider findings instead use the fixed
+`configuration` locator. Findings are capped at 200, while human locator
+rendering escapes control characters and is capped at 180 characters. Before
+projection, configuration is limited to 64 recall roots, QMD collections, and
+QMD mappings, 120-character collection names, and 1,000-character relative
+paths.
 
 These commands are read-only observers of the canonical and derived layers.
 They never auto-fix, rename, delete, refresh, embed, or commit, and neither is

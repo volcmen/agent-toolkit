@@ -211,6 +211,62 @@ Prior: old unrelated outcome.
                     with self.assertRaises(MODULE.ConfigurationError):
                         MODULE.load_config()
 
+    def test_audit_projected_configuration_fields_are_bounded(self) -> None:
+        """Catches configuration that can make audit roots or providers unbounded."""
+        collection_names = [f"collection-{index}" for index in range(65)]
+        collection_roots = {
+            name: f"wiki/root-{index}"
+            for index, name in enumerate(collection_names)
+        }
+        cases = (
+            (
+                {"recall_roots": [f"wiki/root-{index}" for index in range(65)]},
+                "recall_roots",
+            ),
+            ({"recall_roots": ["wiki/" + "r" * 1000]}, "recall_roots"),
+            (
+                {
+                    "qmd_collections": collection_names,
+                    "qmd_collection_roots": collection_roots,
+                },
+                "qmd_collections",
+            ),
+            (
+                {
+                    "qmd_collections": ["c" * 121],
+                    "qmd_collection_roots": {"c" * 121: "wiki"},
+                },
+                "qmd_collections",
+            ),
+            (
+                {
+                    "qmd_collections": ["collection-0"],
+                    "qmd_collection_roots": collection_roots,
+                },
+                "qmd_collection_roots",
+            ),
+            (
+                {
+                    "qmd_collections": ["collection-0"],
+                    "qmd_collection_roots": {
+                        "collection-0": "wiki/" + "r" * 1000
+                    },
+                },
+                "qmd_collection_roots",
+            ),
+        )
+        for overrides, field in cases:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                vault = self.make_vault(root)
+                config_path = self.write_config(root, vault, **overrides)
+                with mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ):
+                    with self.assertRaises(MODULE.ConfigurationError) as raised:
+                        MODULE.load_config()
+                self.assertIn(field, str(raised.exception))
+
     def test_recall_payload_is_the_cli_contract_without_printing(self) -> None:
         """Catches a payload helper that emits CLI output instead of returning it."""
         with tempfile.TemporaryDirectory() as temp:
@@ -2990,6 +3046,62 @@ Prior: old unrelated outcome.
             with self.assertRaises(AttributeError):
                 case.id = "changed"  # type: ignore[misc]
 
+    def test_recall_eval_case_ids_use_opaque_label_grammar(self) -> None:
+        """Catches paths or free-form text in IDs that reports emit verbatim."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            fixture = root / "recall-evals.json"
+            base_case = {
+                "query": "needle",
+                "mode": "fast",
+                "provider": "native",
+                "expected_paths": [],
+                "any_of_paths": [],
+                "forbidden_paths": [],
+            }
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                fixture.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "cases": [
+                                {"id": "release.case-1_alpha", **base_case}
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                cases = MODULE.load_recall_eval_suite(fixture, config)
+                self.assertEqual(cases[0].id, "release.case-1_alpha")
+
+                for case_id in (
+                    "/private/suite.json",
+                    "C:\\Users\\private\\suite.json",
+                    "projects/private.md",
+                    "../private",
+                    "operator private label",
+                ):
+                    with self.subTest(case_id=case_id):
+                        fixture.write_text(
+                            json.dumps(
+                                {
+                                    "schema_version": 1,
+                                    "cases": [{"id": case_id, **base_case}],
+                                }
+                            ),
+                            encoding="utf-8",
+                        )
+                        with self.assertRaises(MODULE.EvaluationError) as raised:
+                            MODULE.load_recall_eval_suite(fixture, config)
+                        self.assertEqual(
+                            str(raised.exception), "case 1 field 'id' is invalid"
+                        )
+
     def test_recall_eval_fixture_rejects_every_malformed_schema_boundary(
         self,
     ) -> None:
@@ -3051,6 +3163,8 @@ Prior: old unrelated outcome.
                 ("paths-type", {"schema_version": 1, "cases": [case_with(expected_paths="projects/alpha/current.md")]}),
                 ("path-item-type", {"schema_version": 1, "cases": [case_with(expected_paths=[7])]}),
                 ("path-empty", {"schema_version": 1, "cases": [case_with(expected_paths=[""])]}),
+                ("path-count", {"schema_version": 1, "cases": [case_with(expected_paths=[f"projects/alpha/{index}.md" for index in range(21)])]}),
+                ("path-length", {"schema_version": 1, "cases": [case_with(expected_paths=["projects/alpha/" + "p" * 1000 + ".md"])]}),
                 ("path-duplicate", {"schema_version": 1, "cases": [case_with(expected_paths=["projects/alpha/current.md", "projects/alpha/current.md"])]}),
                 ("path-extension", {"schema_version": 1, "cases": [case_with(expected_paths=["projects/alpha/current.txt"])]}),
                 ("path-absolute", {"schema_version": 1, "cases": [case_with(expected_paths=[str(root / "secret.md")])]}),

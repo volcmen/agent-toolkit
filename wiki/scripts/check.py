@@ -18,17 +18,37 @@ PLUGIN = ROOT / "plugins" / "obsidian-memory"
 # One marketplace for the whole workspace lives at the repository root; this
 # project only owns its own plugin directory.
 WORKSPACE = ROOT.parent
+# Keep these dependency-free bounds mirrored in the plugin runtime.
+MAX_PROJECTED_CONFIG_ENTRIES = 64
+MAX_PROJECTED_CONFIG_NAME_CHARS = 120
+MAX_PROJECTED_CONFIG_PATH_CHARS = 1_000
+MAX_RECALL_EVAL_CASES = 200
+MAX_RECALL_EVAL_FIXTURE_CHARS = 1_000_000
+MAX_RECALL_EVAL_PATHS = 20
+MAX_RECALL_EVAL_PATH_CHARS = 1_000
+RECALL_EVAL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}")
 
 
 class ValidationError(RuntimeError):
     """Raised when a repository invariant is broken."""
 
 
-def load_json(relative: str, base: Path = None) -> Any:
+def load_json(
+    relative: str, base: Path = None, *, max_chars: int | None = None
+) -> Any:
     path = (base or ROOT) / relative
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        if max_chars is None:
+            text = path.read_text(encoding="utf-8")
+        else:
+            with path.open(encoding="utf-8") as handle:
+                text = handle.read(max_chars + 1)
+            if len(text) > max_chars:
+                raise ValidationError(
+                    f"{relative}: JSON exceeds {max_chars} characters"
+                )
+        return json.loads(text)
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ValidationError(f"{relative}: invalid JSON: {exc}") from exc
 
 
@@ -39,13 +59,26 @@ def require(condition: bool, message: str) -> None:
 
 def safe_indexed_path(root: Any) -> bool:
     """Mirror the runtime recall boundary, including its case-insensitivity."""
-    if not isinstance(root, str) or not root.strip():
+    if (
+        not isinstance(root, str)
+        or not root.strip()
+        or len(root) > MAX_PROJECTED_CONFIG_PATH_CHARS
+    ):
         return False
-    parts = Path(root).parts
-    if not parts or Path(root).is_absolute() or ".." in parts:
+    relative = PurePosixPath(root)
+    parts = relative.parts
+    if not parts or relative.is_absolute() or ".." in parts:
         return False
     folded = [part.casefold() for part in parts]
-    return not any(part in {".obsidian", ".raw"} for part in folded) and folded[0] != "inbox"
+    return not any(part.startswith(".") for part in folded) and folded[0] != "inbox"
+
+
+def safe_collection_name(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) <= MAX_PROJECTED_CONFIG_NAME_CHARS
+        and RECALL_EVAL_ID_RE.fullmatch(value) is not None
+    )
 
 
 def safe_recall_eval_path(value: Any, *, markdown: bool) -> bool:
@@ -53,6 +86,7 @@ def safe_recall_eval_path(value: Any, *, markdown: bool) -> bool:
     if (
         not isinstance(value, str)
         or not value
+        or len(value) > MAX_RECALL_EVAL_PATH_CHARS
         or value != value.strip()
         or "\\" in value
         or "\x00" in value
@@ -109,28 +143,50 @@ def validate_manifests() -> None:
         require(entry.get("version") == codex.get("version"), f"{label} marketplace version drift")
 
 
-def validate_hooks() -> None:
-    document = load_json("plugins/obsidian-memory/hooks/hooks.json")
+def validate_hook_document(document: Any) -> None:
+    require(isinstance(document, dict), "hooks.json must contain an object")
     hooks = document.get("hooks")
     require(isinstance(hooks, dict), "hooks.json must contain a hooks object")
     require(set(hooks) == {"SessionStart", "Stop"}, "unexpected lifecycle hook events")
-    commands: list[str] = []
+    expected_subcommands = {"SessionStart": "session-start", "Stop": "stop"}
     for event, groups in hooks.items():
         require(isinstance(groups, list) and groups, f"{event} must define hook groups")
         for group in groups:
+            require(isinstance(group, dict), f"{event} hook group must be an object")
             handlers = group.get("hooks")
             require(isinstance(handlers, list) and handlers, f"{event} has no handlers")
             for handler in handlers:
+                require(isinstance(handler, dict), f"{event} handler must be an object")
                 require(handler.get("type") == "command", f"{event} handler is not command")
                 require(
                     isinstance(handler.get("timeout"), int) and handler["timeout"] > 0,
                     f"{event} handler timeout must be positive",
                 )
-                commands.append(str(handler.get("command", "")))
-    require(
-        all("scripts/obsidian_memory.py" in command for command in commands),
-        "hook command does not target the canonical lifecycle script",
-    )
+                for field in ("command", "commandWindows"):
+                    command = handler.get(field)
+                    require(
+                        isinstance(command, str) and bool(command.strip()),
+                        f"{event} {field} must be a non-empty command",
+                    )
+                    normalized = command.replace("\\", "/")
+                    require(
+                        "scripts/obsidian_memory.py" in normalized,
+                        f"{event} {field} does not target the canonical lifecycle script",
+                    )
+                    require(
+                        command.strip().split()[-1]
+                        == expected_subcommands[event],
+                        f"{event} {field} must invoke {expected_subcommands[event]}",
+                    )
+                    lowered = command.casefold()
+                    require(
+                        "evaluate" not in lowered and "audit" not in lowered,
+                        f"{event} {field} must not invoke manual evaluate or audit flows",
+                    )
+
+
+def validate_hooks() -> None:
+    validate_hook_document(load_json("plugins/obsidian-memory/hooks/hooks.json"))
 
 
 def validate_config_example() -> None:
@@ -164,6 +220,7 @@ def validate_config_example() -> None:
     require(
         isinstance(recall_roots, list)
         and recall_roots
+        and len(recall_roots) <= MAX_PROJECTED_CONFIG_ENTRIES
         and all(safe_indexed_path(root) for root in recall_roots),
         "recall_roots must contain safe indexed vault paths",
     )
@@ -182,7 +239,8 @@ def validate_config_example() -> None:
     require(
         isinstance(collections, list)
         and collections
-        and all(isinstance(name, str) and name for name in collections),
+        and len(collections) <= MAX_PROJECTED_CONFIG_ENTRIES
+        and all(safe_collection_name(name) for name in collections),
         "qmd_collections must contain collection names",
     )
     require(
@@ -192,7 +250,9 @@ def validate_config_example() -> None:
     roots = config.get("qmd_collection_roots")
     require(
         isinstance(roots, dict)
+        and len(roots) <= MAX_PROJECTED_CONFIG_ENTRIES
         and set(collections) <= set(roots)
+        and all(safe_collection_name(name) for name in roots)
         and all(safe_indexed_path(root) for root in roots.values()),
         "qmd_collection_roots must map collections to safe indexed vault paths",
     )
@@ -283,7 +343,10 @@ def validate_memory_policy() -> None:
         "memory eval suite is missing a required category",
     )
 
-    recall_evals = load_json("plugins/obsidian-memory/evals/recall-evals.example.json")
+    recall_evals = load_json(
+        "plugins/obsidian-memory/evals/recall-evals.example.json",
+        max_chars=MAX_RECALL_EVAL_FIXTURE_CHARS,
+    )
     require(
         isinstance(recall_evals, dict)
         and set(recall_evals) == {"schema_version", "cases"},
@@ -296,7 +359,8 @@ def validate_memory_policy() -> None:
     )
     recall_cases = recall_evals["cases"]
     require(
-        isinstance(recall_cases, list) and 1 <= len(recall_cases) <= 200,
+        isinstance(recall_cases, list)
+        and 1 <= len(recall_cases) <= MAX_RECALL_EVAL_CASES,
         "recall eval example must contain 1 to 200 cases",
     )
     required_case_keys = {
@@ -326,15 +390,10 @@ def validate_memory_policy() -> None:
             f"{label} has missing or unknown keys",
         )
         raw_case_id = case.get("id")
-        case_id = raw_case_id.strip() if isinstance(raw_case_id, str) else ""
+        case_id = raw_case_id if isinstance(raw_case_id, str) else ""
         require(
-            bool(case_id)
-            and len(case_id) <= 120
-            and not any(
-                ord(character) < 32 or ord(character) == 127
-                for character in case_id
-            ),
-            f"{label} id must be a bounded non-empty string",
+            RECALL_EVAL_ID_RE.fullmatch(case_id) is not None,
+            f"{label} id must be an opaque portable label",
         )
         require(case_id not in recall_ids, "recall eval ids must be unique")
         recall_ids.add(case_id)
@@ -384,7 +443,10 @@ def validate_memory_policy() -> None:
         )
         for field in ("expected_paths", "any_of_paths", "forbidden_paths"):
             paths = case.get(field)
-            require(isinstance(paths, list), f"{label}: {field} must be an array")
+            require(
+                isinstance(paths, list) and len(paths) <= MAX_RECALL_EVAL_PATHS,
+                f"{label}: {field} must be a bounded array",
+            )
             require(
                 all(safe_recall_eval_path(path, markdown=True) for path in paths),
                 f"{label}: {field} must contain safe vault-relative Markdown paths",
@@ -408,8 +470,15 @@ def validate_memory_policy() -> None:
             "retrieval contract",
             "does not grade model answers",
             "Combined release-gate sequence",
+            "[A-Za-z0-9][A-Za-z0-9._-]{0,119}",
+            "defaults to `false`",
         ),
-        governance: ("audit", "action-driving", "never auto-fixes"),
+        governance: (
+            "audit",
+            "action-driving",
+            "never auto-fixes",
+            "fixed `configuration` locator",
+        ),
         providers: ("effective provider", "degradation", "note bodies"),
     }
     for document, terms in required_documentation.items():

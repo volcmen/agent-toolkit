@@ -52,6 +52,14 @@ safe vault-relative Markdown expectations, and an explicit degradation policy.
 Use `expected_paths` for all-required results, `any_of_paths` for one-of results,
 and `forbidden_paths` for results that must stay absent.
 
+Each operator-authored case ID must match the portable opaque grammar
+`[A-Za-z0-9][A-Za-z0-9._-]{0,119}` and be unique. IDs are emitted verbatim, so
+use non-sensitive labels and do not encode user data, secrets, or paths in
+them; the grammar constrains shape but cannot decide whether text is
+sensitive. An omitted `allow_degraded` defaults to `false`. A fixture is at
+most 1,000,000 characters and 200 cases; each expectation array is at most 20
+unique paths, with each scope or path at most 1,000 characters.
+
 Exit status is part of the operator contract:
 
 | Exit | Meaning |

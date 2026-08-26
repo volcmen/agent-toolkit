@@ -138,13 +138,19 @@ cases, and 2 when the fixture or configuration is invalid. Its report contains
 case IDs, requested and effective provider/mode, degradation, elapsed time,
 result-token and stale-filter counts, and vault-relative result paths. It never
 emits fixture queries, note bodies or snippets, tracebacks, or resolved fixture
-and vault paths.
+and vault paths. Operator-authored IDs must match
+`[A-Za-z0-9][A-Za-z0-9._-]{0,119}` and are emitted verbatim, so use only
+non-sensitive opaque labels. Omitted `allow_degraded` defaults to `false`.
 
 `audit` returns 0 when no errors are present, 1 when findings include errors,
 and 2 when configuration prevents the audit. Its bounded findings use fixed
-codes and vault-relative paths, never note bodies or frontmatter values. Human
-output escapes controls and truncates each displayed path to 180 characters;
-JSON preserves the vault-relative path inside the 200-finding report bound.
+codes and never note bodies or frontmatter values. Note and traversal findings
+use vault-relative paths; configuration/provider findings use the fixed
+`configuration` locator. Human output escapes controls and truncates each
+displayed locator to 180 characters; JSON preserves the exact safe locator
+inside the 200-finding report bound. Configuration admits at most 64 projected
+recall roots, QMD collection names, and QMD root mappings, with 120-character
+names and 1,000-character relative paths.
 
 Both commands are read-only, manual operations and are absent from the
 `SessionStart` and `Stop` hooks. They never fix or rename notes, delete history,

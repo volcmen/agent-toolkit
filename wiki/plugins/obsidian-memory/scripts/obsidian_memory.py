@@ -61,9 +61,15 @@ CURRENT_STATUSES = {"accepted", "active", "verified"}
 CANDIDATE_STATUSES = {"candidate", "proposed"}
 HIDDEN_STATES = {"expired", "future", "stale"}
 MAX_SUPERSESSION_HOPS = 8
+# Keep these dependency-free bounds mirrored in wiki/scripts/check.py.
+MAX_PROJECTED_CONFIG_ENTRIES = 64
+MAX_PROJECTED_CONFIG_NAME_CHARS = 120
+MAX_PROJECTED_CONFIG_PATH_CHARS = 1_000
 MAX_RECALL_EVAL_CASES = 200
 MAX_RECALL_EVAL_FIXTURE_CHARS = 1_000_000
-MAX_RECALL_EVAL_RESULT_PATHS = 20
+MAX_RECALL_EVAL_PATHS = 20
+MAX_RECALL_EVAL_PATH_CHARS = 1_000
+RECALL_EVAL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}")
 MAX_AUDIT_FINDINGS = 200
 MAX_AUDIT_HUMAN_PATH_CHARS = 180
 
@@ -190,13 +196,21 @@ def load_config() -> tuple[dict[str, Any], Path]:
             f"{path} field 'recall_provider' must be 'auto', 'native', or 'qmd'"
         )
     recall_roots = config.get("recall_roots")
-    if not isinstance(recall_roots, list) or not recall_roots:
+    if (
+        not isinstance(recall_roots, list)
+        or not recall_roots
+        or len(recall_roots) > MAX_PROJECTED_CONFIG_ENTRIES
+    ):
         raise ConfigurationError(
-            f"{path} field 'recall_roots' must be a non-empty array"
+            f"{path} field 'recall_roots' must be a bounded non-empty array"
         )
     normalized_recall_roots: list[str] = []
     for root in recall_roots:
-        if not isinstance(root, str) or not root.strip():
+        if (
+            not isinstance(root, str)
+            or not root.strip()
+            or len(root) > MAX_PROJECTED_CONFIG_PATH_CHARS
+        ):
             raise ConfigurationError(
                 f"{path} field 'recall_roots' contains an invalid path"
             )
@@ -217,11 +231,16 @@ def load_config() -> tuple[dict[str, Any], Path]:
     if not isinstance(qmd_enabled, bool):
         raise ConfigurationError(f"{path} field 'qmd_enabled' must be a boolean")
     qmd_collections = config.get("qmd_collections")
-    if not isinstance(qmd_collections, list) or any(
-        not isinstance(value, str)
-        or not value.strip()
-        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", value)
-        for value in qmd_collections
+    if (
+        not isinstance(qmd_collections, list)
+        or len(qmd_collections) > MAX_PROJECTED_CONFIG_ENTRIES
+        or any(
+            not isinstance(value, str)
+            or not value.strip()
+            or len(value) > MAX_PROJECTED_CONFIG_NAME_CHARS
+            or not RECALL_EVAL_ID_RE.fullmatch(value)
+            for value in qmd_collections
+        )
     ):
         raise ConfigurationError(
             f"{path} field 'qmd_collections' must be an array of safe collection names"
@@ -231,7 +250,10 @@ def load_config() -> tuple[dict[str, Any], Path]:
             f"{path} field 'qmd_collections' cannot be empty when QMD is enabled"
         )
     qmd_collection_roots = config.get("qmd_collection_roots")
-    if not isinstance(qmd_collection_roots, dict):
+    if (
+        not isinstance(qmd_collection_roots, dict)
+        or len(qmd_collection_roots) > MAX_PROJECTED_CONFIG_ENTRIES
+    ):
         raise ConfigurationError(
             f"{path} field 'qmd_collection_roots' must be an object"
         )
@@ -247,9 +269,11 @@ def load_config() -> tuple[dict[str, Any], Path]:
     for collection, root in qmd_collection_roots.items():
         if (
             not isinstance(collection, str)
-            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", collection)
+            or len(collection) > MAX_PROJECTED_CONFIG_NAME_CHARS
+            or not RECALL_EVAL_ID_RE.fullmatch(collection)
             or not isinstance(root, str)
             or not root.strip()
+            or len(root) > MAX_PROJECTED_CONFIG_PATH_CHARS
         ):
             raise ConfigurationError(
                 f"{path} field 'qmd_collection_roots' contains an invalid mapping"
@@ -1423,11 +1447,19 @@ def governance_findings(
 
 def _validated_audit_roots(config: dict[str, Any]) -> list[str]:
     raw_roots = config.get("recall_roots")
-    if not isinstance(raw_roots, list) or not raw_roots:
+    if (
+        not isinstance(raw_roots, list)
+        or not raw_roots
+        or len(raw_roots) > MAX_PROJECTED_CONFIG_ENTRIES
+    ):
         raise ConfigurationError("audit recall roots are invalid")
     normalized: set[str] = set()
     for raw_root in raw_roots:
-        if not isinstance(raw_root, str) or not raw_root.strip():
+        if (
+            not isinstance(raw_root, str)
+            or not raw_root.strip()
+            or len(raw_root) > MAX_PROJECTED_CONFIG_PATH_CHARS
+        ):
             raise ConfigurationError("audit recall roots are invalid")
         relative = PurePosixPath(raw_root)
         if (
@@ -1487,7 +1519,24 @@ def _audit_qmd_root_findings(config: dict[str, Any]) -> list[AuditFinding]:
     if (
         not isinstance(vault, Path)
         or not isinstance(collections, list)
+        or len(collections) > MAX_PROJECTED_CONFIG_ENTRIES
+        or any(
+            not isinstance(collection, str)
+            or len(collection) > MAX_PROJECTED_CONFIG_NAME_CHARS
+            or RECALL_EVAL_ID_RE.fullmatch(collection) is None
+            for collection in collections
+        )
         or not isinstance(mappings, dict)
+        or len(mappings) > MAX_PROJECTED_CONFIG_ENTRIES
+        or any(
+            not isinstance(collection, str)
+            or len(collection) > MAX_PROJECTED_CONFIG_NAME_CHARS
+            or RECALL_EVAL_ID_RE.fullmatch(collection) is None
+            or not isinstance(root, str)
+            or not root.strip()
+            or len(root) > MAX_PROJECTED_CONFIG_PATH_CHARS
+            for collection, root in mappings.items()
+        )
         or not isinstance(roots, list)
     ):
         raise ConfigurationError("audit QMD roots are invalid")
@@ -1582,6 +1631,18 @@ def _audit_provider_summary(
     config: dict[str, Any],
 ) -> tuple[dict[str, Any], list[AuditFinding]]:
     """Return the safe audit projection of provider health and its findings."""
+    collections = config.get("qmd_collections")
+    if (
+        not isinstance(collections, list)
+        or len(collections) > MAX_PROJECTED_CONFIG_ENTRIES
+        or any(
+            not isinstance(collection, str)
+            or len(collection) > MAX_PROJECTED_CONFIG_NAME_CHARS
+            or RECALL_EVAL_ID_RE.fullmatch(collection) is None
+            for collection in collections
+        )
+    ):
+        raise ConfigurationError("audit QMD collections are invalid")
     status = recall_provider_status(config)
     raw_qmd = status["providers"]["qmd"]
     raw_version = raw_qmd.get("version", "")
@@ -1595,7 +1656,7 @@ def _audit_provider_summary(
         "available": bool(raw_qmd.get("available")),
         "healthy": bool(raw_qmd.get("healthy")),
         "version": version,
-        "collections": list(config["qmd_collections"]),
+        "collections": list(collections),
     }
     summary = {
         "canonical": status["canonical"]["name"],
@@ -3003,7 +3064,13 @@ def _safe_evaluation_location(
     scope: str | None,
     markdown: bool,
 ) -> str | None:
-    if not value or value != value.strip() or "\\" in value or "\x00" in value:
+    if (
+        not value
+        or len(value) > MAX_RECALL_EVAL_PATH_CHARS
+        or value != value.strip()
+        or "\\" in value
+        or "\x00" in value
+    ):
         return None
     relative = PurePosixPath(value)
     if (
@@ -3049,7 +3116,7 @@ def _evaluation_path_array(
     scope: str | None,
 ) -> tuple[str, ...]:
     values = raw_case.get(field)
-    if not isinstance(values, list):
+    if not isinstance(values, list) or len(values) > MAX_RECALL_EVAL_PATHS:
         raise _evaluation_field_error(case_label, field)
     normalized: list[str] = []
     for value in values:
@@ -3102,10 +3169,8 @@ def load_recall_eval_suite(
         if not isinstance(raw_case, dict):
             raise EvaluationError(f"{positional_label} field 'document' is invalid")
         raw_id = raw_case.get("id")
-        case_id = raw_id.strip() if isinstance(raw_id, str) else ""
-        id_is_valid = bool(case_id) and len(case_id) <= 120 and not any(
-            ord(character) < 32 or ord(character) == 127 for character in case_id
-        )
+        case_id = raw_id if isinstance(raw_id, str) else ""
+        id_is_valid = RECALL_EVAL_ID_RE.fullmatch(case_id) is not None
         case_label = f"case {case_id!r}" if id_is_valid else positional_label
         if not _RECALL_EVAL_REQUIRED_CASE_KEYS.issubset(raw_case):
             raise EvaluationError(f"{case_label} field 'keys' is invalid")
@@ -3133,7 +3198,10 @@ def load_recall_eval_suite(
             raise _evaluation_field_error(case_label, "provider")
 
         raw_scope = raw_case.get("scope")
-        if raw_scope is not None and not isinstance(raw_scope, str):
+        if raw_scope is not None and (
+            not isinstance(raw_scope, str)
+            or len(raw_scope) > MAX_RECALL_EVAL_PATH_CHARS
+        ):
             raise _evaluation_field_error(case_label, "scope")
         try:
             scope = normalize_recall_scope(raw_scope)
@@ -3240,7 +3308,7 @@ def _evaluation_payload_fields(
         or type(filtered_stale) is not int
         or filtered_stale < 0
         or not isinstance(results, list)
-        or len(results) > MAX_RECALL_EVAL_RESULT_PATHS
+        or len(results) > MAX_RECALL_EVAL_PATHS
     ):
         return None
 
