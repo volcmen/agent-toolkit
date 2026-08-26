@@ -340,6 +340,10 @@ description: Use a configured Obsidian vault as durable, cross-session memory fo
 def validate_memory_operations(operations: Path) -> None:
     """Keep the installed skill's release procedure complete and ordered."""
     text = operations.read_text(encoding="utf-8")
+    before_rollback, rollback_marker, rollback = text.partition(
+        "## 7. Derived-only rollback"
+    )
+    require(rollback_marker, "memory operations omits rollback section")
     required_in_order = (
         "## 1. Repository gates",
         "python3 wiki/scripts/check.py",
@@ -361,18 +365,63 @@ def validate_memory_operations(operations: Path) -> None:
         "## 5. Explicit derived-index maintenance",
         "refresh-index --embed",
         "## 6. Repeat proof",
-        "## 7. Derived-only rollback",
-        "QMD 2.5.3",
-        "prior plugin commit",
-        "python3 bun-global-tools/sync.py apply",
-        "python3 scripts/plugins.py install --force",
-        "refresh-index --embed",
     )
     cursor = -1
     for term in required_in_order:
-        position = text.find(term, cursor + 1)
+        position = before_rollback.find(term, cursor + 1)
         require(position >= 0, f"memory operations omits ordered contract: {term}")
         cursor = position
+
+    rollback_required_in_order = (
+        'qmd_status_before="$(qmd status)"',
+        'qmd_expected_index="${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}/qmd/index.sqlite"',
+        'if [ "$qmd_index" != "$qmd_expected_index" ] || [ ! -f "$qmd_index" ]; then',
+        'qmd_backup_dir="$(mktemp -d "${qmd_index}.pre-rollback.XXXXXX")"',
+        'mv "$qmd_index" "$qmd_backup_dir/index.sqlite"',
+        'mv "${qmd_index}-wal" "$qmd_backup_dir/index.sqlite-wal"',
+        'mv "${qmd_index}-shm" "$qmd_backup_dir/index.sqlite-shm"',
+        "prior plugin commit",
+        "QMD 2.5.3",
+        "python3 bun-global-tools/sync.py apply",
+        "python3 scripts/plugins.py install --force",
+        "qmd update",
+        "qmd embed",
+        "qmd --version",
+        "qmd status",
+        "qmd doctor",
+        "python3 bun-global-tools/sync.py check --deep",
+        "python3 scripts/plugins.py status",
+        "providers --json",
+        "doctor --json",
+        "audit --json",
+        "evaluate path/to/private-recall-evals.json --json",
+    )
+    cursor = -1
+    for term in rollback_required_in_order:
+        position = rollback.find(term, cursor + 1)
+        require(
+            position >= 0,
+            f"memory rollback omits ordered recovery: {term}",
+        )
+        cursor = position
+    require(
+        "refresh-index --embed" not in rollback,
+        "memory rollback must build a fresh index, not incrementally refresh it",
+    )
+    normalized_rollback = " ".join(rollback.split())
+    for term in (
+        "unique non-overwriting",
+        "Never delete or overwrite that backup",
+        "global QMD collection YAML unchanged",
+        "newly derived database as evidence",
+        "moving the recorded pre-rollback files back",
+        "proceed without rewriting Markdown and leave the global collection "
+        "YAML and vault configuration untouched",
+    ):
+        require(
+            term.casefold() in normalized_rollback.casefold(),
+            f"memory rollback omits recovery boundary: {term}",
+        )
 
     for command in ("providers --json", "doctor --json", "audit --json"):
         require(

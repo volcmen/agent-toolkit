@@ -40,6 +40,58 @@ class MemoryOperationsContractTests(unittest.TestCase):
             ):
                 MODULE.validate_memory_operations(mutation)
 
+    def test_rollback_contract_rejects_incremental_refresh_as_a_rebuild(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            mutation = Path(temporary) / "memory-operations.md"
+            mutation.write_text(
+                OPERATIONS.read_text(encoding="utf-8").replace(
+                    "qmd update\nqmd embed\n",
+                    'python3 "<plugin-root>/scripts/obsidian_memory.py" '
+                    "refresh-index --embed\n",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                MODULE.ValidationError,
+                "memory rollback omits ordered recovery: qmd update",
+            ):
+                MODULE.validate_memory_operations(mutation)
+
+    def test_rollback_contract_requires_recoverable_exact_index_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            mutation = Path(temporary) / "memory-operations.md"
+            mutation.write_text(
+                OPERATIONS.read_text(encoding="utf-8").replace(
+                    'mv "$qmd_index" "$qmd_backup_dir/index.sqlite"\n', "", 1
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                MODULE.ValidationError,
+                'memory rollback omits ordered recovery: mv "\\$qmd_index"',
+            ):
+                MODULE.validate_memory_operations(mutation)
+
+    def test_rollback_contract_rejects_backup_after_downgrade(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            mutation = Path(temporary) / "memory-operations.md"
+            original = OPERATIONS.read_text(encoding="utf-8")
+            backup = 'mv "$qmd_index" "$qmd_backup_dir/index.sqlite"\n'
+            apply = "python3 bun-global-tools/sync.py apply\n"
+            if backup in original:
+                moved = original.replace(backup, "", 1).replace(
+                    apply, apply + backup, 1
+                )
+            else:
+                moved = original
+            mutation.write_text(moved, encoding="utf-8")
+            with self.assertRaisesRegex(
+                MODULE.ValidationError,
+                'memory rollback omits ordered recovery: mv "\\$qmd_index"',
+            ):
+                MODULE.validate_memory_operations(mutation)
+
     def test_installed_package_rejects_an_escaping_relative_link(self) -> None:
         with tempfile.TemporaryDirectory(dir=MODULE.PLUGIN / "skills") as temporary:
             package = Path(temporary)

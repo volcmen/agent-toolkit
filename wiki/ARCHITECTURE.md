@@ -79,9 +79,14 @@ memory provider. QMD HTTP/MCP, project-local configuration, external source
 paths, and custom model URIs are not enabled. Lifecycle hooks never run QMD
 model/index work, evaluator, or audit.
 
-Rollback re-pins QMD 2.5.3 through the Bun manifest, restores the prior plugin
-commit, force-installs that plugin, and rebuilds only the derived index. It
-does not rewrite Markdown.
+The installed `memory-operations.md` reference is the authoritative rollback
+procedure. Rollback verifies the exact default `Index:` cache SQLite path from
+`qmd status`, moves that database and matching WAL/SHM files to a unique
+non-overwriting backup before downgrade, then restores the prior plugin and
+QMD 2.5.3 pin. `qmd update` followed by `qmd embed` creates a fresh database
+from unchanged global collection YAML; post-rollback QMD, Bun, installed-plugin,
+provider, doctor, audit, and private-evaluation checks must pass. The procedure
+never deletes its backup or rewrites Markdown or configuration.
 
 ## Trust boundaries
 

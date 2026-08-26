@@ -420,6 +420,109 @@ Prior: old unrelated outcome.
             self.assertIn("QMD failed", payload["warnings"][0])
             self.assertEqual(payload["results"][0]["path"], "wiki/fallback.md")
 
+    def test_qmd_recall_decode_failure_is_a_fixed_provider_error(self) -> None:
+        """Catches malformed QMD text escaping or leaking decoder details."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault, qmd_enabled=True)
+            decode_error = UnicodeDecodeError(
+                "utf-8", b"PRIVATE-QMD-OUTPUT\xff", 18, 19, "invalid start byte"
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(MODULE.shutil, "which", return_value="/opt/bin/qmd"),
+                mock.patch.object(MODULE.subprocess, "run", side_effect=decode_error),
+            ):
+                config, _ = MODULE.load_config()
+                with self.assertRaises(MODULE.RecallProviderError) as raised:
+                    MODULE.qmd_recall_candidates(config, "safe query", "fast", 3)
+
+            self.assertEqual(
+                str(raised.exception), "QMD recall failed: invalid text output"
+            )
+            self.assertNotIn("PRIVATE-QMD-OUTPUT", str(raised.exception))
+            self.assertNotIn("UnicodeDecodeError", str(raised.exception))
+
+    def test_auto_provider_falls_back_visibly_on_qmd_decode_failure(self) -> None:
+        """Catches malformed QMD text bypassing governed native fallback."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            (vault / "wiki" / "fallback.md").write_text(
+                "# Decode fallback\nNative recall contains decode fallback evidence.\n",
+                encoding="utf-8",
+            )
+            config_path = self.write_config(
+                root, vault, recall_provider="auto", qmd_enabled=True
+            )
+            decode_error = UnicodeDecodeError(
+                "utf-8", b"PRIVATE-QMD-OUTPUT\xff", 18, 19, "invalid start byte"
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(MODULE.shutil, "which", return_value="/opt/bin/qmd"),
+                mock.patch.object(MODULE.subprocess, "run", side_effect=decode_error),
+                contextlib.redirect_stdout(io.StringIO()) as stdout,
+                contextlib.redirect_stderr(io.StringIO()) as stderr,
+            ):
+                status = MODULE.recall("decode fallback evidence", "semantic", 3)
+
+            self.assertEqual(status, 0)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(payload["provider"], "native")
+            self.assertEqual(payload["requested_provider"], "auto")
+            self.assertEqual(payload["mode"], "fast")
+            self.assertEqual(payload["requested_mode"], "semantic")
+            self.assertTrue(payload["degraded"])
+            self.assertEqual(
+                payload["warnings"],
+                [
+                    "QMD failed; isolated the accelerator failure and used native "
+                    "recall: QMD recall failed: invalid text output"
+                ],
+            )
+            self.assertEqual(payload["results"][0]["path"], "wiki/fallback.md")
+            encoded = json.dumps(payload)
+            self.assertNotIn("PRIVATE-QMD-OUTPUT", encoded)
+            self.assertNotIn("UnicodeDecodeError", encoded)
+            self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_strict_qmd_decode_failure_is_cli_provider_failure(self) -> None:
+        """Catches malformed QMD text being classified as invalid user input."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault, qmd_enabled=True)
+            decode_error = UnicodeDecodeError(
+                "utf-8", b"PRIVATE-QMD-OUTPUT\xff", 18, 19, "invalid start byte"
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(MODULE.shutil, "which", return_value="/opt/bin/qmd"),
+                mock.patch.object(MODULE.subprocess, "run", side_effect=decode_error),
+                contextlib.redirect_stdout(io.StringIO()) as stdout,
+                contextlib.redirect_stderr(io.StringIO()) as stderr,
+            ):
+                status = MODULE.recall(
+                    "safe query", "fast", 3, provider="qmd"
+                )
+
+            self.assertEqual(status, 1)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(
+                stderr.getvalue(), "ERROR: QMD recall failed: invalid text output\n"
+            )
+            self.assertNotIn("PRIVATE-QMD-OUTPUT", stderr.getvalue())
+            self.assertNotIn("UnicodeDecodeError", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
+
     def test_auto_fast_provider_falls_back_from_weak_qmd_matches(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

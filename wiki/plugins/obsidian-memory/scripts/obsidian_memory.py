@@ -2640,6 +2640,8 @@ def qmd_recall_candidates(
             text=True,
             timeout=120,
         )
+    except UnicodeError as exc:
+        raise RecallProviderError("QMD recall failed: invalid text output") from exc
     except (OSError, subprocess.SubprocessError) as exc:
         raise RecallProviderError(f"QMD recall failed: {exc}") from exc
     if result.returncode:

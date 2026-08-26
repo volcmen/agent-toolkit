@@ -170,7 +170,9 @@ paths, provider fallback, scope, and token behavior.
 
 Use this sequence for a versioned QMD or local plugin change. It separates
 repository validation, the Bun installation, changed-plugin integration,
-read-only proof, explicit maintenance, and recovery.
+read-only proof, explicit maintenance, and recovery. The installed plugin's
+[memory operations reference](plugins/obsidian-memory/skills/obsidian-memory/references/memory-operations.md)
+is the authoritative exact command sequence, including rollback guards.
 
 1. Validate repository behavior from the workspace root:
 
@@ -219,10 +221,16 @@ read-only proof, explicit maintenance, and recovery.
 Lifecycle hooks never run QMD model/index work, evaluator, or audit. Do not
 put refresh, embedding, evaluation, or audit in `SessionStart` or `Stop`.
 
-To roll back, re-pin QMD 2.5.3 in `bun-global-tools/manifest.json`, apply the
-Bun manifest, restore the prior plugin commit, force-install that prior plugin,
-and rebuild the derived index with `refresh-index --embed`. Do not rewrite
-Markdown: the prior Markdown/Git state is authoritative throughout rollback.
+To roll back, first use the authoritative operations reference to verify the
+exact default `Index:` SQLite path reported by `qmd status` and move that one
+database plus matching WAL/SHM files into a unique non-overwriting backup.
+Only then restore the prior plugin commit, re-pin/apply QMD 2.5.3, and
+force-install the prior plugin. Build a fresh database from the unchanged
+global collection YAML with `qmd update` followed by `qmd embed`; do not use the
+incremental `refresh-index --embed` command as the rollback rebuild. Finish
+with QMD version/status/doctor, Bun deep state, installed-plugin status, and
+provider/doctor/audit/private-evaluation checks. Never delete the backup or
+rewrite Markdown or configuration.
 
 Enable QMD in the local configuration after creating safe collections:
 
