@@ -379,7 +379,9 @@ def validate_memory_operations(operations: Path) -> None:
     rollback_required_in_order = (
         'qmd_status_before="$(qmd status)"',
         'qmd_expected_index="${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}/qmd/index.sqlite"',
-        'if [ "$qmd_index" != "$qmd_expected_index" ] || [ ! -f "$qmd_index" ]; then',
+        'if [ "$qmd_index" != "$qmd_expected_index" ] || [ ! -f "$qmd_index" ] || [ -L "$qmd_index" ]; then',
+        'if [ -L "${qmd_index}-wal" ] || { [ -e "${qmd_index}-wal" ] && [ ! -f "${qmd_index}-wal" ]; }; then',
+        'if [ -L "${qmd_index}-shm" ] || { [ -e "${qmd_index}-shm" ] && [ ! -f "${qmd_index}-shm" ]; }; then',
         'qmd_backup_dir="$(mktemp -d "${qmd_index}.pre-rollback.XXXXXX")"',
         'mv "$qmd_index" "$qmd_backup_dir/index.sqlite"',
         'mv "${qmd_index}-wal" "$qmd_backup_dir/index.sqlite-wal"',
@@ -432,6 +434,26 @@ def validate_memory_operations(operations: Path) -> None:
         'if [ -f "$qmd_index" ]; then' in before_saved_restore,
         "memory recovery omits conditional quarantine",
     )
+    target_absence = (
+        'if [ -e "$qmd_index" ] || [ -L "$qmd_index" ] ||\n'
+        '     [ -e "${qmd_index}-wal" ] || [ -L "${qmd_index}-wal" ] ||\n'
+        '     [ -e "${qmd_index}-shm" ] || [ -L "${qmd_index}-shm" ]; then'
+    )
+    require(
+        target_absence in before_saved_restore,
+        "memory recovery omits symlink-safe target absence",
+    )
+    saved_input_guards = (
+        'if [ -L "$qmd_backup_dir" ] || [ ! -d "$qmd_backup_dir" ] || '
+        '[ -L "$qmd_backup_dir/index.sqlite" ] || '
+        '[ ! -f "$qmd_backup_dir/index.sqlite" ]; then',
+        'if [ -L "$qmd_backup_dir/index.sqlite-wal" ] ||',
+        'if [ -L "$qmd_backup_dir/index.sqlite-shm" ] ||',
+    )
+    require(
+        all(term in before_saved_restore for term in saved_input_guards),
+        "memory recovery omits saved-input symlink guard",
+    )
     recovery_required_before_restore = (
         "exact upgraded plugin commit",
         "QMD 2.8.3",
@@ -442,14 +464,19 @@ def validate_memory_operations(operations: Path) -> None:
         "python3 scripts/plugins.py status",
         'qmd_index="${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}/qmd/index.sqlite"',
         'qmd_backup_dir="/recorded/pre-rollback/backup-directory"',
-        'if [ ! -d "$qmd_backup_dir" ] || [ ! -f "$qmd_backup_dir/index.sqlite" ]; then',
+        saved_input_guards[0],
+        saved_input_guards[1],
+        saved_input_guards[2],
+        'if [ -L "$qmd_index" ] || { [ -e "$qmd_index" ] && [ ! -f "$qmd_index" ]; }; then',
+        'if [ -L "${qmd_index}-wal" ] || { [ -e "${qmd_index}-wal" ] && [ ! -f "${qmd_index}-wal" ]; }; then',
+        'if [ -L "${qmd_index}-shm" ] || { [ -e "${qmd_index}-shm" ] && [ ! -f "${qmd_index}-shm" ]; }; then',
         'if [ -f "$qmd_index" ]; then',
         'qmd_failed_backup_dir="$(mktemp -d "${qmd_index}.failed-rollback.XXXXXX")"',
         'mv "$qmd_index" "$qmd_failed_backup_dir/index.sqlite"',
         'mv "${qmd_index}-wal" "$qmd_failed_backup_dir/index.sqlite-wal"',
         'mv "${qmd_index}-shm" "$qmd_failed_backup_dir/index.sqlite-shm"',
         'elif [ -e "${qmd_index}-wal" ] || [ -e "${qmd_index}-shm" ]; then',
-        'if [ -e "$qmd_index" ] || [ -e "${qmd_index}-wal" ] || [ -e "${qmd_index}-shm" ]; then',
+        target_absence,
     )
     cursor = -1
     for term in recovery_required_before_restore:
@@ -485,6 +512,8 @@ def validate_memory_operations(operations: Path) -> None:
         "pre-rollback QMD 2.8.3 and upgraded plugin state",
         "before restoring any saved SQLite file",
         "only when that database exists",
+        "every restore target must satisfy both `! -e` and `! -L`",
+        "Saved inputs must be regular non-symlink files",
         "Never delete the pre-rollback or failed-rebuild backup",
         "proceed without rewriting Markdown and leave the global collection "
         "YAML and vault configuration untouched",

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +24,66 @@ OPERATIONS = (
 
 
 class MemoryOperationsContractTests(unittest.TestCase):
+    def recovery_shell(self) -> str:
+        recovery = OPERATIONS.read_text(encoding="utf-8").split(
+            "### Failed-rollback recovery", 1
+        )[1]
+        shell_blocks = recovery.split("```sh\n")[1:]
+        self.assertGreaterEqual(len(shell_blocks), 2)
+        script = shell_blocks[1].split("\n```", 1)[0]
+        return script.replace(
+            'qmd_backup_dir="/recorded/pre-rollback/backup-directory"',
+            'qmd_backup_dir="$QMD_ROLLBACK_BACKUP_DIR"',
+        )
+
+    def run_recovery_shell(
+        self,
+        root: Path,
+        *,
+        dangling_target: str | None = None,
+        symlinked_source: str | None = None,
+    ) -> tuple[subprocess.CompletedProcess[str], Path, Path, Path]:
+        cache = root / "cache"
+        qmd_dir = cache / "qmd"
+        qmd_dir.mkdir(parents=True)
+        index = qmd_dir / "index.sqlite"
+        backup = Path(f"{index}.pre-rollback.TEST")
+        backup.mkdir()
+        outside = root / "outside"
+        outside.mkdir()
+        (backup / "index.sqlite").write_text("saved-db", encoding="utf-8")
+        (backup / "index.sqlite-wal").write_text("saved-wal", encoding="utf-8")
+        (backup / "index.sqlite-shm").write_text("saved-shm", encoding="utf-8")
+
+        if dangling_target:
+            target = index if dangling_target == "db" else Path(f"{index}-{dangling_target}")
+            target.symlink_to(outside / f"missing-{dangling_target}")
+        if symlinked_source:
+            source = (
+                backup / "index.sqlite"
+                if symlinked_source == "db"
+                else backup / f"index.sqlite-{symlinked_source}"
+            )
+            source.unlink()
+            real_source = outside / f"saved-{symlinked_source}"
+            real_source.write_text("outside-source", encoding="utf-8")
+            source.symlink_to(real_source)
+
+        env = {
+            **os.environ,
+            "HOME": str(root),
+            "XDG_CACHE_HOME": str(cache),
+            "QMD_ROLLBACK_BACKUP_DIR": str(backup),
+        }
+        result = subprocess.run(
+            ["sh", "-c", self.recovery_shell()],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+        )
+        return result, index, backup, outside
+
     def test_operations_contract_does_not_depend_on_workspace_readme(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             with mock.patch.object(MODULE, "ROOT", Path(temporary)):
@@ -136,6 +198,79 @@ class MemoryOperationsContractTests(unittest.TestCase):
                 MODULE.ValidationError,
                 "memory recovery omits ordered restoration: python3 "
                 "bun-global-tools/sync.py apply",
+            ):
+                MODULE.validate_memory_operations(mutation)
+
+    def test_recovery_shell_rejects_dangling_database_and_sidecar_targets(
+        self,
+    ) -> None:
+        for target in ("db", "wal", "shm"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temporary:
+                result, index, backup, outside = self.run_recovery_shell(
+                    Path(temporary), dangling_target=target
+                )
+
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                target_path = index if target == "db" else Path(f"{index}-{target}")
+                self.assertTrue(target_path.is_symlink())
+                self.assertFalse((outside / f"missing-{target}").exists())
+                self.assertEqual(
+                    (backup / "index.sqlite").read_text(encoding="utf-8"),
+                    "saved-db",
+                )
+
+    def test_recovery_shell_rejects_symlinked_saved_database_and_sidecars(
+        self,
+    ) -> None:
+        for source in ("db", "wal", "shm"):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as temporary:
+                result, index, backup, _outside = self.run_recovery_shell(
+                    Path(temporary), symlinked_source=source
+                )
+
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                source_path = (
+                    backup / "index.sqlite"
+                    if source == "db"
+                    else backup / f"index.sqlite-{source}"
+                )
+                self.assertTrue(source_path.is_symlink())
+                self.assertFalse(index.exists())
+                self.assertFalse(index.is_symlink())
+
+    def test_recovery_contract_requires_non_dereferencing_target_absence(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            mutation = Path(temporary) / "memory-operations.md"
+            mutation.write_text(
+                OPERATIONS.read_text(encoding="utf-8").replace(
+                    'if [ -e "$qmd_index" ] || [ -L "$qmd_index" ] ||',
+                    'if [ -e "$qmd_index" ] ||',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                MODULE.ValidationError,
+                "memory recovery omits symlink-safe target absence",
+            ):
+                MODULE.validate_memory_operations(mutation)
+
+    def test_recovery_contract_requires_non_symlink_saved_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            mutation = Path(temporary) / "memory-operations.md"
+            mutation.write_text(
+                OPERATIONS.read_text(encoding="utf-8").replace(
+                    'if [ -L "$qmd_backup_dir/index.sqlite-wal" ] ||',
+                    "if",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                MODULE.ValidationError,
+                "memory recovery omits saved-input symlink guard",
             ):
                 MODULE.validate_memory_operations(mutation)
 

@@ -91,16 +91,24 @@ that database and its matching WAL/SHM sidecars when present:
   printf '%s\n' "$qmd_status_before"
   qmd_index="$(printf '%s\n' "$qmd_status_before" | sed -n 's/^Index:[[:space:]]*//p')"
   qmd_expected_index="${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}/qmd/index.sqlite"
-  if [ "$qmd_index" != "$qmd_expected_index" ] || [ ! -f "$qmd_index" ]; then
+  if [ "$qmd_index" != "$qmd_expected_index" ] || [ ! -f "$qmd_index" ] || [ -L "$qmd_index" ]; then
     printf '%s\n' "STOP: QMD Index is not the expected default cache SQLite file" >&2
+    exit 1
+  fi
+  if [ -L "${qmd_index}-wal" ] || { [ -e "${qmd_index}-wal" ] && [ ! -f "${qmd_index}-wal" ]; }; then
+    printf '%s\n' "STOP: QMD WAL is not a regular non-symlink file" >&2
+    exit 1
+  fi
+  if [ -L "${qmd_index}-shm" ] || { [ -e "${qmd_index}-shm" ] && [ ! -f "${qmd_index}-shm" ]; }; then
+    printf '%s\n' "STOP: QMD SHM is not a regular non-symlink file" >&2
     exit 1
   fi
   qmd_backup_dir="$(mktemp -d "${qmd_index}.pre-rollback.XXXXXX")"
   mv "$qmd_index" "$qmd_backup_dir/index.sqlite"
-  if [ -e "${qmd_index}-wal" ]; then
+  if [ -f "${qmd_index}-wal" ]; then
     mv "${qmd_index}-wal" "$qmd_backup_dir/index.sqlite-wal"
   fi
-  if [ -e "${qmd_index}-shm" ]; then
+  if [ -f "${qmd_index}-shm" ]; then
     mv "${qmd_index}-shm" "$qmd_backup_dir/index.sqlite-shm"
   fi
   printf 'Pre-rollback QMD backup: %s\n' "$qmd_backup_dir"
@@ -167,7 +175,10 @@ Set `qmd_backup_dir` to the exact directory printed by the backup block. The
 following recovery block rejects a missing saved database or an unexpected
 backup path. It quarantines a failed rebuilt database and its matching
 sidecars only when that database exists; sidecars without a database stop
-recovery. It never overwrites the saved or failed sets:
+recovery. Saved inputs must be regular non-symlink files, and every restore
+target must satisfy both `! -e` and `! -L` so dangling symlinks cannot survive
+the absence check. It never overwrites or follows links from the saved, failed,
+or target sets:
 
 ```sh
 (
@@ -178,8 +189,28 @@ recovery. It never overwrites the saved or failed sets:
     "${qmd_index}.pre-rollback."*) ;;
     *) printf '%s\n' "STOP: unexpected pre-rollback backup path" >&2; exit 1 ;;
   esac
-  if [ ! -d "$qmd_backup_dir" ] || [ ! -f "$qmd_backup_dir/index.sqlite" ]; then
+  if [ -L "$qmd_backup_dir" ] || [ ! -d "$qmd_backup_dir" ] || [ -L "$qmd_backup_dir/index.sqlite" ] || [ ! -f "$qmd_backup_dir/index.sqlite" ]; then
     printf '%s\n' "STOP: pre-rollback SQLite backup is missing" >&2
+    exit 1
+  fi
+  if [ -L "$qmd_backup_dir/index.sqlite-wal" ] || { [ -e "$qmd_backup_dir/index.sqlite-wal" ] && [ ! -f "$qmd_backup_dir/index.sqlite-wal" ]; }; then
+    printf '%s\n' "STOP: saved QMD WAL is not a regular non-symlink file" >&2
+    exit 1
+  fi
+  if [ -L "$qmd_backup_dir/index.sqlite-shm" ] || { [ -e "$qmd_backup_dir/index.sqlite-shm" ] && [ ! -f "$qmd_backup_dir/index.sqlite-shm" ]; }; then
+    printf '%s\n' "STOP: saved QMD SHM is not a regular non-symlink file" >&2
+    exit 1
+  fi
+  if [ -L "$qmd_index" ] || { [ -e "$qmd_index" ] && [ ! -f "$qmd_index" ]; }; then
+    printf '%s\n' "STOP: QMD recovery target is not a regular non-symlink file" >&2
+    exit 1
+  fi
+  if [ -L "${qmd_index}-wal" ] || { [ -e "${qmd_index}-wal" ] && [ ! -f "${qmd_index}-wal" ]; }; then
+    printf '%s\n' "STOP: QMD WAL target is not a regular non-symlink file" >&2
+    exit 1
+  fi
+  if [ -L "${qmd_index}-shm" ] || { [ -e "${qmd_index}-shm" ] && [ ! -f "${qmd_index}-shm" ]; }; then
+    printf '%s\n' "STOP: QMD SHM target is not a regular non-symlink file" >&2
     exit 1
   fi
   if [ -f "$qmd_index" ]; then
@@ -196,7 +227,9 @@ recovery. It never overwrites the saved or failed sets:
     printf '%s\n' "STOP: QMD sidecar exists without its database" >&2
     exit 1
   fi
-  if [ -e "$qmd_index" ] || [ -e "${qmd_index}-wal" ] || [ -e "${qmd_index}-shm" ]; then
+  if [ -e "$qmd_index" ] || [ -L "$qmd_index" ] ||
+     [ -e "${qmd_index}-wal" ] || [ -L "${qmd_index}-wal" ] ||
+     [ -e "${qmd_index}-shm" ] || [ -L "${qmd_index}-shm" ]; then
     printf '%s\n' "STOP: recovery target already exists" >&2
     exit 1
   fi
