@@ -21,6 +21,11 @@ from typing import Any, Union
 CONFIG_ENV = "OBSIDIAN_MEMORY_CONFIG"
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "obsidian-memory" / "config.json"
 TASK_RE = re.compile(r"^\s*-\s+\[\s\]\s+")
+QMD_VERSION_RE = re.compile(
+    r"qmd (?:0|[1-9][0-9]{0,9})\."
+    r"(?:0|[1-9][0-9]{0,9})\."
+    r"(?:0|[1-9][0-9]{0,9})"
+)
 DEFAULTS: dict[str, Any] = {
     "context_profile": "focused",
     "max_context_chars": 7500,
@@ -104,6 +109,20 @@ class AuditFinding:
         if self.field:
             payload["field"] = self.field
         return payload
+
+
+@dataclass(frozen=True)
+class CommitTargetClassification:
+    """Read-only classification shared by commit execution and audit."""
+
+    normalized: str | None
+    relative: Path | None
+    code: str | None
+    detail: str
+
+    @property
+    def safe(self) -> bool:
+        return self.code is None
 
 
 def has_private_vault_segment(parts: tuple[str, ...]) -> bool:
@@ -216,8 +235,13 @@ def load_config() -> tuple[dict[str, Any], Path]:
         raise ConfigurationError(
             f"{path} field 'qmd_collection_roots' must be an object"
         )
+    config["_qmd_collections_from_defaults"] = "qmd_collections" not in raw
+    config["_qmd_collection_roots_from_defaults"] = (
+        "qmd_collection_roots" not in raw
+    )
     config["_qmd_mappings_from_defaults"] = (
-        "qmd_collections" not in raw and "qmd_collection_roots" not in raw
+        config["_qmd_collections_from_defaults"]
+        and config["_qmd_collection_roots_from_defaults"]
     )
     normalized_roots: dict[str, str] = {}
     for collection, root in qmd_collection_roots.items():
@@ -589,6 +613,182 @@ def run_git(vault: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _tracked_deleted_markdown_paths(
+    vault: Path, normalized: str, *, exact: bool
+) -> bool:
+    """Return whether literal index evidence proves a safe Markdown deletion."""
+    if shutil.which("git") is None or not (vault / ".git").exists():
+        return False
+    try:
+        tracked = run_git(vault, ["ls-files", "--stage", "-z", "--", normalized])
+    except (OSError, RuntimeError, ValueError, UnicodeError, subprocess.SubprocessError):
+        return False
+    if tracked.returncode != 0 or not tracked.stdout:
+        return False
+
+    prefix = PurePosixPath(normalized)
+    found: list[str] = []
+    for record in tracked.stdout.split("\0"):
+        if not record:
+            continue
+        try:
+            header, tracked_path = record.split("\t", 1)
+            mode, _object_id, stage = header.split(" ", 2)
+        except ValueError:
+            return False
+        relative = PurePosixPath(tracked_path)
+        if (
+            stage != "0"
+            or mode not in {"100644", "100755"}
+            or relative.is_absolute()
+            or not relative.parts
+            or ".." in relative.parts
+            or relative.as_posix() != tracked_path
+            or has_private_vault_segment(relative.parts)
+            or not is_markdown_path(tracked_path)
+            or (exact and tracked_path != normalized)
+            or (not exact and relative != prefix and prefix not in relative.parents)
+        ):
+            return False
+        candidate = vault / Path(*relative.parts)
+        cursor = vault
+        try:
+            for part in relative.parts:
+                cursor /= part
+                if cursor.is_symlink():
+                    return False
+            resolved = candidate.resolve()
+            resolved_relative = resolved.relative_to(vault)
+            if (
+                candidate.absolute() != resolved
+                or has_private_vault_segment(resolved_relative.parts)
+                or candidate.exists()
+            ):
+                return False
+        except (OSError, RuntimeError, ValueError):
+            return False
+        found.append(tracked_path)
+    return bool(found) and (not exact or found == [normalized])
+
+
+def classify_commit_target(
+    vault: Path, value: object, *, explicit: bool
+) -> CommitTargetClassification:
+    """Classify one commit target without staging, writing, or following links."""
+
+    def rejected(code: str, detail: str) -> CommitTargetClassification:
+        return CommitTargetClassification(normalized, relative, code, detail)
+
+    normalized: str | None = None
+    relative: Path | None = None
+    if not isinstance(value, str) or not value.strip():
+        return rejected("commit-root-unsafe", "commit root is not a usable path")
+    normalized = Path(value).as_posix()
+    relative = Path(normalized)
+    if relative.is_absolute():
+        return rejected("commit-root-absolute", "commit root must be vault-relative")
+    if ".." in relative.parts:
+        return rejected(
+            "commit-root-parent", "commit root cannot contain a parent segment"
+        )
+    if not relative.parts or normalized == ".":
+        return rejected("commit-root-unsafe", "commit root is not a usable path")
+    if has_private_vault_segment(relative.parts):
+        return rejected(
+            "commit-root-private",
+            "commit root cannot contain a private path segment",
+        )
+    if explicit and not is_markdown_path(normalized):
+        return rejected(
+            "commit-root-shape", "explicit commit path must be Markdown"
+        )
+
+    candidate = vault / relative
+    cursor = vault
+    routes_through_symlink = False
+    try:
+        for part in relative.parts:
+            cursor /= part
+            if cursor.is_symlink():
+                routes_through_symlink = True
+                break
+        resolved = candidate.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return rejected(
+            "commit-root-unsafe", "commit root could not be inspected safely"
+        )
+    try:
+        resolved_relative = resolved.relative_to(vault)
+    except ValueError:
+        return rejected("commit-root-escape", "commit root resolves outside the vault")
+    if has_private_vault_segment(resolved_relative.parts):
+        return rejected(
+            "commit-root-private",
+            "commit root resolves through a private path segment",
+        )
+    if routes_through_symlink or candidate.absolute() != resolved:
+        return rejected(
+            "commit-root-symlink", "commit root is or traverses a symlink"
+        )
+
+    try:
+        exists = candidate.exists()
+        is_directory = candidate.is_dir() if exists else False
+        is_file = candidate.is_file() if exists else False
+    except (OSError, RuntimeError, ValueError):
+        return rejected(
+            "commit-root-unsafe", "commit root could not be inspected safely"
+        )
+    if exists:
+        if explicit and not is_file:
+            return rejected(
+                "commit-root-shape", "explicit commit path must be a file"
+            )
+        if not explicit and not is_directory and not (
+            is_file and is_markdown_path(resolved_relative)
+        ):
+            return rejected(
+                "commit-root-shape",
+                "commit root must be a directory or Markdown file",
+            )
+        return CommitTargetClassification(normalized, relative, None, "")
+
+    if _tracked_deleted_markdown_paths(vault, normalized, exact=explicit):
+        return CommitTargetClassification(normalized, relative, None, "")
+    return rejected("commit-root-missing", "commit root does not exist")
+
+
+def _commit_target_failure_message(
+    classification: CommitTargetClassification,
+    config_file: Path,
+    value: object,
+    *,
+    explicit: bool,
+) -> str:
+    """Render a bounded writer error without changing classifier semantics."""
+    code = classification.code
+    if code == "commit-root-private":
+        return f"private commit path in {config_file}: {value!r}"
+    if code == "commit-root-escape":
+        return f"commit path escapes vault: {value!r}"
+    if code == "commit-root-symlink":
+        return f"commit path is or traverses a symlink: {value!r}"
+    if code == "commit-root-shape":
+        if explicit and isinstance(value, str) and not is_markdown_path(value):
+            return f"explicit commit path must be Markdown: {value!r}"
+        if explicit:
+            return f"explicit commit path must be a file: {value!r}"
+        return f"commit path must be a directory or Markdown file: {value!r}"
+    if code == "commit-root-missing":
+        if explicit:
+            return (
+                "absent explicit commit path must be an exact tracked "
+                f"Markdown file: {value!r}"
+            )
+        return f"configured commit path is missing: {value!r}"
+    return f"unsafe commit path in {config_file}: {value!r}"
+
+
 def safe_commit_paths(
     config: dict[str, Any], config_file: Path, raw_path_override: list[str] | None = None
 ) -> tuple[bool, str]:
@@ -610,57 +810,21 @@ def safe_commit_paths(
     for value in raw_paths:
         if not isinstance(value, str):
             continue
-        normalized = Path(value).as_posix()
+        classification = classify_commit_target(vault, value, explicit=override_paths)
+        normalized = classification.normalized
+        relative = classification.relative
+        if normalized is None or relative is None or not classification.safe:
+            return False, clipped_line(
+                _commit_target_failure_message(
+                    classification,
+                    config_file,
+                    value,
+                    explicit=override_paths,
+                ),
+                500,
+            )
         if override_paths and normalized in allowed:
             return False, f"duplicate explicit commit path: {value!r}"
-        relative = Path(normalized)
-        if (
-            not normalized.strip()
-            or not relative.parts
-            or relative.is_absolute()
-            or ".." in relative.parts
-        ):
-            return False, f"unsafe commit path in {config_file}: {value!r}"
-        if has_private_vault_segment(relative.parts):
-            return False, f"private commit path in {config_file}: {value!r}"
-        if override_paths and not is_markdown_path(value):
-            return False, f"explicit commit path must be Markdown: {value!r}"
-        try:
-            candidate = (vault / relative).resolve()
-        except (OSError, RuntimeError, ValueError):
-            return False, clipped_line(
-                f"cannot resolve commit path in {config_file}: {value!r}", 500
-            )
-        try:
-            resolved_relative = candidate.relative_to(vault)
-        except ValueError:
-            return False, f"commit path escapes vault: {value!r}"
-        if has_private_vault_segment(resolved_relative.parts):
-            return False, f"private commit path in {config_file}: {value!r}"
-        if override_paths and not is_markdown_path(resolved_relative):
-            return False, f"explicit commit path must resolve to Markdown: {value!r}"
-        if override_paths:
-            try:
-                candidate_exists = candidate.exists()
-                candidate_is_file = candidate.is_file() if candidate_exists else False
-            except (OSError, RuntimeError, ValueError):
-                return False, clipped_line(
-                    f"cannot inspect commit path in {config_file}: {value!r}", 500
-                )
-            if candidate_exists:
-                if not candidate_is_file:
-                    return False, f"explicit commit path must be a file: {value!r}"
-            else:
-                tracked = run_git(vault, ["ls-files", "-z", "--", normalized])
-                if tracked.returncode != 0:
-                    return False, clipped_line(
-                        tracked.stderr or "git ls-files failed", 500
-                    )
-                if tracked.stdout != f"{normalized}\0":
-                    return False, (
-                        "absent explicit commit path must be an exact tracked "
-                        f"Markdown file: {value!r}"
-                    )
         allowed.append(normalized)
         allowed_roots.append(relative)
     if not allowed:
@@ -731,23 +895,18 @@ def safe_commit_paths(
                     relative.parts
                 ):
                     continue
-                try:
-                    candidate = (vault / relative).resolve()
-                except (OSError, RuntimeError, ValueError):
+                classification = classify_commit_target(vault, value, explicit=True)
+                if not classification.safe or classification.normalized is None:
                     return False, clipped_line(
-                        f"cannot resolve changed commit path: {value!r}", 500
+                        _commit_target_failure_message(
+                            classification,
+                            config_file,
+                            value,
+                            explicit=True,
+                        ),
+                        500,
                     )
-                try:
-                    resolved_relative = candidate.relative_to(vault)
-                except ValueError:
-                    continue
-                if (
-                    has_private_vault_segment(resolved_relative.parts)
-                    or not is_markdown_path(resolved_relative)
-                    or (candidate.exists() and not candidate.is_file())
-                ):
-                    continue
-                selected.add(relative.as_posix())
+                selected.add(classification.normalized)
             dirty_paths = sorted(selected)
         if not dirty_paths:
             return True, "vault is clean"
@@ -839,7 +998,7 @@ def qmd_status(config: dict[str, Any]) -> dict[str, Any]:
         "collections": config["qmd_collections"],
         "version": "",
     }
-    if not enabled or executable is None:
+    if executable is None:
         return result
     try:
         version = subprocess.run(
@@ -849,11 +1008,19 @@ def qmd_status(config: dict[str, Any]) -> dict[str, Any]:
             text=True,
             timeout=5,
         )
-        version_output = version.stdout or version.stderr
-        if isinstance(version_output, str):
-            result["version"] = clipped_line(version_output, 120)
+        if (
+            version.returncode == 0
+            and isinstance(version.stdout, str)
+            and isinstance(version.stderr, str)
+            and not version.stderr.strip()
+        ):
+            version_output = version.stdout.strip()
+            if QMD_VERSION_RE.fullmatch(version_output):
+                result["version"] = clipped_line(version_output, 120)
     except (OSError, subprocess.SubprocessError):
         pass
+    if not enabled:
+        return result
     try:
         status = subprocess.run(
             [executable, "status"],
@@ -1253,8 +1420,11 @@ def _validated_audit_roots(config: dict[str, Any]) -> list[str]:
 
 
 def _audit_commit_root_findings(config: dict[str, Any]) -> list[AuditFinding]:
-    """Validate configured commit roots without invoking Git or changing files."""
-    if config.get("_commit_paths_from_defaults") is True:
+    """Validate configured commit roots using the writer's read-only contract."""
+    if (
+        config.get("_commit_paths_from_defaults") is True
+        and not config.get("auto_commit")
+    ):
         return []
     vault = config.get("vault")
     raw_paths = config.get("commit_paths")
@@ -1273,136 +1443,20 @@ def _audit_commit_root_findings(config: dict[str, Any]) -> list[AuditFinding]:
         )
 
     for index, value in enumerate(raw_paths):
-        if not isinstance(value, str) or not value.strip():
+        classification = classify_commit_target(vault, value, explicit=False)
+        if classification.code is not None:
             findings.append(
-                finding(
-                    index,
-                    "commit-root-unsafe",
-                    "commit root is not a usable path",
-                )
-            )
-            continue
-        normalized = Path(value).as_posix()
-        relative = Path(normalized)
-        if relative.is_absolute():
-            findings.append(
-                finding(
-                    index,
-                    "commit-root-absolute",
-                    "commit root must be vault-relative",
-                )
-            )
-            continue
-        if ".." in relative.parts:
-            findings.append(
-                finding(
-                    index,
-                    "commit-root-parent",
-                    "commit root cannot contain a parent segment",
-                )
-            )
-            continue
-        if not relative.parts:
-            findings.append(
-                finding(
-                    index,
-                    "commit-root-unsafe",
-                    "commit root is not a usable path",
-                )
-            )
-            continue
-        if has_private_vault_segment(relative.parts):
-            findings.append(
-                finding(
-                    index,
-                    "commit-root-private",
-                    "commit root cannot contain a private path segment",
-                )
-            )
-            continue
-
-        candidate = vault / relative
-        cursor = vault
-        routes_through_symlink = False
-        try:
-            for part in relative.parts:
-                cursor /= part
-                if cursor.is_symlink():
-                    routes_through_symlink = True
-                    break
-            resolved = candidate.resolve()
-        except (OSError, RuntimeError, ValueError):
-            findings.append(
-                finding(
-                    index,
-                    "commit-root-unsafe",
-                    "commit root could not be inspected safely",
-                )
-            )
-            continue
-        try:
-            resolved_relative = resolved.relative_to(vault)
-        except ValueError:
-            findings.append(
-                finding(
-                    index,
-                    "commit-root-escape",
-                    "commit root resolves outside the vault",
-                )
-            )
-            continue
-        if has_private_vault_segment(resolved_relative.parts):
-            findings.append(
-                finding(
-                    index,
-                    "commit-root-private",
-                    "commit root resolves through a private path segment",
-                )
-            )
-            continue
-        if routes_through_symlink or candidate.absolute() != resolved:
-            findings.append(
-                finding(
-                    index,
-                    "commit-root-symlink",
-                    "commit root is or traverses a symlink",
-                )
-            )
-            continue
-        try:
-            exists = candidate.exists()
-            is_directory = candidate.is_dir() if exists else False
-            is_file = candidate.is_file() if exists else False
-        except OSError:
-            findings.append(
-                finding(
-                    index,
-                    "commit-root-unsafe",
-                    "commit root could not be inspected safely",
-                )
-            )
-            continue
-        if not exists:
-            findings.append(
-                finding(index, "commit-root-missing", "commit root does not exist")
-            )
-        elif not is_directory and not (
-            is_file and is_markdown_path(resolved_relative)
-        ):
-            findings.append(
-                finding(
-                    index,
-                    "commit-root-shape",
-                    "commit root must be a directory or Markdown file",
-                )
+                finding(index, classification.code, classification.detail)
             )
     return findings
 
 
 def _audit_qmd_root_findings(config: dict[str, Any]) -> list[AuditFinding]:
-    """Validate QMD mappings and inspect enabled collection roots safely."""
+    """Validate active and explicitly configured QMD mappings safely."""
     enabled = bool(config.get("qmd_enabled"))
-    if not enabled and config.get("_qmd_mappings_from_defaults") is True:
+    collections_from_defaults = config.get("_qmd_collections_from_defaults") is True
+    roots_from_defaults = config.get("_qmd_collection_roots_from_defaults") is True
+    if not enabled and collections_from_defaults and roots_from_defaults:
         return []
     vault = config.get("vault")
     collections = config.get("qmd_collections")
@@ -1427,7 +1481,15 @@ def _audit_qmd_root_findings(config: dict[str, Any]) -> list[AuditFinding]:
             detail,
         )
 
-    for collection in collections:
+    audited_collections: list[str] = []
+    if enabled or not collections_from_defaults:
+        audited_collections.extend(collections)
+    if not roots_from_defaults:
+        audited_collections.extend(
+            collection for collection in mappings if collection not in audited_collections
+        )
+
+    for collection in audited_collections:
         root_value = mappings.get(collection)
         if not isinstance(collection, str) or not isinstance(root_value, str):
             raise ConfigurationError("audit QMD roots are invalid")
@@ -1441,9 +1503,6 @@ def _audit_qmd_root_findings(config: dict[str, Any]) -> list[AuditFinding]:
                 )
             )
             continue
-        if not enabled:
-            continue
-
         candidate = vault.joinpath(*relative.parts)
         cursor = vault
         routes_through_symlink = False
@@ -2036,6 +2095,8 @@ def resolve_vault_reference_detailed(
             resolved = lexical.resolve()
             vault_relative = resolved.relative_to(vault).as_posix()
         except (OSError, RuntimeError, ValueError):
+            return VaultReferenceResult(None, None, "unsafe")
+        if lexical != resolved:
             return VaultReferenceResult(None, None, "unsafe")
         if not safe_recall_parts(PurePosixPath(vault_relative).parts):
             return VaultReferenceResult(None, None, "unsafe")
