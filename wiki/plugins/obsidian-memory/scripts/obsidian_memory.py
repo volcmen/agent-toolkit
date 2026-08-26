@@ -914,7 +914,7 @@ def _without_yaml_comment(value: str) -> str:
             continue
         if character in {"'", '"'}:
             quote = character
-        elif character == "#":
+        elif character == "#" and (index == 0 or value[index - 1].isspace()):
             return value[:index].rstrip()
     return value.rstrip()
 
@@ -924,18 +924,37 @@ def _frontmatter_scalar(value: str) -> str | None:
     value = _without_yaml_comment(value).strip()
     if not value:
         return None
-    if value[0] in "&!*[{>|":
-        return None
     if value[0] in {"'", '"'} and len(value) >= 2 and value[-1] == value[0]:
         return value[1:-1]
+    if value.startswith("[[") and value.endswith("]]"):
+        return value
+    if value[0] in "&!*[{>|" or value.startswith(("- ", "-\t", "? ", "?\t")):
+        return None
+    if re.search(r":(?:\s|$)", value):
+        return None
     return value
+
+
+def read_frontmatter_prefix(path: Path, limit: int) -> str:
+    """Read the exact bounded prefix needed to recognize a frontmatter block."""
+    bound = max(0, limit)
+    try:
+        if not path.is_file():
+            return ""
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            text = handle.read(bound + 1)
+    except OSError:
+        return ""
+    if len(text) > bound:
+        text = text[:bound]
+    return text.replace("\x00", "")
 
 
 def parse_frontmatter_document(
     path: Path, limit: int = 12_000
 ) -> dict[str, FrontmatterValue]:
     """Read only bounded, inert scalar and list metadata from the first block."""
-    text = read_text(path, limit)
+    text = read_frontmatter_prefix(path, limit)
     if not text.startswith("---"):
         return {}
     lines = text.splitlines()

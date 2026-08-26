@@ -1026,6 +1026,25 @@ Prior: old unrelated outcome.
         self.assertEqual(metadata["unmatched"], "'keep this double quote\"")
         self.assertEqual(metadata["source"], ["single source", "double source"])
 
+    def test_frontmatter_document_preserves_unquoted_url_fragments(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            note = Path(temp) / "fragments.md"
+            note.write_text(
+                "---\n"
+                "reference: https://example.test/guide#usage\n"
+                "source:\n"
+                "  - https://example.test/evidence#provenance\n"
+                "---\n",
+                encoding="utf-8",
+            )
+
+            metadata = MODULE.parse_frontmatter_document(note)
+
+        self.assertEqual(metadata["reference"], "https://example.test/guide#usage")
+        self.assertEqual(
+            metadata["source"], ["https://example.test/evidence#provenance"],
+        )
+
     def test_frontmatter_document_ignores_non_scalar_yaml_constructs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             note = Path(temp) / "untrusted.md"
@@ -1046,6 +1065,9 @@ Prior: old unrelated outcome.
                 "  - allowed\n"
                 "  - !tagged ignored\n"
                 "  - {object: ignored}\n"
+                "  - kind: generated\n"
+                "  - - nested\n"
+                "  - ? explicit\n"
                 "---\n",
                 encoding="utf-8",
             )
@@ -1056,17 +1078,18 @@ Prior: old unrelated outcome.
 
     def test_frontmatter_document_requires_a_complete_block_within_limit(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            exact = Path(temp) / "exact.md"
-            exact_text = "---\nstatus: accepted\n---\n"
-            exact.write_text(exact_text, encoding="utf-8")
-            truncated = Path(temp) / "truncated.md"
-            truncated.write_text(exact_text + "x", encoding="utf-8")
+            within_bound = Path(temp) / "within-bound.md"
+            frontmatter = "---\nstatus: accepted\n---"
+            within_bound.write_text(frontmatter + "\nbody beyond bound\n", encoding="utf-8")
+            beyond_bound = Path(temp) / "beyond-bound.md"
+            incomplete_prefix = "---\nstatus: accepted\n--"
+            beyond_bound.write_text(incomplete_prefix + "-\nbody\n", encoding="utf-8")
 
             exact_metadata = MODULE.parse_frontmatter_document(
-                exact, limit=len(exact_text)
+                within_bound, limit=len(frontmatter)
             )
             truncated_metadata = MODULE.parse_frontmatter_document(
-                truncated, limit=len(exact_text)
+                beyond_bound, limit=len(incomplete_prefix)
             )
 
         self.assertEqual(exact_metadata, {"status": "accepted"})
@@ -1100,6 +1123,32 @@ Prior: old unrelated outcome.
         )
         self.assertEqual(MODULE.memory_state(metadata), "stale")
         self.assertEqual(MODULE.validity_warning(metadata), "")
+
+    def test_unquoted_heading_fragment_survives_frontmatter_and_supersession(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            source = vault / "wiki" / "old.md"
+            current = vault / "wiki" / "current.md"
+            source.write_text(
+                "---\nstatus: superseded\nsuperseded_by: [[current#Decision]]\n---\n",
+                encoding="utf-8",
+            )
+            current.write_text("---\nstatus: accepted\n---\n# Decision\n", encoding="utf-8")
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            result = MODULE.follow_supersession_chain(
+                config,
+                source_path=source,
+                source_relative="wiki/old.md",
+                metadata=MODULE.parse_frontmatter(source),
+                allowed_roots=["wiki"],
+            )
+
+        self.assertEqual(result.vault_relative, "wiki/current.md")
+        self.assertEqual(result.state, "current")
+        self.assertIsNone(result.issue)
 
     def test_supersession_follows_source_relative_chain_to_current_decision(self) -> None:
         """A sibling wikilink chain resolves relative to each predecessor."""
