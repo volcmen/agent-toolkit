@@ -877,6 +877,41 @@ Prior: old unrelated outcome.
             self.assertEqual(results, [])
             self.assertEqual(filtered, 1)
 
+    def test_supersession_follows_source_relative_chain_to_current_decision(self) -> None:
+        """A sibling wikilink chain resolves relative to each predecessor."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            decisions = vault / "projects" / "alpha" / "decisions"
+            decisions.mkdir()
+            rows = (
+                ("0017-old.md", "superseded", "[[0018-middle]]"),
+                ("0018-middle.md", "superseded", "[[0019-current]]"),
+                ("0019-current.md", "accepted", ""),
+            )
+            for name, status, successor in rows:
+                (decisions / name).write_text(
+                    f'---\nstatus: {status}\nsuperseded_by: "{successor}"\n---\n# {name}\n',
+                    encoding="utf-8",
+                )
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            result = MODULE.follow_supersession_chain(
+                config,
+                source_path=decisions / "0017-old.md",
+                source_relative="projects/alpha/decisions/0017-old.md",
+                metadata=MODULE.parse_frontmatter(decisions / "0017-old.md"),
+                allowed_roots=["projects"],
+                scope="projects/alpha",
+            )
+            self.assertEqual(
+                result.vault_relative,
+                "projects/alpha/decisions/0019-current.md",
+            )
+            self.assertEqual(result.state, "current")
+            self.assertIsNone(result.issue)
+
     def test_supersession_chain_skips_successors_that_are_themselves_stale(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -906,6 +941,15 @@ Prior: old unrelated outcome.
                 os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
             ):
                 config, _ = MODULE.load_config()
+
+            cycle = MODULE.follow_supersession_chain(
+                config,
+                source_path=vault / "wiki" / "loop-a.md",
+                source_relative="wiki/loop-a.md",
+                metadata=MODULE.parse_frontmatter(vault / "wiki" / "loop-a.md"),
+                allowed_roots=["wiki"],
+            )
+            self.assertEqual(cycle.issue, "cycle")
 
             chained, _ = MODULE.compact_recall_results(
                 config,
@@ -1018,6 +1062,15 @@ Prior: old unrelated outcome.
                 os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
             ):
                 config, _ = MODULE.load_config()
+            active_roots = MODULE.provider_recall_roots(config, "qmd")
+            out_of_root = MODULE.follow_supersession_chain(
+                config,
+                source_path=vault / "wiki" / "old.md",
+                source_relative="wiki/old.md",
+                metadata=MODULE.parse_frontmatter(vault / "wiki" / "old.md"),
+                allowed_roots=active_roots,
+            )
+            self.assertEqual(out_of_root.issue, "out-of-root")
             results, filtered = MODULE.compact_recall_results(
                 config,
                 [{"path": "wiki/old.md", "snippet": "decision"}],
@@ -1165,6 +1218,18 @@ Prior: old unrelated outcome.
                 config, _ = MODULE.load_config()
             rows = [{"path": "projects/alpha/old.md", "snippet": "deployment decision"}]
 
+            out_of_scope = MODULE.follow_supersession_chain(
+                config,
+                source_path=vault / "projects" / "alpha" / "old.md",
+                source_relative="projects/alpha/old.md",
+                metadata=MODULE.parse_frontmatter(
+                    vault / "projects" / "alpha" / "old.md"
+                ),
+                allowed_roots=["projects"],
+                scope="projects/alpha",
+            )
+            self.assertEqual(out_of_scope.issue, "out-of-scope")
+
             scoped, filtered = MODULE.compact_recall_results(
                 config,
                 rows,
@@ -1180,6 +1245,31 @@ Prior: old unrelated outcome.
                 config, rows, limit=5, max_tokens=900, include_stale=False
             )
             self.assertEqual([hit["path"] for hit in unscoped], ["projects/beta/new.md"])
+
+    def test_supersession_chain_reports_hop_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            for number in range(1, MODULE.MAX_SUPERSESSION_HOPS + 2):
+                successor = f"wiki/v{number + 1}.md"
+                (vault / "wiki" / f"v{number}.md").write_text(
+                    "---\nstatus: superseded\n"
+                    f"superseded_by: {successor}\n---\n",
+                    encoding="utf-8",
+                )
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+            limited = MODULE.follow_supersession_chain(
+                config,
+                source_path=vault / "wiki" / "v1.md",
+                source_relative="wiki/v1.md",
+                metadata=MODULE.parse_frontmatter(vault / "wiki" / "v1.md"),
+                allowed_roots=["wiki"],
+            )
+            self.assertEqual(limited.issue, "hop-limit")
 
     def test_oversized_first_hit_degrades_instead_of_starving_recall(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

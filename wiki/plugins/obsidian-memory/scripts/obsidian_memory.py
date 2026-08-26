@@ -950,6 +950,15 @@ class VaultReferenceResult:
     issue: str | None
 
 
+@dataclass(frozen=True)
+class SupersessionResult:
+    path: Path | None
+    vault_relative: str | None
+    metadata: dict[str, str]
+    state: str
+    issue: str | None
+
+
 def clean_wikilink_target(reference: str) -> PurePosixPath | None:
     cleaned = reference.strip().strip("'\"")
     if cleaned.startswith("[[") and cleaned.endswith("]]"):
@@ -1189,6 +1198,56 @@ def memory_state(metadata: dict[str, str], today: dt.date | None = None) -> str:
     return "unknown"
 
 
+def follow_supersession_chain(
+    config: dict[str, Any],
+    *,
+    source_path: Path,
+    source_relative: str,
+    metadata: dict[str, str],
+    allowed_roots: list[str],
+    scope: str | None = None,
+) -> SupersessionResult:
+    """Resolve a stale note's bounded successor chain inside recall boundaries."""
+    seen = {source_relative}
+    current_path = source_path
+    current_metadata = metadata
+    for _hop in range(MAX_SUPERSESSION_HOPS):
+        reference = current_metadata.get("superseded_by", "")
+        if not reference:
+            return SupersessionResult(None, None, {}, "", "missing-reference")
+        resolved = resolve_vault_reference_detailed(
+            config,
+            reference,
+            source_path=current_path,
+            allowed_roots=allowed_roots,
+        )
+        if resolved.issue or resolved.path is None or resolved.vault_relative is None:
+            return SupersessionResult(
+                None,
+                None,
+                {},
+                "",
+                resolved.issue or "missing",
+            )
+        if not path_in_scope(resolved.vault_relative, scope):
+            return SupersessionResult(None, None, {}, "", "out-of-scope")
+        if resolved.vault_relative in seen:
+            return SupersessionResult(None, None, {}, "", "cycle")
+        seen.add(resolved.vault_relative)
+        current_path = resolved.path
+        current_metadata = parse_frontmatter(current_path)
+        state = memory_state(current_metadata)
+        if state not in HIDDEN_STATES:
+            return SupersessionResult(
+                current_path,
+                resolved.vault_relative,
+                current_metadata,
+                state,
+                None,
+            )
+    return SupersessionResult(None, None, {}, "", "hop-limit")
+
+
 def validity_warning(metadata: dict[str, str]) -> str:
     """Name unparsable validity bounds instead of silently reading them as open.
 
@@ -1216,37 +1275,22 @@ def supersession_redirect(
     stale_path: str,
     snippet_limit: int,
     allowed_roots: list[str],
+    scope: str | None = None,
 ) -> dict[str, Any] | None:
-    # Follow the chain so a successor that is itself stale cannot re-enter
-    # results through supersession routing. Bounded and cycle-checked.
-    seen = {stale_path}
-    current_metadata = metadata
-    source_path: Path | None = None
-    vault_relative = ""
-    replacement_metadata: dict[str, str] = {}
-    replacement_state = ""
-    for _hop in range(MAX_SUPERSESSION_HOPS):
-        reference = current_metadata.get("superseded_by", "")
-        resolved = resolve_vault_reference(config, reference) if reference else None
-        if resolved is None:
-            return None
-        source_path, vault_relative = resolved
-        # Configured recall roots are a privacy boundary; a successor outside
-        # them stays hidden instead of leaking through supersession routing.
-        if not path_within_roots(vault_relative, allowed_roots):
-            return None
-        if vault_relative in seen:
-            return None
-        seen.add(vault_relative)
-        replacement_metadata = parse_frontmatter(source_path)
-        replacement_state = memory_state(replacement_metadata)
-        if replacement_state not in HIDDEN_STATES:
-            break
-        current_metadata = replacement_metadata
-    else:
+    replacement = follow_supersession_chain(
+        config,
+        source_path=config["vault"] / stale_path,
+        source_relative=stale_path,
+        metadata=metadata,
+        allowed_roots=allowed_roots,
+        scope=scope,
+    )
+    if replacement.issue is not None or replacement.path is None:
         return None
-    if source_path is None:
-        return None
+    source_path = replacement.path
+    vault_relative = replacement.vault_relative
+    replacement_metadata = replacement.metadata
+    replacement_state = replacement.state
     hit: dict[str, Any] = {
         "path": vault_relative,
         "reason": f"supersedes {stale_path}",
@@ -1338,14 +1382,13 @@ def compact_recall_results(
         if state in HIDDEN_STATES and not include_stale:
             filtered_stale += 1
             redirect = supersession_redirect(
-                config, metadata, path_value, snippet_limit, allowed_roots
+                config,
+                metadata,
+                path_value,
+                snippet_limit,
+                allowed_roots,
+                scope,
             )
-            if redirect is not None and not path_in_scope(
-                str(redirect.get("path", "")), scope
-            ):
-                # A scope is an isolation boundary; a successor outside it stays
-                # hidden rather than leaking through supersession routing.
-                redirect = None
             if redirect is not None and not append_within_budget(redirect):
                 break
             continue
