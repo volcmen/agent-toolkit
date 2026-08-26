@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -942,32 +943,130 @@ def resolve_qmd_uri(config: dict[str, Any], uri: str) -> tuple[Path, str] | None
     return candidate, vault_relative
 
 
-def resolve_vault_reference(
-    config: dict[str, Any], reference: str
-) -> tuple[Path, str] | None:
-    cleaned = reference.strip().strip('"\'')
+@dataclass(frozen=True)
+class VaultReferenceResult:
+    path: Path | None
+    vault_relative: str | None
+    issue: str | None
+
+
+def clean_wikilink_target(reference: str) -> PurePosixPath | None:
+    cleaned = reference.strip().strip("'\"")
     if cleaned.startswith("[[") and cleaned.endswith("]]"):
-        cleaned = cleaned[2:-2].split("|", 1)[0]
+        cleaned = cleaned[2:-2]
+    cleaned = cleaned.split("|", 1)[0].split("#", 1)[0].strip()
     relative = PurePosixPath(cleaned)
-    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+    if not cleaned or relative.is_absolute() or ".." in relative.parts:
         return None
-    if not safe_recall_parts(relative.parts):
+    return relative
+
+
+def resolve_vault_reference_detailed(
+    config: dict[str, Any],
+    reference: str,
+    *,
+    source_path: Path | None = None,
+    allowed_roots: list[str] | None = None,
+) -> VaultReferenceResult:
+    relative = clean_wikilink_target(reference)
+    if relative is None or not safe_recall_parts(relative.parts):
+        return VaultReferenceResult(None, None, "unsafe")
+    if relative.suffix and relative.suffix.casefold() != ".md":
+        return VaultReferenceResult(None, None, "non-markdown")
+
+    root_values = allowed_roots or config["recall_roots"]
+    roots: list[str] = []
+    for value in root_values:
+        root = PurePosixPath(value)
+        if (
+            not root.parts
+            or root.is_absolute()
+            or ".." in root.parts
+            or not safe_recall_parts(root.parts)
+        ):
+            return VaultReferenceResult(None, None, "unsafe")
+        roots.append(root.as_posix())
+
+    vault = Path(config["vault"]).resolve()
+
+    def detailed_candidate(candidate: Path) -> VaultReferenceResult:
+        resolved = candidate.resolve()
+        try:
+            vault_relative = resolved.relative_to(vault).as_posix()
+        except ValueError:
+            return VaultReferenceResult(None, None, "unsafe")
+        if not safe_recall_parts(PurePosixPath(vault_relative).parts):
+            return VaultReferenceResult(None, None, "unsafe")
+        if not resolved.is_file():
+            return VaultReferenceResult(None, None, "missing")
+        if resolved.suffix.casefold() != ".md":
+            return VaultReferenceResult(None, None, "non-markdown")
+        if not path_within_roots(vault_relative, roots):
+            return VaultReferenceResult(None, None, "out-of-root")
+        return VaultReferenceResult(resolved, vault_relative, None)
+
+    def target_from(directory: Path) -> Path:
+        target = directory / relative
+        return target if relative.suffix else target.with_suffix(".md")
+
+    if source_path is None:
+        return detailed_candidate(target_from(vault))
+
+    if path_within_roots(relative.as_posix(), roots):
+        return detailed_candidate(target_from(vault))
+
+    source_result = detailed_candidate(target_from(source_path.parent))
+    if source_result.issue != "missing":
+        return source_result
+    if len(relative.parts) != 1:
+        return source_result
+
+    filename = target_from(Path()).name.casefold()
+    matches: dict[Path, VaultReferenceResult] = {}
+    for root_name in roots:
+        root = (vault / PurePosixPath(root_name)).resolve()
+        try:
+            root_relative = root.relative_to(vault).as_posix()
+        except ValueError:
+            return VaultReferenceResult(None, None, "unsafe")
+        if not safe_recall_parts(PurePosixPath(root_relative).parts):
+            return VaultReferenceResult(None, None, "unsafe")
+        for directory, directories, filenames in os.walk(root, followlinks=False):
+            directories[:] = [
+                name for name in directories if not name.casefold().startswith(".")
+            ]
+            for name in filenames:
+                if name.casefold() != filename:
+                    continue
+                result = detailed_candidate(Path(directory) / name)
+                if result.issue == "unsafe":
+                    return result
+                if result.path is not None:
+                    matches[result.path] = result
+
+    if len(matches) == 1:
+        return next(iter(matches.values()))
+    if len(matches) > 1:
+        return VaultReferenceResult(None, None, "ambiguous")
+    return VaultReferenceResult(None, None, "missing")
+
+
+def resolve_vault_reference(
+    config: dict[str, Any],
+    reference: str,
+    *,
+    source_path: Path | None = None,
+    allowed_roots: list[str] | None = None,
+) -> tuple[Path, str] | None:
+    result = resolve_vault_reference_detailed(
+        config,
+        reference,
+        source_path=source_path,
+        allowed_roots=allowed_roots,
+    )
+    if result.path is None or result.vault_relative is None:
         return None
-    vault: Path = config["vault"]
-    candidate = (vault / relative).resolve()
-    if not candidate.suffix:
-        markdown_candidate = candidate.with_suffix(".md")
-        if markdown_candidate.is_file():
-            candidate = markdown_candidate
-    try:
-        vault_relative = candidate.relative_to(vault).as_posix()
-    except ValueError:
-        return None
-    if not candidate.is_file() or candidate.suffix.casefold() != ".md":
-        return None
-    if not safe_recall_parts(PurePosixPath(vault_relative).parts):
-        return None
-    return candidate, vault_relative
+    return result.path, result.vault_relative
 
 
 def normalize_recall_scope(scope: str | None) -> str | None:

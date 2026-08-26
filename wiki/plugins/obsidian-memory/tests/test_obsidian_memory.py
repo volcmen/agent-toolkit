@@ -17,6 +17,7 @@ SCRIPT = Path(__file__).parents[1] / "scripts" / "obsidian_memory.py"
 SPEC = importlib.util.spec_from_file_location("obsidian_memory", SCRIPT)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
@@ -618,6 +619,73 @@ Prior: old unrelated outcome.
             encoded = json.dumps(results, ensure_ascii=False, separators=(",", ":"))
             self.assertLessEqual(MODULE.estimated_tokens(encoded), 180)
             self.assertLess(len(results), len(raw))
+
+    def test_vault_reference_resolves_sibling_alias_and_heading(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            decisions = vault / "projects" / "alpha" / "decisions"
+            decisions.mkdir()
+            source = decisions / "0001-old.md"
+            target = decisions / "0002-current.md"
+            source.write_text("---\nstatus: superseded\n---\n", encoding="utf-8")
+            target.write_text("---\nstatus: accepted\n---\n", encoding="utf-8")
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            result = MODULE.resolve_vault_reference_detailed(
+                config,
+                "[[0002-current#Decision|current choice]]",
+                source_path=source,
+                allowed_roots=["projects"],
+            )
+            self.assertEqual(result.path, target.resolve())
+            self.assertEqual(
+                result.vault_relative,
+                "projects/alpha/decisions/0002-current.md",
+            )
+            self.assertIsNone(result.issue)
+
+    def test_vault_reference_rejects_ambiguous_bare_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            source = vault / "projects" / "alpha" / "old.md"
+            source.write_text("old", encoding="utf-8")
+            for project in ("beta", "gamma"):
+                directory = vault / "projects" / project
+                directory.mkdir()
+                (directory / "current.md").write_text("current", encoding="utf-8")
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            result = MODULE.resolve_vault_reference_detailed(
+                config,
+                "[[current]]",
+                source_path=source,
+                allowed_roots=["projects"],
+            )
+            self.assertIsNone(result.path)
+            self.assertEqual(result.issue, "ambiguous")
+
+    def test_missing_explicit_root_path_never_falls_back_by_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            source = vault / "projects" / "alpha" / "old.md"
+            source.write_text("old", encoding="utf-8")
+            (vault / "wiki" / "current.md").write_text("current", encoding="utf-8")
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            result = MODULE.resolve_vault_reference_detailed(
+                config,
+                "projects/missing/current",
+                source_path=source,
+                allowed_roots=["wiki", "projects"],
+            )
+            self.assertIsNone(result.path)
+            self.assertEqual(result.issue, "missing")
 
     def test_private_paths_survive_case_and_symlink_variants(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
