@@ -314,14 +314,97 @@ def validate_memory_policy() -> None:
     research = (ROOT / "docs" / "research" / "2026-08-01-agent-memory-systems.md").read_text(
         encoding="utf-8"
     )
+    scope_and_method, findings_marker, _ = research.partition("## Findings")
+    require(findings_marker, "memory-provider research omits Findings")
     for term in (
         "b2bd1ac63ff137a6287ce989d65dccee6b9155e2",
         "nine available",
-        "Memori",
         "source- and contract-level",
         "not a claim of live end-to-end success",
     ):
-        require(term in research, f"memory-provider research omits: {term}")
+        require(
+            term in scope_and_method,
+            f"memory-provider research scope and method omits: {term}",
+        )
+
+    provider_heading = "### Providers should preserve a dependable canonical layer"
+    _, provider_heading_marker, provider_section = research.partition(provider_heading)
+    require(provider_heading_marker, "memory-provider research omits provider heading")
+    provider_section, _, _ = provider_section.partition("\n### ")
+    table_lines = provider_section.splitlines()
+    table_header = "| Provider | Verified design surface | Local decision |"
+    try:
+        table_start = table_lines.index(table_header)
+    except ValueError as exc:
+        raise ValidationError("memory-provider research omits provider decision table") from exc
+    require(
+        table_start + 1 < len(table_lines)
+        and table_lines[table_start + 1].strip() == "| --- | --- | --- |",
+        "memory-provider research provider table has invalid separator",
+    )
+    provider_rows: list[tuple[str, str, str]] = []
+    for line in table_lines[table_start + 2 :]:
+        if not line.startswith("|"):
+            break
+        cells = [cell.strip() for cell in line.strip().split("|")[1:-1]]
+        require(
+            len(cells) == 3,
+            "memory-provider research provider table row must have three cells",
+        )
+        provider, surface, decision = cells
+        require(provider and surface and decision, "memory-provider research provider table has an empty cell")
+        provider_rows.append((provider, surface, decision))
+
+    expected_providers = {
+        "ByteRover",
+        "Hindsight",
+        "Holographic",
+        "Honcho",
+        "Mem0",
+        "Memori",
+        "OpenViking",
+        "RetainDB",
+        "Supermemory",
+    }
+    provider_names = [provider for provider, _, _ in provider_rows]
+    require(
+        len(provider_names) == len(set(provider_names)),
+        "memory-provider research provider table has duplicate providers",
+    )
+    require(
+        set(provider_names) == expected_providers,
+        "memory-provider research provider table must contain exactly the nine Hermes providers",
+    )
+    hindsight_decision = next(
+        decision for provider, _, decision in provider_rows if provider == "Hindsight"
+    )
+    require(
+        hindsight_decision
+        == "Defer as the best synthetic-data pilot only after a measured graph/temporal failure.",
+        "memory-provider research Hindsight decision must defer the synthetic-data pilot until a measured graph/temporal failure",
+    )
+
+    _, primary_references_marker, primary_references = research.partition("## Primary references")
+    require(primary_references_marker, "memory-provider research omits Primary references")
+    primary_urls = set(re.findall(r"https?://[^\s)]+", primary_references))
+    required_primary_urls = {
+        "https://github.com/NousResearch/hermes-agent",
+        "https://github.com/plastic-labs/honcho",
+        "https://github.com/volcengine/OpenViking/blob/main/docs/en/concepts/01-architecture.md",
+        "https://github.com/mem0ai/mem0/blob/main/docs/core-concepts/how-it-works.mdx",
+        "https://github.com/vectorize-io/hindsight",
+        "https://www.retaindb.com/docs/intro",
+        "https://docs.byterover.dev/reference/cli-reference",
+        "https://github.com/supermemoryai/supermemory/blob/main/apps/docs/self-hosting/quickstart.mdx",
+        "https://github.com/MemoriLabs/Memori/blob/main/docs/memori-cloud/hermes/quickstart.mdx",
+        "https://github.com/tobi/qmd",
+    }
+    missing_primary_urls = required_primary_urls - primary_urls
+    require(
+        not missing_primary_urls,
+        "memory-provider research omits primary references: "
+        + ", ".join(sorted(missing_primary_urls)),
+    )
 
     evals = load_json("plugins/obsidian-memory/evals/memory-evals.json")
     require(evals.get("schema_version") == 1, "unsupported memory eval schema")
