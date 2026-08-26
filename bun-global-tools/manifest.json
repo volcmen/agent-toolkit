@@ -13,7 +13,7 @@
     },
     {
       "name": "@tobilu/qmd",
-      "version": "2.5.3",
+      "version": "2.8.3",
       "binaries": ["qmd"]
     },
     {
