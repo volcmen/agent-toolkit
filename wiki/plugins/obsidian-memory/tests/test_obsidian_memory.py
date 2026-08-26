@@ -5214,6 +5214,234 @@ Prior: old unrelated outcome.
                 ],
             )
 
+    def test_audit_and_stop_accept_staged_and_mixed_markdown_deletion_roots(
+        self,
+    ) -> None:
+        """Catches index-only evidence and all-descendants-must-be-Markdown drift."""
+        cases = (
+            ("staged deletion", "projects/staged-root", True, ()),
+            (
+                "mixed deletion",
+                "projects/mixed-root",
+                False,
+                (
+                    "attachment.png",
+                    "state.json",
+                    ".private/secret.md",
+                ),
+            ),
+        )
+        for label, configured_root, stage_deletion, irrelevant_names in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                vault = self.make_vault(root)
+                deletion_root = vault / configured_root
+                deletion_root.mkdir()
+                note = deletion_root / "gone.MD"
+                note.write_text("before\n", encoding="utf-8")
+                irrelevant_paths: list[Path] = []
+                for name in irrelevant_names:
+                    path = deletion_root / name
+                    path.parent.mkdir(exist_ok=True)
+                    path.write_text("irrelevant\n", encoding="utf-8")
+                    irrelevant_paths.append(path)
+                self.init_git_vault(vault)
+
+                note.unlink()
+                for path in irrelevant_paths:
+                    path.unlink()
+                private_directory = deletion_root / ".private"
+                if private_directory.exists():
+                    private_directory.rmdir()
+                deletion_root.rmdir()
+                relative_note = f"{configured_root}/gone.MD"
+                if stage_deletion:
+                    subprocess.run(
+                        ["git", "-C", str(vault), "add", "-A", "--", relative_note],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+
+                config_path = self.write_config(
+                    root,
+                    vault,
+                    auto_commit=True,
+                    commit_paths=[configured_root],
+                )
+                head_before = self.git_stdout(vault, "rev-parse", "HEAD")
+                index_bytes_before = (vault / ".git" / "index").read_bytes()
+                with mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ):
+                    config, _ = MODULE.load_config()
+                    report = MODULE.audit_vault(config)
+
+                self.assertFalse(
+                    any(
+                        item["code"].startswith("commit-root-")
+                        for item in report["findings"]
+                    )
+                )
+                self.assertEqual(
+                    head_before, self.git_stdout(vault, "rev-parse", "HEAD")
+                )
+                self.assertEqual(
+                    index_bytes_before, (vault / ".git" / "index").read_bytes()
+                )
+
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPT), "stop"],
+                    input="{}",
+                    text=True,
+                    capture_output=True,
+                    env={**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)},
+                    check=False,
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), {})
+                self.assertNotEqual(
+                    head_before, self.git_stdout(vault, "rev-parse", "HEAD")
+                )
+                self.assertEqual(
+                    self.git_stdout(
+                        vault, "show", "--name-only", "--format="
+                    ).splitlines(),
+                    [relative_note],
+                )
+                remaining = self.git_stdout(vault, "status", "--porcelain")
+                self.assertNotIn(relative_note, remaining)
+                for path in irrelevant_paths:
+                    self.assertIn(path.relative_to(vault).as_posix(), remaining)
+
+    def test_audit_and_stop_reject_absent_clean_index_entries_as_deletions(
+        self,
+    ) -> None:
+        """Catches skip-worktree/assume-unchanged absence masquerading as deletion."""
+        flags = ("--skip-worktree", "--assume-unchanged")
+        for flag in flags:
+            with self.subTest(flag=flag), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                vault = self.make_vault(root)
+                target = vault / "wiki" / "hidden.md"
+                target.write_text("before\n", encoding="utf-8")
+                self.init_git_vault(vault)
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(vault),
+                        "update-index",
+                        flag,
+                        "--",
+                        "wiki/hidden.md",
+                    ],
+                    check=True,
+                )
+                target.unlink()
+                config_path = self.write_config(
+                    root,
+                    vault,
+                    auto_commit=True,
+                    commit_paths=["wiki/hidden.md"],
+                )
+                head_before = self.git_stdout(vault, "rev-parse", "HEAD")
+                index_bytes_before = (vault / ".git" / "index").read_bytes()
+                with mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ):
+                    config, _ = MODULE.load_config()
+                    report = MODULE.audit_vault(config)
+
+                self.assertEqual(
+                    [
+                        (item.get("field"), item["code"])
+                        for item in report["findings"]
+                        if item["code"].startswith("commit-root-")
+                    ],
+                    [("commit_paths[0]", "commit-root-missing")],
+                )
+                self.assertEqual(
+                    head_before, self.git_stdout(vault, "rev-parse", "HEAD")
+                )
+                self.assertEqual(
+                    index_bytes_before, (vault / ".git" / "index").read_bytes()
+                )
+
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPT), "stop"],
+                    input="{}",
+                    text=True,
+                    capture_output=True,
+                    env={**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)},
+                    check=False,
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("systemMessage", json.loads(result.stdout))
+                self.assertEqual(
+                    head_before, self.git_stdout(vault, "rev-parse", "HEAD")
+                )
+                self.assertEqual(
+                    index_bytes_before, (vault / ".git" / "index").read_bytes()
+                )
+
+    def test_raw_deletion_evidence_rejects_unsafe_or_malformed_records(self) -> None:
+        """Catches malformed, non-deletion, unmerged, or symlink evidence."""
+        old_object = "1" * 40
+        new_object = "2" * 40
+        zero_object = "0" * 40
+        cases = (
+            ("malformed", "not-a-raw-record\0wiki/gone.md\0"),
+            (
+                "modified",
+                f":100644 100644 {old_object} {new_object} M\0wiki/gone.md\0",
+            ),
+            (
+                "unmerged",
+                f":000000 100644 {zero_object} {new_object} U\0wiki/gone.md\0",
+            ),
+            (
+                "symlink deletion",
+                f":120000 000000 {old_object} {zero_object} D\0wiki/gone.md\0",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            vault = Path(temp) / "vault"
+            (vault / ".git").mkdir(parents=True)
+            for label, output in cases:
+                completed = subprocess.CompletedProcess(
+                    ["git", "diff"], 0, stdout=output, stderr=""
+                )
+                with (
+                    self.subTest(label=label),
+                    mock.patch.object(MODULE.shutil, "which", return_value="/usr/bin/git"),
+                    mock.patch.object(
+                        MODULE, "run_git", return_value=completed
+                    ) as run,
+                ):
+                    accepted = MODULE._tracked_deleted_markdown_paths(
+                        vault, "wiki/gone.md", exact=True
+                    )
+
+                self.assertFalse(accepted)
+                self.assertEqual(
+                    run.call_args.args,
+                    (
+                        vault,
+                        [
+                            "diff",
+                            "--raw",
+                            "-z",
+                            "--no-renames",
+                            "HEAD",
+                            "--",
+                            "wiki/gone.md",
+                        ],
+                    ),
+                )
+
     def test_audit_and_stop_reject_the_same_unsafe_commit_roots_read_only(
         self,
     ) -> None:
@@ -5495,6 +5723,48 @@ Prior: old unrelated outcome.
                 "SECRET DIAGNOSTIC",
             ):
                 self.assertNotIn(secret, encoded)
+
+    def test_qmd_version_decode_errors_are_safe_enabled_and_disabled(self) -> None:
+        """Catches text decoding failures escaping or suppressing health checks."""
+        healthy = subprocess.CompletedProcess(
+            ["qmd", "status"], 0, stdout="healthy\n", stderr=""
+        )
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                decode_error = UnicodeDecodeError(
+                    "utf-8", b"\xff", 0, 1, "invalid provider output"
+                )
+                side_effects: list[object] = [decode_error]
+                if enabled:
+                    side_effects.append(healthy)
+                with (
+                    mock.patch.object(
+                        MODULE.shutil, "which", return_value="/opt/bin/qmd"
+                    ),
+                    mock.patch.object(
+                        MODULE.subprocess, "run", side_effect=side_effects
+                    ) as run,
+                ):
+                    report = MODULE.qmd_status(
+                        {
+                            "qmd_enabled": enabled,
+                            "qmd_collections": ["obsidian-wiki"],
+                        }
+                    )
+
+                self.assertEqual(report["version"], "")
+                if enabled:
+                    self.assertTrue(report["healthy"])
+                    self.assertEqual(
+                        [call.args[0] for call in run.call_args_list],
+                        [
+                            ["/opt/bin/qmd", "--version"],
+                            ["/opt/bin/qmd", "status"],
+                        ],
+                    )
+                else:
+                    self.assertNotIn("healthy", report)
+                    self.assertEqual(len(run.call_args_list), 1)
 
     def test_audit_extended_findings_preserve_bounds_counts_privacy_and_bytes(
         self,

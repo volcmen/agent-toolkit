@@ -616,59 +616,71 @@ def run_git(vault: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
 def _tracked_deleted_markdown_paths(
     vault: Path, normalized: str, *, exact: bool
 ) -> bool:
-    """Return whether literal index evidence proves a safe Markdown deletion."""
+    """Return whether a literal raw diff proves an eligible Markdown deletion."""
     if shutil.which("git") is None or not (vault / ".git").exists():
         return False
     try:
-        tracked = run_git(vault, ["ls-files", "--stage", "-z", "--", normalized])
+        tracked = run_git(
+            vault,
+            ["diff", "--raw", "-z", "--no-renames", "HEAD", "--", normalized],
+        )
     except (OSError, RuntimeError, ValueError, UnicodeError, subprocess.SubprocessError):
         return False
     if tracked.returncode != 0 or not tracked.stdout:
         return False
 
     prefix = PurePosixPath(normalized)
-    found: list[str] = []
-    for record in tracked.stdout.split("\0"):
-        if not record:
-            continue
-        try:
-            header, tracked_path = record.split("\t", 1)
-            mode, _object_id, stage = header.split(" ", 2)
-        except ValueError:
+    fields = tracked.stdout.split("\0")
+    if fields[-1] != "" or len(fields) % 2 == 0:
+        return False
+
+    found = False
+    for index in range(0, len(fields) - 1, 2):
+        header = fields[index]
+        tracked_path = fields[index + 1]
+        header_fields = header.split(" ")
+        if len(header_fields) != 5 or not header_fields[0].startswith(":"):
+            return False
+        old_mode = header_fields[0][1:]
+        new_mode, old_object, new_object, status = header_fields[1:]
+        if (
+            re.fullmatch(r"[0-7]{6}", old_mode) is None
+            or re.fullmatch(r"[0-7]{6}", new_mode) is None
+            or re.fullmatch(r"[0-9a-f]+", old_object) is None
+            or re.fullmatch(r"[0-9a-f]+", new_object) is None
+            or re.fullmatch(r"[A-Z][0-9]*", status) is None
+        ):
             return False
         relative = PurePosixPath(tracked_path)
         if (
-            stage != "0"
-            or mode not in {"100644", "100755"}
-            or relative.is_absolute()
+            relative.is_absolute()
             or not relative.parts
             or ".." in relative.parts
             or relative.as_posix() != tracked_path
-            or has_private_vault_segment(relative.parts)
-            or not is_markdown_path(tracked_path)
-            or (exact and tracked_path != normalized)
-            or (not exact and relative != prefix and prefix not in relative.parents)
         ):
             return False
-        candidate = vault / Path(*relative.parts)
-        cursor = vault
-        try:
-            for part in relative.parts:
-                cursor /= part
-                if cursor.is_symlink():
-                    return False
-            resolved = candidate.resolve()
-            resolved_relative = resolved.relative_to(vault)
-            if (
-                candidate.absolute() != resolved
-                or has_private_vault_segment(resolved_relative.parts)
-                or candidate.exists()
-            ):
-                return False
-        except (OSError, RuntimeError, ValueError):
+        within_target = (
+            tracked_path == normalized
+            if exact
+            else relative == prefix or prefix in relative.parents
+        )
+        eligible = (
+            within_target
+            and not has_private_vault_segment(relative.parts)
+            and is_markdown_path(tracked_path)
+        )
+        if not eligible:
+            continue
+        if (
+            status != "D"
+            or old_mode not in {"100644", "100755"}
+            or new_mode != "000000"
+            or set(old_object) == {"0"}
+            or set(new_object) != {"0"}
+        ):
             return False
-        found.append(tracked_path)
-    return bool(found) and (not exact or found == [normalized])
+        found = True
+    return found
 
 
 def classify_commit_target(
@@ -911,9 +923,19 @@ def safe_commit_paths(
         if not dirty_paths:
             return True, "vault is clean"
 
-        add = run_git(vault, ["add", "--", *dirty_paths])
-        if add.returncode != 0:
-            return False, clipped_line(add.stderr or "git add failed", 500)
+        indexed = run_git(vault, ["ls-files", "-z", "--", *dirty_paths])
+        if indexed.returncode != 0:
+            return False, clipped_line(indexed.stderr or "git ls-files failed", 500)
+        indexed_paths = {path for path in indexed.stdout.split("\0") if path}
+        paths_to_add = [
+            path
+            for path in dirty_paths
+            if (vault / path).exists() or path in indexed_paths
+        ]
+        if paths_to_add:
+            add = run_git(vault, ["add", "-A", "--", *paths_to_add])
+            if add.returncode != 0:
+                return False, clipped_line(add.stderr or "git add failed", 500)
 
         diff = run_git(vault, ["diff", "--cached", "--quiet", "--", *dirty_paths])
         if diff.returncode == 0:
@@ -1017,7 +1039,7 @@ def qmd_status(config: dict[str, Any]) -> dict[str, Any]:
             version_output = version.stdout.strip()
             if QMD_VERSION_RE.fullmatch(version_output):
                 result["version"] = clipped_line(version_output, 120)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, UnicodeError, subprocess.SubprocessError):
         pass
     if not enabled:
         return result
