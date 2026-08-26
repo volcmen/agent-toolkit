@@ -1245,6 +1245,63 @@ Prior: old unrelated outcome.
                 self.assertEqual(before, after)
                 self.assertEqual(staged, "")
 
+    def test_explicit_commit_paths_reject_git_pathspec_magic_before_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            subprocess.run(["git", "init", "-q", str(vault)], check=True)
+            subprocess.run(
+                ["git", "-C", str(vault), "config", "user.name", "Test"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(vault), "config", "user.email", "test@example.com"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(vault), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(vault), "commit", "-qm", "initial"], check=True)
+
+            private = vault / ".raw" / "source.md"
+            private.parent.mkdir()
+            private.write_text("private change\n", encoding="utf-8")
+            config_path = self.write_config(root, vault, commit_paths=["wiki"])
+            before = subprocess.run(
+                ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "commit",
+                    "--path",
+                    ":(glob).raw/*.md",
+                ],
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            after = subprocess.run(
+                ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            staged = subprocess.run(
+                ["git", "-C", str(vault), "diff", "--cached", "--name-only"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(before, after)
+            self.assertEqual(staged, "")
+
     def test_auto_commit_rejects_private_configured_paths_before_staging(self) -> None:
         hostile_paths = [
             ".raw",
