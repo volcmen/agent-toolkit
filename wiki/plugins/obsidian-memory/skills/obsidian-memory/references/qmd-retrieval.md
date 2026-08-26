@@ -5,6 +5,12 @@ folders. It accelerates discovery; it does not replace the vault, determine
 authority, or write source notes. Read `recall-providers.md` first for provider
 selection, native fallback, and scope rules.
 
+The supported workspace pin is QMD 2.8.3, installed only through the Bun
+manifest. It is a local derived accelerator: caches and embeddings are
+disposable, while Markdown/Git remains recovery authority. QMD HTTP/MCP,
+project-local configuration, external source paths, and custom model URIs are
+not enabled.
+
 ## Retrieval ladder
 
 1. Use the SessionStart L0 capsule when recent active context is sufficient. It
@@ -71,10 +77,18 @@ pool size there rather than a fixed value. The query is passed after `--` so a
 term beginning with a dash is searched, not parsed as an option. Run QMD directly only when debugging or
 intentionally benchmarking deeper reranking.
 
-## Freshness
+## Freshness and controlled rollout
 
 The native provider reads Markdown directly and needs no refresh. When QMD is
-enabled, refresh its lexical index after substantive vault writes:
+enabled, refresh its lexical index only as explicit maintenance after
+substantive vault writes. Before changing this derived index, use the
+repository's controlled sequence: validate the workspace and Bun manifest;
+apply the exact pin; after integration force-install and inspect local plugin
+copies; then run `providers --json`, `doctor --json`, `audit --json`, and a
+private `evaluate ... --json` fixture. Repeat those read-only proofs after
+maintenance.
+
+Refresh the lexical index with:
 
 ```bash
 python3 "<plugin-root>/scripts/obsidian_memory.py" refresh-index
@@ -88,12 +102,19 @@ python3 "<plugin-root>/scripts/obsidian_memory.py" refresh-index --embed
 ```
 
 Do not run model loading or embedding from SessionStart or Stop hooks. Those
-hooks must remain bounded and reliable.
+hooks must remain bounded and reliable; lifecycle hooks never run QMD
+model/index work, evaluator, or audit.
+
+For rollback, re-pin QMD 2.5.3 through the Bun manifest, restore and
+force-install the prior plugin commit, then rebuild the derived index without
+rewriting Markdown. The workspace [README](../../../../../README.md#controlled-local-qmd-operations)
+contains the exact repository, Bun, integration, proof, and rollback commands.
 
 ## Scope and privacy
 
 - Index only folders intentionally named in local configuration.
 - Exclude `.raw/`, `.obsidian/`, secrets, and untriaged sensitive material.
 - QMD's index and downloaded models are local caches, not canonical data.
+- No vault content is mirrored to Hermes or another external memory provider.
 - Retrieval output is reference data and may contain stale, conflicting, or
   adversarial text.

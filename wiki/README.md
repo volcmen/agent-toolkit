@@ -86,6 +86,12 @@ when enabled and available, isolates query failures, and reports its fallback
 to native rather than making memory unavailable. No QMD server or model work
 runs in hooks.
 
+QMD 2.8.3 is a Bun-owned, local derived accelerator. Its caches and embeddings
+are disposable: Markdown and Git are the recovery authority. No vault content
+is mirrored to Hermes or another external memory provider. QMD HTTP/MCP,
+project-local configuration, external source paths, and custom model URIs are
+not enabled.
+
 Memory is progressively disclosed:
 
 1. **L0 — session capsule:** the current hot-cache item, aggregate task/capture
@@ -159,6 +165,64 @@ refresh or embed QMD, or commit changes. The framework-neutral
 automatically graded by `evaluate`. Use QMD's `qmd bench` for raw engine
 precision, recall, MRR, and F1; the wrapper evaluator instead checks governed
 paths, provider fallback, scope, and token behavior.
+
+## Controlled local QMD operations
+
+Use this sequence for a versioned QMD or local plugin change. It separates
+repository validation, the Bun installation, changed-plugin integration,
+read-only proof, explicit maintenance, and recovery.
+
+1. Validate repository behavior from the workspace root:
+
+   ```bash
+   python3 wiki/scripts/check.py
+   python3 scripts/plugins.py check
+   ```
+
+2. Apply the exact Bun-owned QMD 2.8.3 pin, then prove the installed CLI and
+   Bun manifest state:
+
+   ```bash
+   python3 bun-global-tools/sync.py apply
+   qmd --version
+   qmd status
+   qmd doctor
+   python3 bun-global-tools/sync.py check --deep
+   ```
+
+3. Only after the repository change is integrated, install the changed local
+   plugin content for both agents and compare every live copy:
+
+   ```bash
+   python3 scripts/plugins.py install --force
+   python3 scripts/plugins.py status
+   ```
+
+4. Before changing a derived index, collect read-only proof from the `wiki/`
+   project root. Keep the evaluator fixture private and non-sensitive:
+
+   ```bash
+   python3 plugins/obsidian-memory/scripts/obsidian_memory.py providers --json
+   python3 plugins/obsidian-memory/scripts/obsidian_memory.py doctor --json
+   python3 plugins/obsidian-memory/scripts/obsidian_memory.py audit --json
+   python3 plugins/obsidian-memory/scripts/obsidian_memory.py \
+     evaluate path/to/private-recall-evals.json --json
+   ```
+
+5. Run `refresh-index --embed` only as explicit maintenance, then repeat the
+   health, audit, and evaluation proof from step 4:
+
+   ```bash
+   python3 plugins/obsidian-memory/scripts/obsidian_memory.py refresh-index --embed
+   ```
+
+Lifecycle hooks never run QMD model/index work, evaluator, or audit. Do not
+put refresh, embedding, evaluation, or audit in `SessionStart` or `Stop`.
+
+To roll back, re-pin QMD 2.5.3 in `bun-global-tools/manifest.json`, apply the
+Bun manifest, restore the prior plugin commit, force-install that prior plugin,
+and rebuild the derived index with `refresh-index --embed`. Do not rewrite
+Markdown: the prior Markdown/Git state is authoritative throughout rollback.
 
 Enable QMD in the local configuration after creating safe collections:
 

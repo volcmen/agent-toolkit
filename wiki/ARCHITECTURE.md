@@ -63,6 +63,26 @@ declared in the `SessionStart` or `Stop` hook. QMD `bench` remains a separate
 raw-engine metric tool, while `evals/memory-evals.json` remains a separate
 agent-behavior specification.
 
+## Controlled local memory operations
+
+QMD 2.8.3 is a Bun-owned local derived accelerator, not a second memory
+authority. Repository checks precede Bun apply; post-integration plugin content
+is installed with `scripts/plugins.py install --force` and compared with
+`scripts/plugins.py status`; then `providers --json`, `doctor --json`,
+`audit --json`, and a private `evaluate ... --json` fixture prove the real
+vault before explicit maintenance. `refresh-index --embed` is explicit
+maintenance, followed by the same health, audit, and evaluation proof.
+
+QMD caches and embeddings are disposable. Markdown/Git is the recovery
+authority, and no vault content is mirrored to Hermes or another external
+memory provider. QMD HTTP/MCP, project-local configuration, external source
+paths, and custom model URIs are not enabled. Lifecycle hooks never run QMD
+model/index work, evaluator, or audit.
+
+Rollback re-pins QMD 2.5.3 through the Bun manifest, restores the prior plugin
+commit, force-installs that plugin, and rebuilds only the derived index. It
+does not rewrite Markdown.
+
 ## Trust boundaries
 
 - The repository contains plugin code and schemas, never the local vault path.

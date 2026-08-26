@@ -274,7 +274,8 @@ def validate_memory_policy() -> None:
     governance = skill_root / "references" / "memory-governance.md"
     evaluation = skill_root / "references" / "evaluation.md"
     providers = skill_root / "references" / "recall-providers.md"
-    for path in (skill, governance, evaluation, providers):
+    qmd_retrieval = skill_root / "references" / "qmd-retrieval.md"
+    for path in (skill, governance, evaluation, providers, qmd_retrieval):
         require(path.is_file(), f"missing memory reference: {path.relative_to(ROOT)}")
 
     skill_text = skill.read_text(encoding="utf-8")
@@ -310,6 +311,24 @@ def validate_memory_policy() -> None:
             term in architecture,
             f"architecture omits memory hardening contract: {term}",
         )
+
+    combined = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            ROOT / "README.md",
+            ROOT / "ARCHITECTURE.md",
+            providers,
+            qmd_retrieval,
+        )
+    )
+    for term in (
+        "QMD 2.8.3",
+        "local derived accelerator",
+        "explicit maintenance",
+        "no vault content is mirrored",
+        "refresh-index --embed",
+    ):
+        require(term in combined, f"memory operations documentation omits: {term}")
 
     research = (ROOT / "docs" / "research" / "2026-08-01-agent-memory-systems.md").read_text(
         encoding="utf-8"

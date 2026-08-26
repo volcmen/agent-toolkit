@@ -4,6 +4,9 @@ Obsidian Markdown is the always-on memory provider and source of truth. Recall
 providers only discover notes; they do not own, rewrite, verify, or upgrade the
 authority of memory. This distinction keeps Git-auditable Markdown portable
 across Codex and Claude Code while allowing retrieval to improve independently.
+QMD 2.8.3 is the Bun-owned local derived accelerator when QMD is selected;
+its caches and embeddings are disposable. No vault content is mirrored to
+Hermes or another external memory provider.
 
 ## Provider model
 
@@ -26,6 +29,8 @@ Configure the selection and privacy boundary locally:
 
 The native limits bound work per query. QMD has its own explicitly configured
 collection list. Neither provider may search `.raw/`, `.obsidian/`, or `inbox/`.
+QMD HTTP/MCP, project-local configuration, external source paths, and custom
+model URIs are not enabled.
 
 ## Selection and failure policy
 
@@ -55,6 +60,16 @@ Inspect selection and health before debugging recall:
 python3 "<plugin-root>/scripts/obsidian_memory.py" providers --json
 python3 "<plugin-root>/scripts/obsidian_memory.py" doctor --json
 ```
+
+For a controlled local upgrade, validate the repository first, apply the
+Bun-owned QMD pin, then force-install changed plugin content only after
+integration. Collect `providers --json`, `doctor --json`, `audit --json`, and
+a private `evaluate ... --json` suite before explicit maintenance; after
+`refresh-index --embed`, repeat those proofs. Lifecycle hooks never run QMD
+model/index work, evaluator, or audit. To roll back, re-pin QMD 2.5.3, restore
+and force-install the prior plugin commit, and rebuild derived data without
+rewriting Markdown. See [the workspace rollout sequence](../../../../../README.md#controlled-local-qmd-operations)
+for portable commands.
 
 ## Evaluation evidence
 
