@@ -59,6 +59,7 @@ MAX_SUPERSESSION_HOPS = 8
 MAX_RECALL_EVAL_CASES = 200
 MAX_RECALL_EVAL_FIXTURE_CHARS = 1_000_000
 MAX_RECALL_EVAL_RESULT_PATHS = 20
+MAX_AUDIT_FINDINGS = 200
 
 
 class ConfigurationError(RuntimeError):
@@ -82,6 +83,26 @@ class RecallEvalCase:
     any_of_paths: tuple[str, ...]
     forbidden_paths: tuple[str, ...]
     allow_degraded: bool
+
+
+@dataclass(frozen=True)
+class AuditFinding:
+    severity: str
+    code: str
+    path: str
+    field: str | None
+    detail: str
+
+    def as_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "severity": self.severity,
+            "code": self.code,
+            "path": self.path,
+            "detail": self.detail,
+        }
+        if self.field:
+            payload["field"] = self.field
+        return payload
 
 
 def has_private_vault_segment(parts: tuple[str, ...]) -> bool:
@@ -1010,6 +1031,411 @@ def parse_frontmatter(path: Path, limit: int = 12_000) -> dict[str, str]:
     """Return scalar recall metadata without executing or depending on YAML."""
     document = parse_frontmatter_document(path, limit)
     return {key: value for key, value in document.items() if isinstance(value, str)}
+
+
+_AUDIT_ACTION_CLASSES = {"fact", "decision", "heuristic"}
+_AUDIT_IGNORED_CLASSES = {"task", "episode"}
+_AUDIT_STATUSES = {
+    "candidate",
+    "proposed",
+    "verified",
+    "accepted",
+    "active",
+    "superseded",
+    "deprecated",
+    "rejected",
+}
+_AUDIT_CONFIDENCE = {"low", "medium", "high"}
+_AUDIT_DATE_FIELDS = {
+    "observed": ("invalid-observed", "observed must be an exact ISO date"),
+    "valid_from": ("invalid-valid-from", "valid_from must be an exact ISO date"),
+    "valid_until": (
+        "invalid-valid-until",
+        "valid_until must be an exact ISO date",
+    ),
+}
+
+
+def _audit_value_present(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return any(isinstance(item, str) and bool(item.strip()) for item in value)
+    return False
+
+
+def _exact_iso_date(value: Any) -> dt.date | None:
+    if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}", value) is None:
+        return None
+    try:
+        return dt.date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def governance_findings(
+    path: Path,
+    vault_relative: str,
+    metadata: dict[str, FrontmatterValue],
+) -> list[AuditFinding]:
+    """Return fixed, value-free findings for explicitly governed memories."""
+    # The path belongs to the caller's already-safe traversal. Findings use only
+    # the canonical vault-relative name and never serialize the absolute path.
+    _ = path
+    raw_class = metadata.get("memory_class")
+    if not _audit_value_present(raw_class):
+        return []
+    if not isinstance(raw_class, str) or raw_class not in (
+        _AUDIT_ACTION_CLASSES | _AUDIT_IGNORED_CLASSES
+    ):
+        return [
+            AuditFinding(
+                "warning",
+                "unknown-memory-class",
+                vault_relative,
+                "memory_class",
+                "memory_class is not recognized by the governance audit",
+            )
+        ]
+    if raw_class in _AUDIT_IGNORED_CLASSES:
+        return []
+
+    findings: list[AuditFinding] = []
+    raw_status = metadata.get("status")
+    status = raw_status if isinstance(raw_status, str) else ""
+    if not _audit_value_present(raw_status):
+        findings.append(
+            AuditFinding(
+                "error",
+                "missing-status",
+                vault_relative,
+                "status",
+                "status is required for action-driving memory",
+            )
+        )
+    elif not isinstance(raw_status, str) or status not in _AUDIT_STATUSES:
+        findings.append(
+            AuditFinding(
+                "error",
+                "invalid-status",
+                vault_relative,
+                "status",
+                "status must be a recognized governance state",
+            )
+        )
+
+    source_present = _audit_value_present(metadata.get("source"))
+    verified = _audit_value_present(metadata.get("verified_by"))
+    if raw_class in {"fact", "heuristic"} and not source_present:
+        findings.append(
+            AuditFinding(
+                "error",
+                "missing-source",
+                vault_relative,
+                "source",
+                "source provenance is required for this memory class",
+            )
+        )
+    if status in CURRENT_STATUSES and (
+        (raw_class in {"fact", "heuristic"} and not verified)
+        or (raw_class == "decision" and not (source_present or verified))
+    ):
+        findings.append(
+            AuditFinding(
+                "error",
+                "missing-verification",
+                vault_relative,
+                "verified_by",
+                "verification provenance is required for this current memory",
+            )
+        )
+
+    confidence = metadata.get("confidence")
+    if "confidence" in metadata and (
+        not isinstance(confidence, str) or confidence not in _AUDIT_CONFIDENCE
+    ):
+        findings.append(
+            AuditFinding(
+                "error",
+                "invalid-confidence",
+                vault_relative,
+                "confidence",
+                "confidence must be low, medium, or high",
+            )
+        )
+
+    parsed_dates: dict[str, dt.date] = {}
+    for field, (code, detail) in _AUDIT_DATE_FIELDS.items():
+        if field not in metadata:
+            continue
+        parsed = _exact_iso_date(metadata[field])
+        if parsed is None:
+            findings.append(
+                AuditFinding(
+                    "error",
+                    code,
+                    vault_relative,
+                    field,
+                    detail,
+                )
+            )
+        else:
+            parsed_dates[field] = parsed
+    if (
+        "valid_from" in parsed_dates
+        and "valid_until" in parsed_dates
+        and parsed_dates["valid_until"] < parsed_dates["valid_from"]
+    ):
+        findings.append(
+            AuditFinding(
+                "error",
+                "invalid-validity-order",
+                vault_relative,
+                "valid_until",
+                "valid_until must not be earlier than valid_from",
+            )
+        )
+    return findings
+
+
+def _validated_audit_roots(config: dict[str, Any]) -> list[str]:
+    raw_roots = config.get("recall_roots")
+    if not isinstance(raw_roots, list) or not raw_roots:
+        raise ConfigurationError("audit recall roots are invalid")
+    normalized: set[str] = set()
+    for raw_root in raw_roots:
+        if not isinstance(raw_root, str) or not raw_root.strip():
+            raise ConfigurationError("audit recall roots are invalid")
+        relative = PurePosixPath(raw_root)
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or ".." in relative.parts
+            or not safe_recall_parts(relative.parts)
+        ):
+            raise ConfigurationError("audit recall roots are invalid")
+        normalized.add(relative.as_posix())
+    return sorted(normalized)
+
+
+def _audit_scan_events(
+    config: dict[str, Any], roots: list[str]
+) -> list[tuple[str, str, Path, Path | None]]:
+    """Enumerate safe audit events without following a symlink."""
+    vault = config.get("vault")
+    if not isinstance(vault, Path):
+        raise ConfigurationError("audit vault is invalid")
+
+    root_symlinks: dict[str, Path] = {}
+    file_symlinks: dict[str, Path] = {}
+    files: dict[Path, tuple[str, Path]] = {}
+    for root_relative in roots:
+        root_parts = PurePosixPath(root_relative).parts
+        root = vault.joinpath(*root_parts)
+        cursor = vault
+        routed_through_symlink = False
+        for part in root_parts:
+            cursor /= part
+            if cursor.is_symlink():
+                routed_through_symlink = True
+                break
+        if routed_through_symlink:
+            root_symlinks.setdefault(root_relative, root)
+            continue
+        try:
+            resolved_root = root.resolve()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if root.absolute() != resolved_root:
+            root_symlinks.setdefault(root_relative, root)
+            continue
+        try:
+            resolved_relative = resolved_root.relative_to(vault)
+        except ValueError:
+            continue
+        if (
+            not root.is_dir()
+            or not safe_recall_parts(resolved_relative.parts)
+            or not path_within_roots(resolved_relative.as_posix(), roots)
+        ):
+            continue
+
+        for directory, directories, filenames in os.walk(root, followlinks=False):
+            current = Path(directory)
+            safe_directories: list[str] = []
+            for name in sorted(directories, key=lambda item: (item.casefold(), item)):
+                if name.casefold().startswith("."):
+                    continue
+                candidate = current / name
+                try:
+                    if candidate.is_symlink():
+                        continue
+                    resolved = candidate.resolve()
+                    relative = resolved.relative_to(vault)
+                    resolved.relative_to(resolved_root)
+                except (OSError, RuntimeError, ValueError):
+                    continue
+                if (
+                    candidate.absolute() == resolved
+                    and safe_recall_parts(relative.parts)
+                    and path_within_roots(relative.as_posix(), roots)
+                ):
+                    safe_directories.append(name)
+            directories[:] = safe_directories
+
+            for name in sorted(filenames, key=lambda item: (item.casefold(), item)):
+                if name.casefold().startswith(".") or not is_markdown_path(name):
+                    continue
+                candidate = current / name
+                try:
+                    lexical_relative = candidate.relative_to(vault).as_posix()
+                except ValueError:
+                    continue
+                if candidate.is_symlink():
+                    file_symlinks.setdefault(lexical_relative, candidate)
+                    continue
+                try:
+                    resolved = candidate.resolve()
+                    relative = resolved.relative_to(vault)
+                    resolved.relative_to(resolved_root)
+                except (OSError, RuntimeError, ValueError):
+                    continue
+                vault_relative = relative.as_posix()
+                if (
+                    candidate.absolute() != resolved
+                    or not safe_recall_parts(relative.parts)
+                    or not path_within_roots(vault_relative, roots)
+                    or not is_markdown_path(vault_relative)
+                ):
+                    continue
+                files.setdefault(resolved, (vault_relative, candidate))
+
+    events: list[tuple[str, str, Path, Path | None]] = []
+    events.extend(
+        (relative, "symlink-root", path, None)
+        for relative, path in root_symlinks.items()
+    )
+    events.extend(
+        (relative, "symlink-file", path, None)
+        for relative, path in file_symlinks.items()
+    )
+    events.extend(
+        (relative, "file", path, resolved)
+        for resolved, (relative, path) in files.items()
+    )
+    return sorted(
+        events,
+        key=lambda event: (event[0].casefold(), event[0], event[1]),
+    )
+
+
+def audit_vault(config: dict[str, Any]) -> dict[str, Any]:
+    """Scan configured recall roots and return bounded governance findings."""
+    roots = _validated_audit_roots(config)
+    bounded: list[AuditFinding] = []
+    error_count = 0
+    warning_count = 0
+    files_scanned = 0
+    truncated = False
+
+    def record(finding: AuditFinding) -> None:
+        nonlocal error_count, warning_count, truncated
+        if finding.severity == "error":
+            error_count += 1
+        else:
+            warning_count += 1
+        if len(bounded) < MAX_AUDIT_FINDINGS:
+            bounded.append(finding)
+        else:
+            truncated = True
+
+    for vault_relative, kind, path, expected_resolved in _audit_scan_events(
+        config, roots
+    ):
+        if kind == "symlink-root":
+            record(
+                AuditFinding(
+                    "error",
+                    "symlink-root",
+                    vault_relative,
+                    None,
+                    "configured recall root is a symlink and was not scanned",
+                )
+            )
+            continue
+        if kind == "symlink-file":
+            record(
+                AuditFinding(
+                    "error",
+                    "symlink-file",
+                    vault_relative,
+                    None,
+                    "Markdown symlink was not followed or read",
+                )
+            )
+            continue
+
+        try:
+            if path.is_symlink() or path.resolve() != expected_resolved:
+                record(
+                    AuditFinding(
+                        "error",
+                        "symlink-file",
+                        vault_relative,
+                        None,
+                        "Markdown symlink was not followed or read",
+                    )
+                )
+                continue
+        except (OSError, RuntimeError):
+            continue
+        files_scanned += 1
+        metadata = parse_frontmatter_document(path)
+        for finding in governance_findings(path, vault_relative, metadata):
+            record(finding)
+
+    return {
+        "ok": error_count == 0,
+        "roots": roots,
+        "files_scanned": files_scanned,
+        "truncated": truncated,
+        "counts": {"errors": error_count, "warnings": warning_count},
+        "findings": [finding.as_dict() for finding in bounded],
+    }
+
+
+def audit(as_json: bool) -> int:
+    """Run the manual read-only governance audit with sanitized failures."""
+    try:
+        config, _ = load_config()
+        report = audit_vault(config)
+    except Exception:
+        failure = {"ok": False, "error": "configuration-error"}
+        if as_json:
+            print(json.dumps(failure, ensure_ascii=False, indent=2))
+        else:
+            print("audit: configuration-error", file=sys.stderr)
+        return 2
+
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        counts = report["counts"]
+        print(
+            "audit: "
+            f"ok={str(report['ok']).lower()} "
+            f"files={report['files_scanned']} "
+            f"errors={counts['errors']} "
+            f"warnings={counts['warnings']} "
+            f"truncated={str(report['truncated']).lower()}"
+        )
+        for finding in report["findings"]:
+            field = f" field={finding['field']}" if finding.get("field") else ""
+            print(
+                f"{finding['severity']} {finding['code']} {finding['path']}"
+                f"{field}: {finding['detail']}"
+            )
+    return 0 if report["ok"] else 1
 
 
 def qmd_segment_key(segment: str, *, is_file: bool) -> str:
@@ -2674,6 +3100,11 @@ def parse_args() -> argparse.Namespace:
     )
     evaluate_parser.add_argument("fixture", type=Path)
     evaluate_parser.add_argument("--json", action="store_true", dest="as_json")
+    audit_parser = subparsers.add_parser(
+        "audit",
+        help="Run a bounded read-only governance and routing audit",
+    )
+    audit_parser.add_argument("--json", action="store_true", dest="as_json")
     refresh_parser = subparsers.add_parser(
         "refresh-index", help="Refresh the optional QMD retrieval index"
     )
@@ -2711,6 +3142,8 @@ def main() -> int:
         )
     if args.command == "evaluate":
         return evaluate_recall(args.fixture, args.as_json)
+    if args.command == "audit":
+        return audit(args.as_json)
     if args.command == "refresh-index":
         return qmd_refresh(args.embed)
     if args.command == "providers":

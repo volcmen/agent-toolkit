@@ -3714,6 +3714,663 @@ Prior: old unrelated outcome.
         self.assertEqual([case.id for case in cases], ["scoped-current-decision"])
         self.assertNotIn(str(Path.home()), example.read_text(encoding="utf-8"))
 
+    def test_governance_findings_enforce_full_action_driving_matrix(self) -> None:
+        """Catches a wrong status/provenance/verification branch for any class."""
+        statuses = (
+            "candidate",
+            "proposed",
+            "verified",
+            "accepted",
+            "active",
+            "superseded",
+            "deprecated",
+            "rejected",
+        )
+        current = {"verified", "accepted", "active"}
+        private_path = Path("/PRIVATE/ABSOLUTE/audit-note.md")
+
+        for memory_class in ("fact", "decision", "heuristic"):
+            for status in statuses:
+                with self.subTest(
+                    branch="compliant", memory_class=memory_class, status=status
+                ):
+                    metadata: dict[str, object] = {
+                        "memory_class": memory_class,
+                        "status": status,
+                    }
+                    if memory_class in {"fact", "heuristic"}:
+                        metadata["source"] = ["PRIVATE PROVENANCE VALUE"]
+                    if status in current:
+                        if memory_class == "decision":
+                            metadata["source"] = "PRIVATE DECISION SOURCE"
+                        else:
+                            metadata["verified_by"] = ["PRIVATE VERIFIER VALUE"]
+                    self.assertEqual(
+                        MODULE.governance_findings(
+                            private_path, "wiki/note.md", metadata
+                        ),
+                        [],
+                    )
+
+                with self.subTest(
+                    branch="missing-verification",
+                    memory_class=memory_class,
+                    status=status,
+                ):
+                    metadata = {
+                        "memory_class": memory_class,
+                        "status": status,
+                    }
+                    if memory_class in {"fact", "heuristic"}:
+                        metadata["source"] = "PRIVATE SOURCE VALUE"
+                    codes = [
+                        finding.code
+                        for finding in MODULE.governance_findings(
+                            private_path, "wiki/note.md", metadata
+                        )
+                    ]
+                    self.assertEqual(
+                        codes,
+                        ["missing-verification"] if status in current else [],
+                    )
+
+                if memory_class in {"fact", "heuristic"}:
+                    with self.subTest(
+                        branch="missing-source",
+                        memory_class=memory_class,
+                        status=status,
+                    ):
+                        metadata = {
+                            "memory_class": memory_class,
+                            "status": status,
+                        }
+                        if status in current:
+                            metadata["verified_by"] = "PRIVATE VERIFIER VALUE"
+                        self.assertEqual(
+                            [
+                                finding.code
+                                for finding in MODULE.governance_findings(
+                                    private_path, "wiki/note.md", metadata
+                                )
+                            ],
+                            ["missing-source"],
+                        )
+
+            with self.subTest(branch="missing-status", memory_class=memory_class):
+                metadata = {"memory_class": memory_class}
+                if memory_class in {"fact", "heuristic"}:
+                    metadata["source"] = "PRIVATE SOURCE VALUE"
+                findings = MODULE.governance_findings(
+                    private_path, "wiki/note.md", metadata
+                )
+                self.assertEqual(
+                    [finding.as_dict() for finding in findings],
+                    [
+                        {
+                            "severity": "error",
+                            "code": "missing-status",
+                            "path": "wiki/note.md",
+                            "detail": "status is required for action-driving memory",
+                            "field": "status",
+                        }
+                    ],
+                )
+
+            with self.subTest(branch="invalid-status", memory_class=memory_class):
+                metadata = {
+                    "memory_class": memory_class,
+                    "status": "PRIVATE INVALID STATUS",
+                }
+                if memory_class in {"fact", "heuristic"}:
+                    metadata["source"] = "PRIVATE SOURCE VALUE"
+                findings = MODULE.governance_findings(
+                    private_path, "wiki/note.md", metadata
+                )
+                self.assertEqual(
+                    [finding.as_dict() for finding in findings],
+                    [
+                        {
+                            "severity": "error",
+                            "code": "invalid-status",
+                            "path": "wiki/note.md",
+                            "detail": "status must be a recognized governance state",
+                            "field": "status",
+                        }
+                    ],
+                )
+
+    def test_governance_findings_accept_scalar_and_list_provenance(self) -> None:
+        """Catches treating a populated provenance list as an empty scalar."""
+        private_path = Path("/PRIVATE/ABSOLUTE/provenance.md")
+        populated_values: tuple[object, ...] = (
+            "PRIVATE SCALAR PROVENANCE",
+            ["PRIVATE LIST PROVENANCE"],
+        )
+        for memory_class in ("fact", "heuristic"):
+            for source in populated_values:
+                for verified_by in populated_values:
+                    with self.subTest(
+                        memory_class=memory_class,
+                        source=type(source).__name__,
+                        verified_by=type(verified_by).__name__,
+                    ):
+                        self.assertEqual(
+                            MODULE.governance_findings(
+                                private_path,
+                                "wiki/provenance.md",
+                                {
+                                    "memory_class": memory_class,
+                                    "status": "active",
+                                    "source": source,
+                                    "verified_by": verified_by,
+                                },
+                            ),
+                            [],
+                        )
+
+        for field in ("source", "verified_by"):
+            for value in populated_values:
+                with self.subTest(decision_field=field, shape=type(value).__name__):
+                    self.assertEqual(
+                        MODULE.governance_findings(
+                            private_path,
+                            "wiki/provenance.md",
+                            {
+                                "memory_class": "decision",
+                                "status": "accepted",
+                                field: value,
+                            },
+                        ),
+                        [],
+                    )
+
+        empty_values: tuple[object, ...] = ("", [], ["   "])
+        for value in empty_values:
+            with self.subTest(empty_source=repr(value)):
+                findings = MODULE.governance_findings(
+                    private_path,
+                    "wiki/provenance.md",
+                    {
+                        "memory_class": "fact",
+                        "status": "active",
+                        "source": value,
+                        "verified_by": "PRIVATE VERIFIER VALUE",
+                    },
+                )
+                self.assertEqual([finding.code for finding in findings], ["missing-source"])
+            with self.subTest(empty_verification=repr(value)):
+                findings = MODULE.governance_findings(
+                    private_path,
+                    "wiki/provenance.md",
+                    {
+                        "memory_class": "decision",
+                        "status": "accepted",
+                        "verified_by": value,
+                    },
+                )
+                self.assertEqual(
+                    [finding.code for finding in findings],
+                    ["missing-verification"],
+                )
+
+    def test_governance_findings_validate_exact_dates_confidence_and_order(self) -> None:
+        """Catches date truncation, invalid calendar dates, and loose confidence."""
+        private_path = Path("/PRIVATE/ABSOLUTE/dated.md")
+        base: dict[str, object] = {
+            "memory_class": "fact",
+            "status": "candidate",
+            "source": "PRIVATE SOURCE VALUE",
+        }
+        for confidence in ("low", "medium", "high"):
+            with self.subTest(valid_confidence=confidence):
+                self.assertEqual(
+                    MODULE.governance_findings(
+                        private_path,
+                        "wiki/dated.md",
+                        {
+                            **base,
+                            "confidence": confidence,
+                            "observed": "2024-02-29",
+                            "valid_from": "2026-08-01",
+                            "valid_until": "2026-08-01",
+                        },
+                    ),
+                    [],
+                )
+
+        invalid_values = (
+            ("confidence", "HIGH", "invalid-confidence"),
+            ("confidence", ["high"], "invalid-confidence"),
+            ("observed", "2026-08-01T00:00:00", "invalid-observed"),
+            ("observed", "2026-02-29", "invalid-observed"),
+            ("valid_from", "20260801", "invalid-valid-from"),
+            ("valid_from", " 2026-08-01", "invalid-valid-from"),
+            ("valid_until", "2026-08-01Z", "invalid-valid-until"),
+            ("valid_until", ["2026-08-01"], "invalid-valid-until"),
+        )
+        for field, value, expected_code in invalid_values:
+            with self.subTest(field=field, value=value):
+                findings = MODULE.governance_findings(
+                    private_path,
+                    "wiki/dated.md",
+                    {**base, field: value},
+                )
+                self.assertEqual([finding.code for finding in findings], [expected_code])
+
+        ordered = MODULE.governance_findings(
+            private_path,
+            "wiki/dated.md",
+            {
+                **base,
+                "valid_from": "2026-09-02",
+                "valid_until": "2026-09-01",
+            },
+        )
+        self.assertEqual(
+            [finding.as_dict() for finding in ordered],
+            [
+                {
+                    "severity": "error",
+                    "code": "invalid-validity-order",
+                    "path": "wiki/dated.md",
+                    "detail": "valid_until must not be earlier than valid_from",
+                    "field": "valid_until",
+                }
+            ],
+        )
+
+        fixed = MODULE.governance_findings(
+            private_path,
+            "wiki/private.md",
+            {
+                "memory_class": "fact",
+                "status": "active",
+                "confidence": "PRIVATE CONFIDENCE VALUE",
+                "observed": "PRIVATE OBSERVED VALUE",
+                "valid_from": "PRIVATE START VALUE",
+                "valid_until": "PRIVATE END VALUE",
+            },
+        )
+        self.assertEqual(
+            [finding.as_dict() for finding in fixed],
+            [
+                {
+                    "severity": "error",
+                    "code": "missing-source",
+                    "path": "wiki/private.md",
+                    "detail": "source provenance is required for this memory class",
+                    "field": "source",
+                },
+                {
+                    "severity": "error",
+                    "code": "missing-verification",
+                    "path": "wiki/private.md",
+                    "detail": "verification provenance is required for this current memory",
+                    "field": "verified_by",
+                },
+                {
+                    "severity": "error",
+                    "code": "invalid-confidence",
+                    "path": "wiki/private.md",
+                    "detail": "confidence must be low, medium, or high",
+                    "field": "confidence",
+                },
+                {
+                    "severity": "error",
+                    "code": "invalid-observed",
+                    "path": "wiki/private.md",
+                    "detail": "observed must be an exact ISO date",
+                    "field": "observed",
+                },
+                {
+                    "severity": "error",
+                    "code": "invalid-valid-from",
+                    "path": "wiki/private.md",
+                    "detail": "valid_from must be an exact ISO date",
+                    "field": "valid_from",
+                },
+                {
+                    "severity": "error",
+                    "code": "invalid-valid-until",
+                    "path": "wiki/private.md",
+                    "detail": "valid_until must be an exact ISO date",
+                    "field": "valid_until",
+                },
+            ],
+        )
+        encoded = json.dumps([finding.as_dict() for finding in fixed])
+        for secret in (
+            str(private_path),
+            "PRIVATE CONFIDENCE VALUE",
+            "PRIVATE OBSERVED VALUE",
+            "PRIVATE START VALUE",
+            "PRIVATE END VALUE",
+        ):
+            self.assertNotIn(secret, encoded)
+
+    def test_governance_findings_are_selective_and_immutable(self) -> None:
+        """Catches blanket linting of legacy/task/episode notes and mutable findings."""
+        private_path = Path("/PRIVATE/ABSOLUTE/selective.md")
+        ignored_documents: tuple[dict[str, object], ...] = (
+            {},
+            {"memory_class": ""},
+            {
+                "memory_class": "task",
+                "status": "PRIVATE INVALID STATUS",
+                "confidence": "PRIVATE INVALID CONFIDENCE",
+            },
+            {
+                "memory_class": "episode",
+                "valid_from": "PRIVATE INVALID DATE",
+            },
+        )
+        for metadata in ignored_documents:
+            with self.subTest(metadata=metadata):
+                self.assertEqual(
+                    MODULE.governance_findings(
+                        private_path, "wiki/selective.md", metadata
+                    ),
+                    [],
+                )
+
+        unknown = MODULE.governance_findings(
+            private_path,
+            "wiki/selective.md",
+            {
+                "memory_class": "PRIVATE UNKNOWN CLASS",
+                "source": "PRIVATE UNKNOWN SOURCE",
+            },
+        )
+        self.assertEqual(
+            [finding.as_dict() for finding in unknown],
+            [
+                {
+                    "severity": "warning",
+                    "code": "unknown-memory-class",
+                    "path": "wiki/selective.md",
+                    "detail": "memory_class is not recognized by the governance audit",
+                    "field": "memory_class",
+                }
+            ],
+        )
+        encoded = json.dumps(unknown[0].as_dict())
+        for secret in (
+            str(private_path),
+            "PRIVATE UNKNOWN CLASS",
+            "PRIVATE UNKNOWN SOURCE",
+        ):
+            self.assertNotIn(secret, encoded)
+        with self.assertRaises(AttributeError):
+            unknown[0].code = "mutated"
+
+    def test_audit_scan_is_deterministic_selective_and_resolved_path_deduped(
+        self,
+    ) -> None:
+        """Catches unsorted roots/files, overlap duplication, and unsafe file selection."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = root / "vault"
+            (vault / "wiki" / "nested").mkdir(parents=True)
+            (vault / "projects").mkdir()
+            (vault / "wiki" / ".hidden").mkdir()
+            governed = "---\nmemory_class: PRIVATE UNKNOWN CLASS\n---\nPRIVATE BODY\n"
+            (vault / "projects" / "b.md").write_text(governed, encoding="utf-8")
+            (vault / "wiki" / "nested" / "a.md").write_text(
+                governed, encoding="utf-8"
+            )
+            (vault / "wiki" / "z.MD").write_text(governed, encoding="utf-8")
+            (vault / "wiki" / ".hidden" / "skip.md").write_text(
+                governed, encoding="utf-8"
+            )
+            (vault / "wiki" / ".skip.md").write_text(governed, encoding="utf-8")
+            (vault / "wiki" / "not-markdown.txt").write_text(
+                governed, encoding="utf-8"
+            )
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_roots=["wiki/nested", "projects", "wiki", "projects"],
+            )
+            before = {
+                path.relative_to(vault).as_posix(): path.read_bytes()
+                for path in vault.rglob("*")
+                if path.is_file()
+            }
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                first = MODULE.audit_vault(config)
+                second = MODULE.audit_vault(config)
+            after = {
+                path.relative_to(vault).as_posix(): path.read_bytes()
+                for path in vault.rglob("*")
+                if path.is_file()
+            }
+
+        self.assertEqual(first, second)
+        self.assertEqual(first["roots"], ["projects", "wiki", "wiki/nested"])
+        self.assertEqual(first["files_scanned"], 3)
+        self.assertEqual(first["counts"], {"errors": 0, "warnings": 3})
+        self.assertEqual(
+            [finding["path"] for finding in first["findings"]],
+            ["projects/b.md", "wiki/nested/a.md", "wiki/z.MD"],
+        )
+        self.assertFalse(first["truncated"])
+        self.assertTrue(first["ok"])
+        self.assertEqual(before, after)
+        encoded = json.dumps(first)
+        self.assertNotIn("PRIVATE UNKNOWN CLASS", encoded)
+        self.assertNotIn("PRIVATE BODY", encoded)
+
+    def test_audit_reports_root_and_file_symlinks_without_following_targets(self) -> None:
+        """Catches audit traversal that follows a symlink into private content."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = root / "vault"
+            (vault / "wiki").mkdir(parents=True)
+            outside = root / "PRIVATE-OUTSIDE"
+            outside.mkdir()
+            (outside / "nested").mkdir()
+            secret = outside / "PRIVATE-SECRET.md"
+            secret.write_text(
+                "---\nmemory_class: fact\nstatus: active\n---\nPRIVATE BODY SENTINEL",
+                encoding="utf-8",
+            )
+            (vault / "wiki" / "escaped.md").symlink_to(secret)
+            (vault / "wiki" / "directory-link").symlink_to(outside, target_is_directory=True)
+            (vault / "alias").symlink_to(outside, target_is_directory=True)
+            (vault / "parent-link").symlink_to(outside, target_is_directory=True)
+            (vault / "loop-root").symlink_to("loop-root", target_is_directory=True)
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_roots=[
+                    "wiki",
+                    "alias",
+                    "parent-link/nested",
+                    "loop-root/nested",
+                ],
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        self.assertEqual(report["files_scanned"], 0)
+        self.assertEqual(report["counts"], {"errors": 4, "warnings": 0})
+        self.assertEqual(
+            report["findings"],
+            [
+                {
+                    "severity": "error",
+                    "code": "symlink-root",
+                    "path": "alias",
+                    "detail": "configured recall root is a symlink and was not scanned",
+                },
+                {
+                    "severity": "error",
+                    "code": "symlink-root",
+                    "path": "loop-root/nested",
+                    "detail": "configured recall root is a symlink and was not scanned",
+                },
+                {
+                    "severity": "error",
+                    "code": "symlink-root",
+                    "path": "parent-link/nested",
+                    "detail": "configured recall root is a symlink and was not scanned",
+                },
+                {
+                    "severity": "error",
+                    "code": "symlink-file",
+                    "path": "wiki/escaped.md",
+                    "detail": "Markdown symlink was not followed or read",
+                },
+            ],
+        )
+        encoded = json.dumps(report)
+        for secret_value in (
+            str(outside),
+            str(secret),
+            "PRIVATE-SECRET.md",
+            "PRIVATE BODY SENTINEL",
+        ):
+            self.assertNotIn(secret_value, encoded)
+
+    def test_audit_finding_limit_preserves_total_count_semantics(self) -> None:
+        """Catches truncating total counts or returning more than 200 findings."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = root / "vault"
+            (vault / "wiki").mkdir(parents=True)
+            document = "---\nmemory_class: PRIVATE UNKNOWN CLASS\n---\nPRIVATE BODY\n"
+            for index in range(205):
+                (vault / "wiki" / f"{index:03}.md").write_text(
+                    document, encoding="utf-8"
+                )
+            config_path = self.write_config(root, vault, recall_roots=["wiki"])
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        self.assertEqual(report["files_scanned"], 205)
+        self.assertEqual(report["counts"], {"errors": 0, "warnings": 205})
+        self.assertEqual(len(report["findings"]), 200)
+        self.assertEqual(report["findings"][0]["path"], "wiki/000.md")
+        self.assertEqual(report["findings"][-1]["path"], "wiki/199.md")
+        self.assertTrue(report["truncated"])
+        self.assertTrue(report["ok"])
+
+    def test_audit_cli_is_read_only_private_and_uses_documented_exits(self) -> None:
+        """Catches CLI writes, body/value leaks, wrong formats, and wrong exits."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = root / "PRIVATE-VAULT-PATH"
+            (vault / "wiki").mkdir(parents=True)
+            (vault / "daily").mkdir()
+            note = vault / "wiki" / "bad.md"
+            note.write_text(
+                "---\n"
+                "memory_class: fact\n"
+                "status: active\n"
+                "source: PRIVATE METADATA VALUE\n"
+                "---\n"
+                "PRIVATE NOTE BODY\n",
+                encoding="utf-8",
+            )
+            config_path = self.write_config(
+                root, vault, recall_roots=["daily"]
+            )
+            env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+
+            clean = subprocess.run(
+                [sys.executable, str(SCRIPT), "audit"],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.write_config(root, vault, recall_roots=["wiki"])
+            before = note.read_bytes()
+            human = subprocess.run(
+                [sys.executable, str(SCRIPT), "audit"],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            machine = subprocess.run(
+                [sys.executable, str(SCRIPT), "audit", "--json"],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            after = note.read_bytes()
+
+            invalid_config = root / "PRIVATE-CONFIG-PATH.json"
+            invalid_config.write_bytes(b"\xffPRIVATE CONFIG BYTES")
+            configuration_error = subprocess.run(
+                [sys.executable, str(SCRIPT), "audit", "--json"],
+                env={**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(invalid_config)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(clean.returncode, 0, clean.stderr)
+        self.assertEqual(
+            clean.stdout,
+            "audit: ok=true files=0 errors=0 warnings=0 truncated=false\n",
+        )
+        self.assertEqual(human.returncode, 1, human.stderr)
+        self.assertEqual(
+            human.stdout.splitlines(),
+            [
+                "audit: ok=false files=1 errors=1 warnings=0 truncated=false",
+                "error missing-verification wiki/bad.md field=verified_by: "
+                "verification provenance is required for this current memory",
+            ],
+        )
+        self.assertEqual(machine.returncode, 1, machine.stderr)
+        report = json.loads(machine.stdout)
+        self.assertFalse(report["ok"])
+        self.assertGreater(len(machine.stdout.splitlines()), 1)
+        self.assertEqual(configuration_error.returncode, 2)
+        self.assertEqual(
+            json.loads(configuration_error.stdout),
+            {"ok": False, "error": "configuration-error"},
+        )
+        self.assertEqual(configuration_error.stderr, "")
+        self.assertEqual(before, after)
+
+        all_output = "".join(
+            (
+                clean.stdout,
+                clean.stderr,
+                human.stdout,
+                human.stderr,
+                machine.stdout,
+                machine.stderr,
+                configuration_error.stdout,
+                configuration_error.stderr,
+            )
+        )
+        for secret in (
+            str(vault),
+            str(config_path),
+            str(invalid_config),
+            "PRIVATE METADATA VALUE",
+            "PRIVATE NOTE BODY",
+            "PRIVATE CONFIG BYTES",
+            "UnicodeDecodeError",
+            "Traceback",
+        ):
+            self.assertNotIn(secret, all_output)
+
 
 if __name__ == "__main__":
     unittest.main()
