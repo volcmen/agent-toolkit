@@ -1298,7 +1298,8 @@ Prior: old unrelated outcome.
                 capture_output=True,
                 check=True,
             ).stdout
-            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("exact tracked Markdown file", result.stderr)
             self.assertEqual(before, after)
             self.assertEqual(staged, "")
 
@@ -1700,6 +1701,140 @@ Prior: old unrelated outcome.
             self.assertIn("file", result.stderr.casefold())
             self.assertEqual(before, after)
             self.assertEqual(staged, "")
+
+    def test_explicit_commit_absent_paths_require_exact_tracked_markdown_file(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "deleted directory-like prefix",
+                "wiki/bundle.md",
+                (
+                    "wiki/bundle.md/.private/secret.md",
+                    "wiki/bundle.md/nested.md",
+                    "wiki/bundle.md/state.json",
+                ),
+                "delete",
+                None,
+            ),
+            (
+                "deleted exact Markdown file",
+                "wiki/deleted.md",
+                ("wiki/deleted.md",),
+                "delete",
+                ("wiki/deleted.md",),
+            ),
+            (
+                "never-tracked missing Markdown file",
+                "wiki/missing.md",
+                (),
+                "none",
+                None,
+            ),
+            (
+                "new exact Markdown file",
+                "wiki/new.md",
+                (),
+                "create",
+                ("wiki/new.md",),
+            ),
+        )
+        for label, explicit_path, initial_paths, mutation, expected_commit in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                vault = self.make_vault(root)
+                for relative in initial_paths:
+                    path = vault / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("before\n", encoding="utf-8")
+                subprocess.run(["git", "init", "-q", str(vault)], check=True)
+                subprocess.run(
+                    ["git", "-C", str(vault), "config", "user.name", "Test"],
+                    check=True,
+                )
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(vault),
+                        "config",
+                        "user.email",
+                        "test@example.com",
+                    ],
+                    check=True,
+                )
+                subprocess.run(["git", "-C", str(vault), "add", "."], check=True)
+                subprocess.run(
+                    ["git", "-C", str(vault), "commit", "-qm", "initial"],
+                    check=True,
+                )
+
+                if mutation == "delete":
+                    for relative in initial_paths:
+                        (vault / relative).unlink()
+                    for directory in sorted(
+                        {
+                            (vault / relative).parent
+                            for relative in initial_paths
+                            if (vault / relative).parent != vault / "wiki"
+                        },
+                        key=lambda path: len(path.parts),
+                        reverse=True,
+                    ):
+                        directory.rmdir()
+                elif mutation == "create":
+                    (vault / explicit_path).write_text("new\n", encoding="utf-8")
+
+                config_path = self.write_config(root, vault, commit_paths=["wiki"])
+                before = subprocess.run(
+                    ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout.strip()
+                env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPT),
+                        "commit",
+                        "--path",
+                        explicit_path,
+                    ],
+                    text=True,
+                    capture_output=True,
+                    env=env,
+                    check=False,
+                )
+
+                after = subprocess.run(
+                    ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout.strip()
+                staged = subprocess.run(
+                    ["git", "-C", str(vault), "diff", "--cached", "--name-only"],
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout
+                committed = subprocess.run(
+                    ["git", "-C", str(vault), "diff", "--name-only", before, after],
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout.splitlines()
+                if expected_commit is None:
+                    self.assertEqual(before, after, committed)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("exact tracked Markdown file", result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertNotEqual(before, after)
+                    self.assertEqual(committed, list(expected_commit))
+                self.assertEqual(staged, "")
 
     def test_commit_help_describes_configured_and_exact_path_modes(self) -> None:
         result = subprocess.run(
