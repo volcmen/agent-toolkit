@@ -211,6 +211,39 @@ Prior: old unrelated outcome.
                     with self.assertRaises(MODULE.ConfigurationError):
                         MODULE.load_config()
 
+    def test_recall_payload_is_the_cli_contract_without_printing(self) -> None:
+        """Catches a payload helper that emits CLI output instead of returning it."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            note = vault / "projects" / "alpha" / "decision.md"
+            note.write_text(
+                "---\nstatus: accepted\nmemory_class: decision\n---\n"
+                "# Canonical provider\nMarkdown remains canonical.\n",
+                encoding="utf-8",
+            )
+            config_path = self.write_config(root, vault, recall_provider="native")
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    payload = MODULE.recall_payload(
+                        config,
+                        "Markdown remains canonical",
+                        "fast",
+                        3,
+                        provider="native",
+                        scope="projects/alpha",
+                    )
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(payload["provider"], "native")
+            self.assertEqual(payload["requested_provider"], "native")
+            self.assertEqual(payload["requested_mode"], "fast")
+            self.assertEqual(payload["results"][0]["path"], "projects/alpha/decision.md")
+            self.assertLessEqual(
+                payload["results_estimated_tokens"],
+                payload["result_token_limit"],
+            )
+
     def test_configured_qmd_collection_requires_a_root_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

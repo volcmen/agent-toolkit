@@ -1784,7 +1784,8 @@ def native_recall_candidates(
     return candidates[:candidate_limit], diagnostics
 
 
-def recall(
+def recall_payload(
+    config: dict[str, Any],
     query: str,
     mode: str,
     top: int | None,
@@ -1793,20 +1794,13 @@ def recall(
     *,
     provider: str | None = None,
     scope: str | None = None,
-) -> int:
-    try:
-        config, _ = load_config()
-        normalized_scope = normalize_recall_scope(scope)
-    except ConfigurationError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 1
+) -> dict[str, Any]:
+    normalized_scope = normalize_recall_scope(scope)
     normalized = " ".join(query.split())
     if not normalized:
-        print("ERROR: recall query cannot be empty", file=sys.stderr)
-        return 2
+        raise ValueError("recall query cannot be empty")
     if len(normalized) > 1000:
-        print("ERROR: recall query cannot exceed 1000 characters", file=sys.stderr)
-        return 2
+        raise ValueError("recall query cannot exceed 1000 characters")
 
     limit = top if top is not None else config["qmd_top_k"]
     limit = max(1, min(20, limit))
@@ -1822,13 +1816,7 @@ def recall(
     requested_provider = provider or config["recall_provider"]
     warnings: list[str] = []
     diagnostics: dict[str, Any] = {}
-    try:
-        active_provider, selection_note = select_recall_provider(
-            config, requested_provider
-        )
-    except ConfigurationError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 1
+    active_provider, selection_note = select_recall_provider(config, requested_provider)
     if selection_note:
         warnings.append(selection_note)
 
@@ -1865,8 +1853,7 @@ def recall(
                     diagnostics.update(native_diagnostics)
         except (ConfigurationError, RecallProviderError) as exc:
             if requested_provider != "auto":
-                print(f"ERROR: {exc}", file=sys.stderr)
-                return 1
+                raise
             active_provider = "native"
             effective_mode = "fast"
             warnings.append(
@@ -1892,8 +1879,7 @@ def recall(
             provider=active_provider,
         )
     except ValueError as exc:
-        print(f"ERROR: recall provider returned invalid results: {exc}", file=sys.stderr)
-        return 1
+        raise RecallProviderError(f"recall provider returned invalid results: {exc}") from exc
     if not compact and active_provider == "qmd" and requested_provider == "auto":
         native_results, native_diagnostics = native_recall_candidates(
             config, normalized, candidate_limit, normalized_scope
@@ -1937,6 +1923,37 @@ def recall(
         payload["warnings"] = warnings
     if diagnostics:
         payload["diagnostics"] = diagnostics
+    return payload
+
+
+def recall(
+    query: str,
+    mode: str,
+    top: int | None,
+    max_tokens: int | None = None,
+    include_stale: bool = False,
+    *,
+    provider: str | None = None,
+    scope: str | None = None,
+) -> int:
+    try:
+        config, _ = load_config()
+        payload = recall_payload(
+            config,
+            query,
+            mode,
+            top,
+            max_tokens,
+            include_stale,
+            provider=provider,
+            scope=scope,
+        )
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    except (ConfigurationError, RecallProviderError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     json_output(payload)
     return 0
 
