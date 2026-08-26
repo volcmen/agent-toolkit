@@ -372,7 +372,7 @@ def test_supersession_follows_source_relative_chain_to_current_decision(self) ->
         self.assertIsNone(result.issue)
 ```
 
-Extend existing cycle, root, active-collection, scope, and hop-limit cases to assert issue codes `cycle`, `out-of-root`, `out-of-scope`, and `hop-limit` through the shared function.
+Extend existing cycle, root, active-collection, scope, and hop-limit cases to assert issue codes `cycle`, `out-of-root`, `out-of-scope`, and `hop-limit` through the shared function. Add direct future- and expired-successor cases that assert no replacement path and matching `future` or `expired` issues. Only `state == "stale"` continues a successor chain; candidate, current, and unknown successors are returned, while future and expired successors fail closed immediately.
 
 - [ ] **Step 2: Run the chain tests and verify the API is absent**
 
@@ -381,6 +381,7 @@ Run:
 ```bash
 python3 wiki/plugins/obsidian-memory/tests/test_obsidian_memory.py \
   ObsidianMemoryTests.test_supersession_follows_source_relative_chain_to_current_decision \
+  ObsidianMemoryTests.test_supersession_chain_rejects_future_and_expired_successors \
   ObsidianMemoryTests.test_supersession_chain_skips_successors_that_are_themselves_stale \
   ObsidianMemoryTests.test_supersession_redirect_stays_within_recall_roots \
   ObsidianMemoryTests.test_supersession_redirect_respects_the_requested_scope -v
@@ -440,14 +441,17 @@ def follow_supersession_chain(
         current_path = resolved.path
         current_metadata = parse_frontmatter(current_path)
         state = memory_state(current_metadata)
-        if state not in HIDDEN_STATES:
-            return SupersessionResult(
-                current_path,
-                resolved.vault_relative,
-                current_metadata,
-                state,
-                None,
-            )
+        if state == "stale":
+            continue
+        if state in {"future", "expired"}:
+            return SupersessionResult(None, None, {}, state, state)
+        return SupersessionResult(
+            current_path,
+            resolved.vault_relative,
+            current_metadata,
+            state,
+            None,
+        )
     return SupersessionResult(None, None, {}, "", "hop-limit")
 ```
 
@@ -460,6 +464,7 @@ Run:
 ```bash
 python3 wiki/plugins/obsidian-memory/tests/test_obsidian_memory.py \
   ObsidianMemoryTests.test_supersession_follows_source_relative_chain_to_current_decision \
+  ObsidianMemoryTests.test_supersession_chain_rejects_future_and_expired_successors \
   ObsidianMemoryTests.test_qmd_recall_filters_stale_results_unless_requested \
   ObsidianMemoryTests.test_supersession_chain_skips_successors_that_are_themselves_stale \
   ObsidianMemoryTests.test_supersession_redirect_stays_within_recall_roots \

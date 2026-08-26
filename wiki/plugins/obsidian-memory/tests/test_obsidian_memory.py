@@ -50,6 +50,41 @@ class ObsidianMemoryTests(unittest.TestCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
         return path
 
+    def init_git_vault(self, vault: Path) -> None:
+        subprocess.run(["git", "init", "-q", str(vault)], check=True)
+        subprocess.run(
+            ["git", "-C", str(vault), "config", "user.name", "Test"], check=True
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(vault),
+                "config",
+                "user.email",
+                "test@example.com",
+            ],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(vault), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(vault), "commit", "-qm", "initial"], check=True
+        )
+
+    def git_stdout(self, vault: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(vault), *args],
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+
+    def index_blobs(self, vault: Path, *paths: str) -> dict[str, str]:
+        return {
+            path: self.git_stdout(vault, "rev-parse", f":{path}").strip()
+            for path in paths
+        }
+
     def test_focused_context_is_bounded_and_routes_without_task_bodies(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -668,6 +703,34 @@ Prior: old unrelated outcome.
             self.assertIsNone(result.path)
             self.assertEqual(result.issue, "ambiguous")
 
+    def test_vault_reference_never_guesses_a_numeric_filename_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            decisions = vault / "projects" / "alpha" / "decisions"
+            decisions.mkdir()
+            source = decisions / "0017-old.md"
+            source.write_text("old", encoding="utf-8")
+            (decisions / "0018-decision.md").write_text(
+                "current", encoding="utf-8"
+            )
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            result = MODULE.resolve_vault_reference_detailed(
+                config,
+                "[[0018]]",
+                source_path=source,
+                allowed_roots=["projects"],
+            )
+
+            self.assertIsNone(result.path)
+            self.assertIsNone(result.vault_relative)
+            self.assertEqual(result.issue, "missing")
+
     def test_missing_explicit_root_path_never_falls_back_by_filename(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -969,6 +1032,56 @@ Prior: old unrelated outcome.
                 include_stale=False,
             )
             self.assertEqual(looped, [])
+
+    def test_supersession_chain_rejects_future_and_expired_successors(self) -> None:
+        successor_metadata = {
+            "future": "valid_from: 2999-01-01",
+            "expired": "valid_until: 2000-01-01",
+        }
+        for expected_issue, validity in successor_metadata.items():
+            with (
+                self.subTest(state=expected_issue),
+                tempfile.TemporaryDirectory() as temp,
+            ):
+                root = Path(temp)
+                vault = self.make_vault(root)
+                source = vault / "wiki" / "old.md"
+                successor = vault / "wiki" / "successor.md"
+                current = vault / "wiki" / "current.md"
+                source.write_text(
+                    "---\nstatus: superseded\nsuperseded_by: wiki/successor.md\n---\n",
+                    encoding="utf-8",
+                )
+                successor.write_text(
+                    "---\n"
+                    "status: accepted\n"
+                    f"{validity}\n"
+                    "superseded_by: wiki/current.md\n"
+                    "---\n",
+                    encoding="utf-8",
+                )
+                current.write_text(
+                    "---\nstatus: accepted\n---\n# Current\n",
+                    encoding="utf-8",
+                )
+                config_path = self.write_config(root, vault)
+                with mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ):
+                    config, _ = MODULE.load_config()
+
+                result = MODULE.follow_supersession_chain(
+                    config,
+                    source_path=source,
+                    source_relative="wiki/old.md",
+                    metadata=MODULE.parse_frontmatter(source),
+                    allowed_roots=["wiki"],
+                )
+
+                self.assertIsNone(result.path)
+                self.assertIsNone(result.vault_relative)
+                self.assertEqual(result.state, expected_issue)
+                self.assertEqual(result.issue, expected_issue)
 
     def test_supersession_redirect_stays_within_recall_roots(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1439,6 +1552,54 @@ Prior: old unrelated outcome.
             ).stdout
             self.assertIn(".obsidian/", status)
 
+    def test_explicit_commit_accepts_uppercase_markdown_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            target = vault / "wiki" / "explicit.MD"
+            target.write_text("before\n", encoding="utf-8")
+            self.init_git_vault(vault)
+            target.write_text("after\n", encoding="utf-8")
+            config_path = self.write_config(root, vault, commit_paths=["wiki"])
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            ok, detail = MODULE.safe_commit_paths(
+                config, config_path, ["wiki/explicit.MD"]
+            )
+
+            self.assertTrue(ok, detail)
+            self.assertEqual(
+                self.git_stdout(vault, "show", "--name-only", "--format=").splitlines(),
+                ["wiki/explicit.MD"],
+            )
+
+    def test_configured_commit_discovers_uppercase_markdown_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            target = vault / "wiki" / "configured.MD"
+            target.write_text("before\n", encoding="utf-8")
+            self.init_git_vault(vault)
+            before = self.git_stdout(vault, "rev-parse", "HEAD").strip()
+            target.write_text("after\n", encoding="utf-8")
+            config_path = self.write_config(root, vault, commit_paths=["wiki"])
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            ok, detail = MODULE.safe_commit_paths(config, config_path)
+
+            self.assertTrue(ok, detail)
+            self.assertNotEqual(before, self.git_stdout(vault, "rev-parse", "HEAD").strip())
+            self.assertEqual(
+                self.git_stdout(vault, "show", "--name-only", "--format=").splitlines(),
+                ["wiki/configured.MD"],
+            )
+
     def test_explicit_commit_paths_commit_only_exact_markdown_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -1507,6 +1668,126 @@ Prior: old unrelated outcome.
             self.assertIn(" daily/uncommitted.md", status)
             self.assertIn(" .obsidian/workspace.json", status)
 
+    def test_explicit_commit_preserves_unrelated_prestaged_index_blobs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            target = vault / "wiki" / "target.md"
+            staged_markdown = vault / "daily" / "staged.md"
+            staged_non_markdown = vault / "projects" / "alpha" / "state.json"
+            for path in (target, staged_markdown, staged_non_markdown):
+                path.write_text("before\n", encoding="utf-8")
+            self.init_git_vault(vault)
+            target.write_text("target change\n", encoding="utf-8")
+            staged_markdown.write_text("staged Markdown change\n", encoding="utf-8")
+            staged_non_markdown.write_text("staged JSON change\n", encoding="utf-8")
+            unrelated = ("daily/staged.md", "projects/alpha/state.json")
+            subprocess.run(
+                ["git", "-C", str(vault), "add", "--", *unrelated], check=True
+            )
+            blobs_before = self.index_blobs(vault, *unrelated)
+            config_path = self.write_config(root, vault, commit_paths=["wiki"])
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            ok, detail = MODULE.safe_commit_paths(
+                config, config_path, ["wiki/target.md"]
+            )
+
+            self.assertTrue(ok, detail)
+            self.assertEqual(
+                self.git_stdout(vault, "show", "--name-only", "--format=").splitlines(),
+                ["wiki/target.md"],
+            )
+            self.assertEqual(blobs_before, self.index_blobs(vault, *unrelated))
+            self.assertEqual(
+                self.git_stdout(vault, "diff", "--cached", "--name-only").splitlines(),
+                list(unrelated),
+            )
+
+    def test_configured_commit_preserves_unrelated_prestaged_index_blobs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            target = vault / "wiki" / "configured.md"
+            staged_markdown = vault / "daily" / "staged.md"
+            staged_non_markdown = vault / "projects" / "alpha" / "state.json"
+            for path in (target, staged_markdown, staged_non_markdown):
+                path.write_text("before\n", encoding="utf-8")
+            self.init_git_vault(vault)
+            target.write_text("configured change\n", encoding="utf-8")
+            staged_markdown.write_text("staged Markdown change\n", encoding="utf-8")
+            staged_non_markdown.write_text("staged JSON change\n", encoding="utf-8")
+            unrelated = ("daily/staged.md", "projects/alpha/state.json")
+            subprocess.run(
+                ["git", "-C", str(vault), "add", "--", *unrelated], check=True
+            )
+            blobs_before = self.index_blobs(vault, *unrelated)
+            config_path = self.write_config(
+                root, vault, commit_paths=["wiki/configured.md"]
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            ok, detail = MODULE.safe_commit_paths(config, config_path)
+
+            self.assertTrue(ok, detail)
+            self.assertEqual(
+                self.git_stdout(vault, "show", "--name-only", "--format=").splitlines(),
+                ["wiki/configured.md"],
+            )
+            self.assertEqual(blobs_before, self.index_blobs(vault, *unrelated))
+            self.assertEqual(
+                self.git_stdout(vault, "diff", "--cached", "--name-only").splitlines(),
+                list(unrelated),
+            )
+
+    def test_commit_validation_rejection_preserves_prestaged_index_blobs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            target = vault / "wiki" / "target.md"
+            invalid = vault / "wiki" / "state.json"
+            staged_markdown = vault / "daily" / "staged.md"
+            staged_non_markdown = vault / "projects" / "alpha" / "state.json"
+            for path in (target, invalid, staged_markdown, staged_non_markdown):
+                path.write_text("before\n", encoding="utf-8")
+            self.init_git_vault(vault)
+            target.write_text("target change\n", encoding="utf-8")
+            invalid.write_text("invalid change\n", encoding="utf-8")
+            staged_markdown.write_text("staged Markdown change\n", encoding="utf-8")
+            staged_non_markdown.write_text("staged JSON change\n", encoding="utf-8")
+            unrelated = ("daily/staged.md", "projects/alpha/state.json")
+            subprocess.run(
+                ["git", "-C", str(vault), "add", "--", *unrelated], check=True
+            )
+            blobs_before = self.index_blobs(vault, *unrelated)
+            head_before = self.git_stdout(vault, "rev-parse", "HEAD").strip()
+            config_path = self.write_config(root, vault, commit_paths=["wiki"])
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            ok, detail = MODULE.safe_commit_paths(
+                config, config_path, ["wiki/target.md", "wiki/state.json"]
+            )
+
+            self.assertFalse(ok)
+            self.assertIn("Markdown", detail)
+            self.assertEqual(
+                head_before, self.git_stdout(vault, "rev-parse", "HEAD").strip()
+            )
+            self.assertEqual(blobs_before, self.index_blobs(vault, *unrelated))
+            self.assertEqual(
+                self.git_stdout(vault, "diff", "--cached", "--name-only").splitlines(),
+                list(unrelated),
+            )
+
     def test_explicit_commit_paths_reject_invalid_overrides_before_staging(self) -> None:
         cases = (
             ("duplicate normalized path", ["wiki/valid.md", "wiki/./valid.md"]),
@@ -1573,6 +1854,198 @@ Prior: old unrelated outcome.
                 self.assertNotIn("unrecognized arguments", result.stderr)
                 self.assertEqual(before, after)
                 self.assertEqual(staged, "")
+
+    def test_explicit_commit_resolution_errors_preserve_head_and_index(self) -> None:
+        cases = (
+            ("NUL", ["wiki/target\0.md"], None),
+            ("OSError", ["wiki/target.md"], OSError("mocked resolution failure")),
+            (
+                "RuntimeError",
+                ["wiki/target.md"],
+                RuntimeError("mocked symlink loop"),
+            ),
+            ("ValueError", ["wiki/target.md"], ValueError("mocked invalid path")),
+        )
+        for label, explicit_paths, failure in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                vault = self.make_vault(root)
+                target = vault / "wiki" / "target.md"
+                staged = vault / "daily" / "already-staged.md"
+                target.write_text("before\n", encoding="utf-8")
+                staged.write_text("before\n", encoding="utf-8")
+                self.init_git_vault(vault)
+                target.write_text("target change\n", encoding="utf-8")
+                staged.write_text("staged change\n", encoding="utf-8")
+                subprocess.run(
+                    ["git", "-C", str(vault), "add", "--", "daily/already-staged.md"],
+                    check=True,
+                )
+                config_path = self.write_config(root, vault, commit_paths=["wiki"])
+                with mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ):
+                    config, _ = MODULE.load_config()
+                head_before = self.git_stdout(vault, "rev-parse", "HEAD").strip()
+                blobs_before = self.index_blobs(vault, "daily/already-staged.md")
+
+                try:
+                    if failure is None:
+                        ok, detail = MODULE.safe_commit_paths(
+                            config, config_path, explicit_paths
+                        )
+                    else:
+                        with mock.patch.object(
+                            MODULE.Path, "resolve", side_effect=failure
+                        ):
+                            ok, detail = MODULE.safe_commit_paths(
+                                config, config_path, explicit_paths
+                            )
+                except (OSError, RuntimeError, ValueError) as exc:
+                    self.fail(f"untrusted path resolution escaped: {exc}")
+
+                self.assertFalse(ok)
+                self.assertLessEqual(len(detail), 600)
+                self.assertEqual(
+                    head_before, self.git_stdout(vault, "rev-parse", "HEAD").strip()
+                )
+                self.assertEqual(
+                    blobs_before, self.index_blobs(vault, "daily/already-staged.md")
+                )
+
+    def test_configured_status_resolution_errors_preserve_head_and_index(self) -> None:
+        for failure_type in (OSError, RuntimeError, ValueError):
+            with (
+                self.subTest(failure=failure_type.__name__),
+                tempfile.TemporaryDirectory() as temp,
+            ):
+                root = Path(temp)
+                vault = self.make_vault(root)
+                target = vault / "wiki" / "target.md"
+                staged = vault / "daily" / "already-staged.md"
+                target.write_text("before\n", encoding="utf-8")
+                staged.write_text("before\n", encoding="utf-8")
+                self.init_git_vault(vault)
+                target.write_text("target change\n", encoding="utf-8")
+                staged.write_text("staged change\n", encoding="utf-8")
+                subprocess.run(
+                    ["git", "-C", str(vault), "add", "--", "daily/already-staged.md"],
+                    check=True,
+                )
+                config_path = self.write_config(root, vault, commit_paths=["wiki"])
+                with mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ):
+                    config, _ = MODULE.load_config()
+                head_before = self.git_stdout(vault, "rev-parse", "HEAD").strip()
+                blobs_before = self.index_blobs(vault, "daily/already-staged.md")
+                real_resolve = MODULE.Path.resolve
+
+                def resolve_or_fail(path: Path, *args: object, **kwargs: object) -> Path:
+                    if path.name == "target.md":
+                        raise failure_type("mocked status-path resolution failure")
+                    return real_resolve(path, *args, **kwargs)
+
+                try:
+                    with mock.patch.object(
+                        MODULE.Path,
+                        "resolve",
+                        autospec=True,
+                        side_effect=resolve_or_fail,
+                    ):
+                        ok, detail = MODULE.safe_commit_paths(config, config_path)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    self.fail(f"status-derived path resolution escaped: {exc}")
+
+                self.assertFalse(ok)
+                self.assertLessEqual(len(detail), 600)
+                self.assertEqual(
+                    head_before, self.git_stdout(vault, "rev-parse", "HEAD").strip()
+                )
+                self.assertEqual(
+                    blobs_before, self.index_blobs(vault, "daily/already-staged.md")
+                )
+
+    def test_explicit_commit_symlink_loop_fails_closed_before_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            staged = vault / "daily" / "already-staged.md"
+            staged.write_text("before\n", encoding="utf-8")
+            self.init_git_vault(vault)
+            staged.write_text("staged change\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(vault), "add", "--", "daily/already-staged.md"],
+                check=True,
+            )
+            os.symlink("loop", vault / "wiki" / "loop")
+            config_path = self.write_config(root, vault, commit_paths=["wiki"])
+            head_before = self.git_stdout(vault, "rev-parse", "HEAD").strip()
+            blobs_before = self.index_blobs(vault, "daily/already-staged.md")
+            env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "commit",
+                    "--path",
+                    "wiki/loop/note.md",
+                ],
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertLessEqual(len(result.stderr), 700)
+            self.assertEqual(
+                head_before, self.git_stdout(vault, "rev-parse", "HEAD").strip()
+            )
+            self.assertEqual(blobs_before, self.index_blobs(vault, "daily/already-staged.md"))
+
+    def test_stop_resolution_error_emits_valid_bounded_json_and_preserves_index(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            staged = vault / "daily" / "already-staged.md"
+            staged.write_text("before\n", encoding="utf-8")
+            self.init_git_vault(vault)
+            staged.write_text("staged change\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(vault), "add", "--", "daily/already-staged.md"],
+                check=True,
+            )
+            config_path = self.write_config(
+                root,
+                vault,
+                auto_commit=True,
+                commit_paths=["wiki/unsafe\0.MD"],
+            )
+            head_before = self.git_stdout(vault, "rev-parse", "HEAD").strip()
+            blobs_before = self.index_blobs(vault, "daily/already-staged.md")
+            env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "stop"],
+                input="{}",
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            payload = json.loads(result.stdout)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("systemMessage", payload)
+            self.assertLessEqual(len(payload["systemMessage"]), 700)
+            self.assertEqual(
+                head_before, self.git_stdout(vault, "rev-parse", "HEAD").strip()
+            )
+            self.assertEqual(blobs_before, self.index_blobs(vault, "daily/already-staged.md"))
 
     def test_explicit_commit_paths_reject_git_pathspec_magic_before_staging(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -65,6 +65,10 @@ def has_private_vault_segment(parts: tuple[str, ...]) -> bool:
     return any(part.casefold().startswith(".") for part in parts)
 
 
+def is_markdown_path(path: str | Path) -> bool:
+    return Path(path).suffix.casefold() == ".md"
+
+
 def safe_recall_parts(parts: tuple[str, ...]) -> bool:
     """Keep private/derived vault areas outside every recall-provider path.
 
@@ -570,20 +574,32 @@ def safe_commit_paths(
             return False, f"unsafe commit path in {config_file}: {value!r}"
         if has_private_vault_segment(relative.parts):
             return False, f"private commit path in {config_file}: {value!r}"
-        if override_paths and not value.endswith(".md"):
+        if override_paths and not is_markdown_path(value):
             return False, f"explicit commit path must be Markdown: {value!r}"
-        candidate = (vault / relative).resolve()
+        try:
+            candidate = (vault / relative).resolve()
+        except (OSError, RuntimeError, ValueError):
+            return False, clipped_line(
+                f"cannot resolve commit path in {config_file}: {value!r}", 500
+            )
         try:
             resolved_relative = candidate.relative_to(vault)
         except ValueError:
             return False, f"commit path escapes vault: {value!r}"
         if has_private_vault_segment(resolved_relative.parts):
             return False, f"private commit path in {config_file}: {value!r}"
-        if override_paths and not resolved_relative.as_posix().endswith(".md"):
+        if override_paths and not is_markdown_path(resolved_relative):
             return False, f"explicit commit path must resolve to Markdown: {value!r}"
         if override_paths:
-            if candidate.exists():
-                if not candidate.is_file():
+            try:
+                candidate_exists = candidate.exists()
+                candidate_is_file = candidate.is_file() if candidate_exists else False
+            except (OSError, RuntimeError, ValueError):
+                return False, clipped_line(
+                    f"cannot inspect commit path in {config_file}: {value!r}", 500
+                )
+            if candidate_exists:
+                if not candidate_is_file:
                     return False, f"explicit commit path must be a file: {value!r}"
             else:
                 tracked = run_git(vault, ["ls-files", "-z", "--", normalized])
@@ -662,16 +678,23 @@ def safe_commit_paths(
                     for root in allowed_roots
                 ):
                     continue
-                if not value.endswith(".md") or has_private_vault_segment(relative.parts):
+                if not is_markdown_path(value) or has_private_vault_segment(
+                    relative.parts
+                ):
                     continue
-                candidate = (vault / relative).resolve()
+                try:
+                    candidate = (vault / relative).resolve()
+                except (OSError, RuntimeError, ValueError):
+                    return False, clipped_line(
+                        f"cannot resolve changed commit path: {value!r}", 500
+                    )
                 try:
                     resolved_relative = candidate.relative_to(vault)
                 except ValueError:
                     continue
                 if (
                     has_private_vault_segment(resolved_relative.parts)
-                    or not resolved_relative.as_posix().endswith(".md")
+                    or not is_markdown_path(resolved_relative)
                     or (candidate.exists() and not candidate.is_file())
                 ):
                     continue
@@ -706,8 +729,8 @@ def safe_commit_paths(
         if commit.returncode != 0:
             return False, clipped_line(commit.stderr or "git commit failed", 500)
         return True, message
-    except (OSError, subprocess.SubprocessError) as exc:
-        return False, str(exc)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+        return False, clipped_line(str(exc), 500)
     finally:
         try:
             lock_dir.rmdir()
@@ -1246,14 +1269,17 @@ def follow_supersession_chain(
         current_path = resolved.path
         current_metadata = parse_frontmatter(current_path)
         state = memory_state(current_metadata)
-        if state not in HIDDEN_STATES:
-            return SupersessionResult(
-                current_path,
-                resolved.vault_relative,
-                current_metadata,
-                state,
-                None,
-            )
+        if state == "stale":
+            continue
+        if state in {"future", "expired"}:
+            return SupersessionResult(None, None, {}, state, state)
+        return SupersessionResult(
+            current_path,
+            resolved.vault_relative,
+            current_metadata,
+            state,
+            None,
+        )
     return SupersessionResult(None, None, {}, "", "hop-limit")
 
 

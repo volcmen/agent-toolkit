@@ -91,7 +91,7 @@ Memory is progressively disclosed:
    inject task bodies or historical `Prior:` paragraphs.
 2. **L1 — recall hits:** compact snippets, paths, scores, and governance state,
    bounded by `max_recall_tokens`. Superseded hits follow a bounded,
-   cycle-checked chain to their first current successor; stale, expired, and
+   cycle-checked chain to their first non-hidden successor; stale, expired, and
    not-yet-valid notes stay hidden unless `--include-stale` is explicit.
 3. **L2 — source notes:** agents open only relevant Markdown files and verify
    provenance before acting.

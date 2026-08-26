@@ -781,7 +781,9 @@ Map issues to fixed error codes:
 - `hop-limit` -> `supersession-hop-limit`;
 - `unsafe` -> `supersession-unsafe`;
 - `out-of-root` -> `supersession-out-of-root`;
-- `non-markdown` -> `supersession-non-markdown`.
+- `non-markdown` -> `supersession-non-markdown`;
+- `future` -> `supersession-future`;
+- `expired` -> `supersession-expired`.
 
 A source marked stale without a non-empty successor gets `stale-without-successor`. Do not audit query-dependent scope; scope isolation remains a recall/evaluator test.
 
