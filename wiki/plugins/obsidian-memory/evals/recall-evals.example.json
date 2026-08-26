@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "scoped-current-decision",
+      "query": "portable provider boundary",
+      "mode": "fast",
+      "provider": "native",
+      "scope": "projects/example",
+      "top": 3,
+      "max_tokens": 900,
+      "expected_paths": ["projects/example/decisions/current.md"],
+      "any_of_paths": [],
+      "forbidden_paths": ["projects/example/decisions/old.md"],
+      "allow_degraded": false
+    }
+  ]
+}

@@ -2746,6 +2746,587 @@ Prior: old unrelated outcome.
             self.assertEqual(committed, ["wiki/configured.md"])
             self.assertIn("daily/unconfigured.md", status)
 
+    def test_recall_eval_suite_accepts_strict_schema_and_returns_frozen_cases(
+        self,
+    ) -> None:
+        """Catches schema drift, query/scope normalization, and mutable cases."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            fixture = root / "recall-evals.json"
+            fixture.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "cases": [
+                            {
+                                "id": "current-decision",
+                                "query": "  portable   provider\n boundary  ",
+                                "mode": "hybrid",
+                                "provider": "auto",
+                                "scope": "/projects/alpha/",
+                                "expected_paths": ["projects/alpha/current.md"],
+                                "any_of_paths": ["projects/alpha/alternative.md"],
+                                "forbidden_paths": ["projects/alpha/old.md"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                cases = MODULE.load_recall_eval_suite(fixture, config)
+
+            self.assertEqual(len(cases), 1)
+            case = cases[0]
+            self.assertEqual(case.query, "portable provider boundary")
+            self.assertEqual(case.scope, "projects/alpha")
+            self.assertIsNone(case.top)
+            self.assertIsNone(case.max_tokens)
+            self.assertFalse(case.allow_degraded)
+            self.assertEqual(case.expected_paths, ("projects/alpha/current.md",))
+            with self.assertRaises(AttributeError):
+                case.id = "changed"  # type: ignore[misc]
+
+    def test_recall_eval_fixture_rejects_every_malformed_schema_boundary(
+        self,
+    ) -> None:
+        """Catches fail-open fixture parsing at every documented boundary."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            (vault / "projects" / "alpha" / "escape").symlink_to(root)
+            config_path = self.write_config(root, vault)
+            fixture = root / "invalid.json"
+            valid_case = {
+                "id": "valid",
+                "query": "needle",
+                "mode": "fast",
+                "provider": "native",
+                "scope": "projects/alpha",
+                "expected_paths": ["projects/alpha/current.md"],
+                "any_of_paths": [],
+                "forbidden_paths": [],
+                "allow_degraded": False,
+            }
+
+            def case_with(**updates: object) -> dict[str, object]:
+                item = dict(valid_case)
+                item.update(updates)
+                return item
+
+            malformed: list[tuple[str, object]] = [
+                ("top-level-object", []),
+                ("top-level-keys", {"schema_version": 1, "cases": [valid_case], "extra": 1}),
+                ("schema-version", {"schema_version": 2, "cases": [valid_case]}),
+                ("schema-version-type", {"schema_version": True, "cases": [valid_case]}),
+                ("cases-type", {"schema_version": 1, "cases": {}}),
+                ("cases-empty", {"schema_version": 1, "cases": []}),
+                ("cases-bounded", {"schema_version": 1, "cases": [valid_case] * 201}),
+                ("case-object", {"schema_version": 1, "cases": ["not-an-object"]}),
+                ("required-field", {"schema_version": 1, "cases": [{key: value for key, value in valid_case.items() if key != "query"}]}),
+                ("case-keys", {"schema_version": 1, "cases": [case_with(unexpected=True)]}),
+                ("id-type", {"schema_version": 1, "cases": [case_with(id=7)]}),
+                ("id-empty", {"schema_version": 1, "cases": [case_with(id="   ")]}),
+                ("id-length", {"schema_version": 1, "cases": [case_with(id="i" * 121)]}),
+                ("duplicate-id", {"schema_version": 1, "cases": [valid_case, valid_case]}),
+                ("query-type", {"schema_version": 1, "cases": [case_with(query=7)]}),
+                ("query-empty", {"schema_version": 1, "cases": [case_with(query=" \n ")]}),
+                ("query-length", {"schema_version": 1, "cases": [case_with(query="q" * 1001)]}),
+                ("mode", {"schema_version": 1, "cases": [case_with(mode="slow")]}),
+                ("provider", {"schema_version": 1, "cases": [case_with(provider="cloud")]}),
+                ("scope-parent", {"schema_version": 1, "cases": [case_with(scope="../outside")]}),
+                ("scope-private", {"schema_version": 1, "cases": [case_with(scope="projects/.raw")]}),
+                ("scope-root", {"schema_version": 1, "cases": [case_with(scope="outside")]}),
+                ("scope-symlink", {"schema_version": 1, "cases": [case_with(scope="projects/alpha/escape")]}),
+                ("top-low", {"schema_version": 1, "cases": [case_with(top=0)]}),
+                ("top-high", {"schema_version": 1, "cases": [case_with(top=21)]}),
+                ("top-bool", {"schema_version": 1, "cases": [case_with(top=True)]}),
+                ("tokens-low", {"schema_version": 1, "cases": [case_with(max_tokens=63)]}),
+                ("tokens-high", {"schema_version": 1, "cases": [case_with(max_tokens=4001)]}),
+                ("tokens-bool", {"schema_version": 1, "cases": [case_with(max_tokens=False)]}),
+                ("allow-degraded", {"schema_version": 1, "cases": [case_with(allow_degraded="false")]}),
+                ("paths-type", {"schema_version": 1, "cases": [case_with(expected_paths="projects/alpha/current.md")]}),
+                ("path-item-type", {"schema_version": 1, "cases": [case_with(expected_paths=[7])]}),
+                ("path-empty", {"schema_version": 1, "cases": [case_with(expected_paths=[""])]}),
+                ("path-duplicate", {"schema_version": 1, "cases": [case_with(expected_paths=["projects/alpha/current.md", "projects/alpha/current.md"])]}),
+                ("path-extension", {"schema_version": 1, "cases": [case_with(expected_paths=["projects/alpha/current.txt"])]}),
+                ("path-absolute", {"schema_version": 1, "cases": [case_with(expected_paths=[str(root / "secret.md")])]}),
+                ("path-parent", {"schema_version": 1, "cases": [case_with(expected_paths=["projects/../secret.md"])]}),
+                ("path-private", {"schema_version": 1, "cases": [case_with(expected_paths=["projects/.raw/secret.md"])]}),
+                ("path-root", {"schema_version": 1, "cases": [case_with(expected_paths=["outside/secret.md"])]}),
+                ("path-scope", {"schema_version": 1, "cases": [case_with(expected_paths=["wiki/secret.md"])]}),
+                ("path-symlink", {"schema_version": 1, "cases": [case_with(expected_paths=["projects/alpha/escape/secret.md"])]}),
+            ]
+
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                for label, payload in malformed:
+                    with self.subTest(label=label):
+                        fixture.write_text(json.dumps(payload), encoding="utf-8")
+                        with self.assertRaises(MODULE.EvaluationError) as raised:
+                            MODULE.load_recall_eval_suite(fixture, config)
+                        message = str(raised.exception)
+                        self.assertNotIn(str(root), message)
+                        self.assertNotIn("q" * 1001, message)
+
+    def test_recall_eval_fixture_rejects_unknown_fields_and_unsafe_paths(self) -> None:
+        """Catches fixtures that combine extension fields with private paths."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            fixture = root / "invalid.json"
+            fixture.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "cases": [
+                            {
+                                "id": "unsafe",
+                                "query": "x",
+                                "mode": "fast",
+                                "provider": "native",
+                                "expected_paths": [".raw/secret.md"],
+                                "any_of_paths": [],
+                                "forbidden_paths": [],
+                                "unexpected": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                with self.assertRaises(MODULE.EvaluationError) as raised:
+                    MODULE.load_recall_eval_suite(fixture, config)
+            self.assertIn("unsafe", str(raised.exception))
+            self.assertIn("keys", str(raised.exception))
+
+    def test_recall_evaluator_checks_paths_degradation_and_hides_bodies(self) -> None:
+        """Catches expectation/degradation/token drift and private output leaks."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            fixture = root / "recall-evals.json"
+            fixture.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "cases": [
+                            {
+                                "id": "passing",
+                                "query": "SECRET PASSING QUERY",
+                                "mode": "hybrid",
+                                "provider": "auto",
+                                "scope": "projects/alpha",
+                                "top": 3,
+                                "max_tokens": 900,
+                                "expected_paths": ["projects/alpha/current.md"],
+                                "any_of_paths": ["projects/alpha/current.md"],
+                                "forbidden_paths": ["projects/alpha/old.md"],
+                                "allow_degraded": False,
+                            },
+                            {
+                                "id": "failing",
+                                "query": "SECRET FAILING QUERY",
+                                "mode": "semantic",
+                                "provider": "qmd",
+                                "scope": "projects/alpha",
+                                "top": 2,
+                                "max_tokens": 900,
+                                "expected_paths": ["projects/alpha/missing.md"],
+                                "any_of_paths": ["projects/alpha/alternative.md"],
+                                "forbidden_paths": ["projects/alpha/old.md"],
+                                "allow_degraded": False,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payloads = iter(
+                [
+                    {
+                        "provider": "qmd",
+                        "requested_provider": "auto",
+                        "mode": "hybrid",
+                        "requested_mode": "hybrid",
+                        "degraded": False,
+                        "results": [
+                            {
+                                "path": "projects/alpha/current.md",
+                                "title": "SECRET TITLE",
+                                "snippet": "SECRET SNIPPET AND NOTE BODY",
+                                "body": "SECRET BODY FIELD",
+                            }
+                        ],
+                        "results_estimated_tokens": 42,
+                        "result_token_limit": 900,
+                        "filtered_stale": 2,
+                    },
+                    {
+                        "provider": "native",
+                        "requested_provider": "qmd",
+                        "mode": "fast",
+                        "requested_mode": "semantic",
+                        "degraded": True,
+                        "results": [{"path": "projects/alpha/old.md"}],
+                        "results_estimated_tokens": 901,
+                        "result_token_limit": 900,
+                        "filtered_stale": 0,
+                    },
+                ]
+            )
+            calls: list[tuple[object, ...]] = []
+
+            def runner(*args: object, **kwargs: object) -> dict[str, object]:
+                calls.append((*args, kwargs))
+                return next(payloads)
+
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(
+                    MODULE.time,
+                    "perf_counter",
+                    side_effect=[1.0, 1.012, 2.0, 2.020],
+                ),
+            ):
+                config, _ = MODULE.load_config()
+                cases = MODULE.load_recall_eval_suite(fixture, config)
+                report = MODULE.evaluate_recall_cases(
+                    config,
+                    cases,
+                    recall_runner=runner,
+                )
+
+            self.assertEqual(len(calls), 2)
+            self.assertIs(calls[0][0], config)
+            self.assertEqual(
+                calls[0][1:6],
+                ("SECRET PASSING QUERY", "hybrid", 3, 900, False),
+            )
+            self.assertEqual(
+                calls[0][6],
+                {"provider": "auto", "scope": "projects/alpha"},
+            )
+            self.assertEqual(report["summary"]["passed"], 1)
+            self.assertEqual(report["summary"]["failed"], 1)
+            self.assertEqual(report["summary"]["median_elapsed_ms"], 16.0)
+            self.assertEqual(report["summary"]["median_result_tokens"], 471.5)
+            self.assertEqual(report["cases"][0]["paths"], ["projects/alpha/current.md"])
+            self.assertEqual(
+                report["cases"][1]["reasons"],
+                [
+                    "missing-expected",
+                    "missing-any-of",
+                    "forbidden-returned",
+                    "unexpected-degradation",
+                    "token-limit-exceeded",
+                ],
+            )
+            encoded = json.dumps(report)
+            for secret in (
+                "SECRET PASSING QUERY",
+                "SECRET FAILING QUERY",
+                "SECRET TITLE",
+                "SECRET SNIPPET AND NOTE BODY",
+                "SECRET BODY FIELD",
+            ):
+                self.assertNotIn(secret, encoded)
+
+    def test_recall_evaluator_allows_explicitly_declared_degradation(self) -> None:
+        """Catches treating allowed provider fallback as a failed case."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            fixture = root / "allowed-degradation.json"
+            fixture.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "cases": [
+                            {
+                                "id": "fallback-is-allowed",
+                                "query": "PRIVATE ALLOWED QUERY",
+                                "mode": "semantic",
+                                "provider": "auto",
+                                "expected_paths": [],
+                                "any_of_paths": [],
+                                "forbidden_paths": [],
+                                "allow_degraded": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payload = {
+                "provider": "native",
+                "requested_provider": "auto",
+                "mode": "fast",
+                "requested_mode": "semantic",
+                "degraded": True,
+                "results": [],
+                "results_estimated_tokens": 0,
+                "result_token_limit": 900,
+                "filtered_stale": 0,
+            }
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                cases = MODULE.load_recall_eval_suite(fixture, config)
+                report = MODULE.evaluate_recall_cases(
+                    config,
+                    cases,
+                    recall_runner=lambda *_args, **_kwargs: payload,
+                )
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["cases"][0]["reasons"], [])
+        self.assertTrue(report["cases"][0]["degraded"])
+        self.assertNotIn("PRIVATE ALLOWED QUERY", json.dumps(report))
+
+    def test_recall_evaluator_sanitizes_runtime_and_malformed_provider_failures(
+        self,
+    ) -> None:
+        """Catches exception, traceback, and absolute provider-path disclosure."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            fixture = root / "ABSOLUTE-FIXTURE-SENTINEL.json"
+            base_case = {
+                "query": "RUNTIME QUERY SENTINEL",
+                "mode": "fast",
+                "provider": "native",
+                "scope": "projects/alpha",
+                "top": 3,
+                "max_tokens": 900,
+                "expected_paths": [],
+                "any_of_paths": [],
+                "forbidden_paths": [],
+                "allow_degraded": False,
+            }
+            fixture.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "cases": [
+                            {"id": "runtime", **base_case},
+                            {"id": "malformed", **base_case},
+                            {"id": "unhashable", **base_case},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            calls = 0
+
+            def runner(*_args: object, **_kwargs: object) -> dict[str, object]:
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise MODULE.RecallProviderError(
+                        f"TRACEBACK SENTINEL {fixture} RUNTIME QUERY SENTINEL"
+                    )
+                if calls == 3:
+                    return {
+                        "provider": ["UNHASHABLE PROVIDER SENTINEL"],
+                        "requested_provider": "native",
+                        "mode": "fast",
+                        "requested_mode": "fast",
+                        "degraded": False,
+                        "results": [],
+                        "results_estimated_tokens": 0,
+                        "result_token_limit": 900,
+                        "filtered_stale": 0,
+                    }
+                return {
+                    "provider": "native",
+                    "requested_provider": "native",
+                    "mode": "fast",
+                    "requested_mode": "fast",
+                    "degraded": False,
+                    "results": [
+                        {
+                            "path": str(root / "ABSOLUTE-RESULT-SENTINEL.md"),
+                            "title": "MALFORMED TITLE SENTINEL",
+                            "snippet": "MALFORMED SNIPPET SENTINEL",
+                        }
+                    ],
+                    "results_estimated_tokens": 1,
+                    "result_token_limit": 900,
+                    "filtered_stale": 0,
+                }
+
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                cases = MODULE.load_recall_eval_suite(fixture, config)
+                report = MODULE.evaluate_recall_cases(
+                    config,
+                    cases,
+                    recall_runner=runner,
+                )
+
+            self.assertEqual(calls, 3)
+            self.assertEqual(report["cases"][0]["reasons"], ["recall-error"])
+            self.assertEqual(report["cases"][1]["reasons"], ["recall-error"])
+            self.assertEqual(report["cases"][2]["reasons"], ["recall-error"])
+            self.assertEqual(report["cases"][0]["paths"], [])
+            self.assertEqual(report["cases"][1]["paths"], [])
+            self.assertEqual(report["cases"][2]["paths"], [])
+            encoded = json.dumps(report)
+            for secret in (
+                str(fixture),
+                str(root / "ABSOLUTE-RESULT-SENTINEL.md"),
+                "TRACEBACK SENTINEL",
+                "RUNTIME QUERY SENTINEL",
+                "MALFORMED TITLE SENTINEL",
+                "MALFORMED SNIPPET SENTINEL",
+                "UNHASHABLE PROVIDER SENTINEL",
+            ):
+                self.assertNotIn(secret, encoded)
+
+    def test_recall_evaluate_cli_resolves_paths_and_uses_documented_exits(self) -> None:
+        """Catches wrong cwd resolution, output mode, privacy, and exit mappings."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            note = vault / "projects" / "alpha" / "current.md"
+            note.write_text(
+                "# CLI PRIVATE TITLE\nCLI_UNIQUE_NEEDLE PRIVATE NOTE BODY\n",
+                encoding="utf-8",
+            )
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_provider="native",
+                recall_roots=["projects"],
+            )
+            fixture = root / "suite.json"
+
+            def write_fixture(*, forbidden: list[str]) -> None:
+                fixture.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "cases": [
+                                {
+                                    "id": "cli-case",
+                                    "query": "CLI_UNIQUE_NEEDLE",
+                                    "mode": "fast",
+                                    "provider": "native",
+                                    "scope": "projects/alpha",
+                                    "top": 3,
+                                    "max_tokens": 900,
+                                    "expected_paths": ["projects/alpha/current.md"],
+                                    "any_of_paths": [],
+                                    "forbidden_paths": forbidden,
+                                    "allow_degraded": False,
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            write_fixture(forbidden=[])
+            passing = subprocess.run(
+                [sys.executable, str(SCRIPT), "evaluate", "suite.json"],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(passing.returncode, 0, passing.stderr)
+            self.assertEqual(len(passing.stdout.splitlines()), 1)
+            self.assertTrue(json.loads(passing.stdout)["ok"])
+
+            write_fixture(forbidden=["projects/alpha/current.md"])
+            failing = subprocess.run(
+                [sys.executable, str(SCRIPT), "evaluate", str(fixture), "--json"],
+                cwd=vault,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(failing.returncode, 1, failing.stderr)
+            self.assertGreater(len(failing.stdout.splitlines()), 1)
+            self.assertFalse(json.loads(failing.stdout)["ok"])
+
+            fixture.write_text('{"schema_version":', encoding="utf-8")
+            invalid = subprocess.run(
+                [sys.executable, str(SCRIPT), "evaluate", str(fixture), "--json"],
+                cwd=vault,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(invalid.returncode, 2, invalid.stderr)
+            self.assertEqual(json.loads(invalid.stdout)["error"], "fixture-error")
+
+            missing_config = root / "ABSOLUTE-CONFIG-SENTINEL.json"
+            config_error = subprocess.run(
+                [sys.executable, str(SCRIPT), "evaluate", str(fixture), "--json"],
+                cwd=vault,
+                env={**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(missing_config)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(config_error.returncode, 2, config_error.stderr)
+            self.assertEqual(
+                json.loads(config_error.stdout)["error"],
+                "configuration-error",
+            )
+
+            for output in (
+                passing.stdout + passing.stderr,
+                failing.stdout + failing.stderr,
+                invalid.stdout + invalid.stderr,
+                config_error.stdout + config_error.stderr,
+            ):
+                self.assertNotIn("CLI_UNIQUE_NEEDLE", output)
+                self.assertNotIn("CLI PRIVATE TITLE", output)
+                self.assertNotIn("PRIVATE NOTE BODY", output)
+                self.assertNotIn(str(fixture), output)
+                self.assertNotIn(str(missing_config), output)
+
+    def test_recall_eval_example_is_safe_and_loadable(self) -> None:
+        """Catches a malformed or machine-specific checked-in example."""
+        example = SCRIPT.parents[1] / "evals" / "recall-evals.example.json"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                cases = MODULE.load_recall_eval_suite(example, config)
+        self.assertEqual([case.id for case in cases], ["scoped-current-decision"])
+        self.assertNotIn(str(Path.home()), example.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

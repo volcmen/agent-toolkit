@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -55,10 +56,32 @@ CURRENT_STATUSES = {"accepted", "active", "verified"}
 CANDIDATE_STATUSES = {"candidate", "proposed"}
 HIDDEN_STATES = {"expired", "future", "stale"}
 MAX_SUPERSESSION_HOPS = 8
+MAX_RECALL_EVAL_CASES = 200
+MAX_RECALL_EVAL_FIXTURE_CHARS = 1_000_000
+MAX_RECALL_EVAL_RESULT_PATHS = 20
 
 
 class ConfigurationError(RuntimeError):
     """Raised when the local vault configuration is unusable."""
+
+
+class EvaluationError(RuntimeError):
+    """Raised when a local recall-evaluation fixture is invalid."""
+
+
+@dataclass(frozen=True)
+class RecallEvalCase:
+    id: str
+    query: str
+    mode: str
+    provider: str
+    scope: str | None
+    top: int | None
+    max_tokens: int | None
+    expected_paths: tuple[str, ...]
+    any_of_paths: tuple[str, ...]
+    forbidden_paths: tuple[str, ...]
+    allow_degraded: bool
 
 
 def has_private_vault_segment(parts: tuple[str, ...]) -> bool:
@@ -1926,6 +1949,407 @@ def recall_payload(
     return payload
 
 
+_RECALL_EVAL_CASE_KEYS = {
+    "id",
+    "query",
+    "mode",
+    "provider",
+    "scope",
+    "top",
+    "max_tokens",
+    "expected_paths",
+    "any_of_paths",
+    "forbidden_paths",
+    "allow_degraded",
+}
+_RECALL_EVAL_REQUIRED_CASE_KEYS = {
+    "id",
+    "query",
+    "mode",
+    "provider",
+    "expected_paths",
+    "any_of_paths",
+    "forbidden_paths",
+}
+_RECALL_EVAL_MODES = {"fast", "semantic", "hybrid"}
+_RECALL_EVAL_PROVIDERS = {"auto", "native", "qmd"}
+
+
+def _evaluation_field_error(case_label: str, field: str) -> EvaluationError:
+    return EvaluationError(f"{case_label} field {field!r} is invalid")
+
+
+def _safe_evaluation_location(
+    config: dict[str, Any],
+    value: str,
+    *,
+    scope: str | None,
+    markdown: bool,
+) -> str | None:
+    if not value or value != value.strip() or "\\" in value or "\x00" in value:
+        return None
+    relative = PurePosixPath(value)
+    if (
+        relative.is_absolute()
+        or not relative.parts
+        or ".." in relative.parts
+        or relative.as_posix() != value
+        or not safe_recall_parts(relative.parts)
+    ):
+        return None
+    normalized = relative.as_posix()
+    if markdown and not is_markdown_path(normalized):
+        return None
+    roots = config["recall_roots"]
+    if not path_within_roots(normalized, roots):
+        return None
+    if scope is not None and not path_in_scope(normalized, scope):
+        return None
+
+    vault: Path = config["vault"]
+    lexical = vault.joinpath(*relative.parts)
+    try:
+        resolved = lexical.resolve()
+        resolved_relative = resolved.relative_to(vault)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if resolved != lexical.absolute():
+        return None
+    if (
+        not safe_recall_parts(resolved_relative.parts)
+        or not path_within_roots(resolved_relative.as_posix(), roots)
+    ):
+        return None
+    return normalized
+
+
+def _evaluation_path_array(
+    raw_case: dict[str, Any],
+    field: str,
+    *,
+    case_label: str,
+    config: dict[str, Any],
+    scope: str | None,
+) -> tuple[str, ...]:
+    values = raw_case.get(field)
+    if not isinstance(values, list):
+        raise _evaluation_field_error(case_label, field)
+    normalized: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            raise _evaluation_field_error(case_label, field)
+        safe_value = _safe_evaluation_location(
+            config,
+            value,
+            scope=scope,
+            markdown=True,
+        )
+        if safe_value is None or safe_value in normalized:
+            raise _evaluation_field_error(case_label, field)
+        normalized.append(safe_value)
+    return tuple(normalized)
+
+
+def load_recall_eval_suite(
+    path: Path, config: dict[str, Any]
+) -> list[RecallEvalCase]:
+    try:
+        with path.open(encoding="utf-8") as handle:
+            raw_text = handle.read(MAX_RECALL_EVAL_FIXTURE_CHARS + 1)
+    except (OSError, UnicodeError) as exc:
+        raise EvaluationError("fixture field 'file' is invalid") from exc
+    if len(raw_text) > MAX_RECALL_EVAL_FIXTURE_CHARS:
+        raise EvaluationError("fixture field 'file' is invalid")
+    try:
+        suite = json.loads(raw_text)
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise EvaluationError("fixture field 'json' is invalid") from exc
+    if not isinstance(suite, dict):
+        raise EvaluationError("suite field 'document' is invalid")
+    if set(suite) != {"schema_version", "cases"}:
+        raise EvaluationError("suite field 'keys' is invalid")
+    if type(suite["schema_version"]) is not int or suite["schema_version"] != 1:
+        raise EvaluationError("suite field 'schema_version' is invalid")
+    raw_cases = suite["cases"]
+    if (
+        not isinstance(raw_cases, list)
+        or not raw_cases
+        or len(raw_cases) > MAX_RECALL_EVAL_CASES
+    ):
+        raise EvaluationError("suite field 'cases' is invalid")
+
+    cases: list[RecallEvalCase] = []
+    seen_ids: set[str] = set()
+    for index, raw_case in enumerate(raw_cases, start=1):
+        positional_label = f"case {index}"
+        if not isinstance(raw_case, dict):
+            raise EvaluationError(f"{positional_label} field 'document' is invalid")
+        raw_id = raw_case.get("id")
+        case_id = raw_id.strip() if isinstance(raw_id, str) else ""
+        id_is_valid = bool(case_id) and len(case_id) <= 120 and not any(
+            ord(character) < 32 or ord(character) == 127 for character in case_id
+        )
+        case_label = f"case {case_id!r}" if id_is_valid else positional_label
+        if not _RECALL_EVAL_REQUIRED_CASE_KEYS.issubset(raw_case):
+            raise EvaluationError(f"{case_label} field 'keys' is invalid")
+        if not set(raw_case).issubset(_RECALL_EVAL_CASE_KEYS):
+            raise EvaluationError(f"{case_label} field 'keys' is invalid")
+
+        if not id_is_valid:
+            raise _evaluation_field_error(positional_label, "id")
+        if case_id in seen_ids:
+            raise _evaluation_field_error(case_label, "id")
+        seen_ids.add(case_id)
+
+        raw_query = raw_case["query"]
+        if not isinstance(raw_query, str):
+            raise _evaluation_field_error(case_label, "query")
+        query = " ".join(raw_query.split())
+        if not query or len(query) > 1000:
+            raise _evaluation_field_error(case_label, "query")
+
+        mode = raw_case["mode"]
+        if not isinstance(mode, str) or mode not in _RECALL_EVAL_MODES:
+            raise _evaluation_field_error(case_label, "mode")
+        provider = raw_case["provider"]
+        if not isinstance(provider, str) or provider not in _RECALL_EVAL_PROVIDERS:
+            raise _evaluation_field_error(case_label, "provider")
+
+        raw_scope = raw_case.get("scope")
+        if raw_scope is not None and not isinstance(raw_scope, str):
+            raise _evaluation_field_error(case_label, "scope")
+        try:
+            scope = normalize_recall_scope(raw_scope)
+        except ConfigurationError as exc:
+            raise _evaluation_field_error(case_label, "scope") from exc
+        if scope is not None:
+            scope = _safe_evaluation_location(
+                config,
+                scope,
+                scope=None,
+                markdown=False,
+            )
+            if scope is None:
+                raise _evaluation_field_error(case_label, "scope")
+
+        top = raw_case.get("top")
+        if top is not None and (type(top) is not int or not 1 <= top <= 20):
+            raise _evaluation_field_error(case_label, "top")
+        max_tokens = raw_case.get("max_tokens")
+        if max_tokens is not None and (
+            type(max_tokens) is not int or not 64 <= max_tokens <= 4000
+        ):
+            raise _evaluation_field_error(case_label, "max_tokens")
+        allow_degraded = raw_case.get("allow_degraded", False)
+        if not isinstance(allow_degraded, bool):
+            raise _evaluation_field_error(case_label, "allow_degraded")
+
+        cases.append(
+            RecallEvalCase(
+                id=case_id,
+                query=query,
+                mode=mode,
+                provider=provider,
+                scope=scope,
+                top=top,
+                max_tokens=max_tokens,
+                expected_paths=_evaluation_path_array(
+                    raw_case,
+                    "expected_paths",
+                    case_label=case_label,
+                    config=config,
+                    scope=scope,
+                ),
+                any_of_paths=_evaluation_path_array(
+                    raw_case,
+                    "any_of_paths",
+                    case_label=case_label,
+                    config=config,
+                    scope=scope,
+                ),
+                forbidden_paths=_evaluation_path_array(
+                    raw_case,
+                    "forbidden_paths",
+                    case_label=case_label,
+                    config=config,
+                    scope=scope,
+                ),
+                allow_degraded=allow_degraded,
+            )
+        )
+    return cases
+
+
+def _evaluation_payload_fields(
+    config: dict[str, Any], case: RecallEvalCase, payload: Any
+) -> tuple[str, str, bool, int, int, list[str]] | None:
+    if not isinstance(payload, dict):
+        return None
+    provider = payload.get("provider")
+    mode = payload.get("mode")
+    degraded = payload.get("degraded")
+    result_tokens = payload.get("results_estimated_tokens")
+    result_token_limit = payload.get("result_token_limit")
+    filtered_stale = payload.get("filtered_stale")
+    results = payload.get("results")
+    if (
+        not isinstance(provider, str)
+        or provider not in _RECALL_EVAL_PROVIDERS
+        or not isinstance(mode, str)
+        or mode not in _RECALL_EVAL_MODES
+        or payload.get("requested_provider") != case.provider
+        or payload.get("requested_mode") != case.mode
+        or not isinstance(degraded, bool)
+        or type(result_tokens) is not int
+        or result_tokens < 0
+        or type(result_token_limit) is not int
+        or result_token_limit < 0
+        or type(filtered_stale) is not int
+        or filtered_stale < 0
+        or not isinstance(results, list)
+        or len(results) > MAX_RECALL_EVAL_RESULT_PATHS
+    ):
+        return None
+
+    paths: list[str] = []
+    for result in results:
+        if not isinstance(result, dict) or not isinstance(result.get("path"), str):
+            return None
+        path = _safe_evaluation_location(
+            config,
+            result["path"],
+            scope=case.scope,
+            markdown=True,
+        )
+        if path is None or path in paths:
+            return None
+        paths.append(path)
+    return provider, mode, degraded, result_tokens, filtered_stale, paths
+
+
+def evaluate_recall_cases(
+    config: dict[str, Any],
+    cases: list[RecallEvalCase],
+    *,
+    recall_runner: Any = recall_payload,
+) -> dict[str, Any]:
+    case_reports: list[dict[str, Any]] = []
+    elapsed_values: list[float] = []
+    token_values: list[int] = []
+    passed = 0
+
+    for case in cases:
+        started = time.perf_counter()
+        payload: Any = None
+        runtime_error = False
+        try:
+            payload = recall_runner(
+                config,
+                case.query,
+                case.mode,
+                case.top,
+                case.max_tokens,
+                False,
+                provider=case.provider,
+                scope=case.scope,
+            )
+        except Exception:
+            runtime_error = True
+        elapsed_ms = round(max(0.0, time.perf_counter() - started) * 1000, 3)
+
+        fields = None if runtime_error else _evaluation_payload_fields(config, case, payload)
+        reasons: list[str] = []
+        if fields is None:
+            provider = "unknown"
+            mode = "unknown"
+            degraded = False
+            result_tokens = 0
+            filtered_stale = 0
+            paths: list[str] = []
+            reasons.append("recall-error")
+        else:
+            provider, mode, degraded, result_tokens, filtered_stale, paths = fields
+            returned = set(paths)
+            if any(path not in returned for path in case.expected_paths):
+                reasons.append("missing-expected")
+            if case.any_of_paths and not any(
+                path in returned for path in case.any_of_paths
+            ):
+                reasons.append("missing-any-of")
+            if any(path in returned for path in case.forbidden_paths):
+                reasons.append("forbidden-returned")
+            if degraded and not case.allow_degraded:
+                reasons.append("unexpected-degradation")
+            if result_tokens > payload["result_token_limit"]:
+                reasons.append("token-limit-exceeded")
+
+        case_passed = not reasons
+        if case_passed:
+            passed += 1
+        elapsed_values.append(elapsed_ms)
+        token_values.append(result_tokens)
+        case_reports.append(
+            {
+                "id": case.id,
+                "passed": case_passed,
+                "reasons": reasons,
+                "provider": provider,
+                "requested_provider": case.provider,
+                "mode": mode,
+                "requested_mode": case.mode,
+                "degraded": degraded,
+                "elapsed_ms": elapsed_ms,
+                "result_tokens": result_tokens,
+                "filtered_stale": filtered_stale,
+                "paths": paths,
+            }
+        )
+
+    total = len(case_reports)
+    return {
+        "ok": passed == total,
+        "schema_version": 1,
+        "summary": {
+            "passed": passed,
+            "failed": total - passed,
+            "total": total,
+            "median_elapsed_ms": statistics.median(elapsed_values) if total else 0.0,
+            "median_result_tokens": statistics.median(token_values) if total else 0,
+        },
+        "cases": case_reports,
+    }
+
+
+def evaluate_recall(path: Path, as_json: bool) -> int:
+    try:
+        config, _ = load_config()
+    except ConfigurationError:
+        report: dict[str, Any] = {"ok": False, "error": "configuration-error"}
+        if as_json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            json_output(report)
+        return 2
+
+    try:
+        fixture = path if path.is_absolute() else (Path.cwd() / path).resolve()
+        cases = load_recall_eval_suite(fixture, config)
+    except (EvaluationError, OSError, RuntimeError, ValueError):
+        report = {"ok": False, "error": "fixture-error"}
+        if as_json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            json_output(report)
+        return 2
+
+    report = evaluate_recall_cases(config, cases)
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        json_output(report)
+    return 0 if report["ok"] else 1
+
+
 def recall(
     query: str,
     mode: str,
@@ -2132,6 +2556,12 @@ def parse_args() -> argparse.Namespace:
             "rejected notes"
         ),
     )
+    evaluate_parser = subparsers.add_parser(
+        "evaluate",
+        help="Run a read-only local recall-contract evaluation",
+    )
+    evaluate_parser.add_argument("fixture", type=Path)
+    evaluate_parser.add_argument("--json", action="store_true", dest="as_json")
     refresh_parser = subparsers.add_parser(
         "refresh-index", help="Refresh the optional QMD retrieval index"
     )
@@ -2167,6 +2597,8 @@ def main() -> int:
             provider=args.provider,
             scope=args.scope,
         )
+    if args.command == "evaluate":
+        return evaluate_recall(args.fixture, args.as_json)
     if args.command == "refresh-index":
         return qmd_refresh(args.embed)
     if args.command == "providers":
