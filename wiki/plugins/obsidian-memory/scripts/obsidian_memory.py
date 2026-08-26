@@ -527,7 +527,7 @@ def json_output(payload: dict[str, Any]) -> None:
 
 def run_git(vault: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["git", "-C", str(vault), *args],
+        ["git", "--literal-pathspecs", "-C", str(vault), *args],
         check=False,
         capture_output=True,
         text=True,
