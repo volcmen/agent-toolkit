@@ -1486,6 +1486,296 @@ Prior: old unrelated outcome.
             self.assertEqual(staged, "")
             self.assertIn(" .obsidian/workspace.json", status)
 
+    def test_configured_directory_cannot_commit_nested_private_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            public = vault / "projects" / "alpha" / "public.md"
+            private = vault / "projects" / "alpha" / ".private" / "secret.md"
+            public.write_text("before\n", encoding="utf-8")
+            private.parent.mkdir()
+            private.write_text("before\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", str(vault)], check=True)
+            subprocess.run(
+                ["git", "-C", str(vault), "config", "user.name", "Test"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(vault), "config", "user.email", "test@example.com"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(vault), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(vault), "commit", "-qm", "initial"], check=True)
+
+            public.write_text("public change\n", encoding="utf-8")
+            before = subprocess.run(
+                ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            private.write_text("private change\n", encoding="utf-8")
+            config_path = self.write_config(root, vault, commit_paths=["projects"])
+            env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "commit"],
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            committed = subprocess.run(
+                ["git", "-C", str(vault), "show", "--name-only", "--format="],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.splitlines()
+            staged = subprocess.run(
+                ["git", "-C", str(vault), "diff", "--cached", "--name-only"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            status = subprocess.run(
+                ["git", "-C", str(vault), "status", "--porcelain"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            self.assertEqual(result.returncode, 0, result.stderr)
+            after = subprocess.run(
+                ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            self.assertNotEqual(before, after, result.stdout + result.stderr)
+            self.assertEqual(committed, ["projects/alpha/public.md"])
+            self.assertEqual(staged, "")
+            self.assertIn("projects/alpha/.private/secret.md", status)
+
+    def test_configured_directories_commit_markdown_changes_deletions_and_inbox(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            changed = vault / "projects" / "alpha" / "changed.md"
+            deleted = vault / "projects" / "alpha" / "deleted.md"
+            non_markdown = vault / "projects" / "alpha" / "state.json"
+            inbox = vault / "inbox" / "capture.md"
+            for path in (changed, deleted, non_markdown, inbox):
+                path.write_text("before\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", str(vault)], check=True)
+            subprocess.run(
+                ["git", "-C", str(vault), "config", "user.name", "Test"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(vault), "config", "user.email", "test@example.com"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(vault), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(vault), "commit", "-qm", "initial"], check=True)
+
+            changed.write_text("changed\n", encoding="utf-8")
+            deleted.unlink()
+            before = subprocess.run(
+                ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            non_markdown.write_text("changed\n", encoding="utf-8")
+            inbox.write_text("captured\n", encoding="utf-8")
+            (vault / "projects" / "alpha" / "new.md").write_text(
+                "new\n", encoding="utf-8"
+            )
+            config_path = self.write_config(
+                root, vault, commit_paths=["projects", "inbox"]
+            )
+            env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "commit"],
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            committed = subprocess.run(
+                ["git", "-C", str(vault), "show", "--name-only", "--format="],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.splitlines()
+            staged = subprocess.run(
+                ["git", "-C", str(vault), "diff", "--cached", "--name-only"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            status = subprocess.run(
+                ["git", "-C", str(vault), "status", "--porcelain"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            self.assertEqual(result.returncode, 0, result.stderr)
+            after = subprocess.run(
+                ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            self.assertNotEqual(before, after, result.stdout + result.stderr)
+            self.assertEqual(
+                committed,
+                [
+                    "inbox/capture.md",
+                    "projects/alpha/changed.md",
+                    "projects/alpha/deleted.md",
+                    "projects/alpha/new.md",
+                ],
+            )
+            self.assertEqual(staged, "")
+            self.assertIn("projects/alpha/state.json", status)
+
+    def test_explicit_commit_rejects_markdown_directory_before_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            nested = vault / "wiki" / "bundle.md" / "nested.md"
+            nested.parent.mkdir()
+            nested.write_text("before\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", str(vault)], check=True)
+            subprocess.run(
+                ["git", "-C", str(vault), "config", "user.name", "Test"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(vault), "config", "user.email", "test@example.com"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(vault), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(vault), "commit", "-qm", "initial"], check=True)
+
+            nested.write_text("changed\n", encoding="utf-8")
+            config_path = self.write_config(root, vault, commit_paths=["wiki"])
+            before = subprocess.run(
+                ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "commit",
+                    "--path",
+                    "wiki/bundle.md",
+                ],
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            after = subprocess.run(
+                ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            staged = subprocess.run(
+                ["git", "-C", str(vault), "diff", "--cached", "--name-only"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("file", result.stderr.casefold())
+            self.assertEqual(before, after)
+            self.assertEqual(staged, "")
+
+    def test_commit_help_describes_configured_and_exact_path_modes(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--help"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("configured", result.stdout)
+        self.assertIn("repeat --path", result.stdout)
+
+    def test_commit_without_path_uses_configured_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            configured = vault / "wiki" / "configured.md"
+            unconfigured = vault / "daily" / "unconfigured.md"
+            configured.write_text("before\n", encoding="utf-8")
+            unconfigured.write_text("before\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", str(vault)], check=True)
+            subprocess.run(
+                ["git", "-C", str(vault), "config", "user.name", "Test"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(vault), "config", "user.email", "test@example.com"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(vault), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(vault), "commit", "-qm", "initial"], check=True)
+
+            configured.write_text("configured change\n", encoding="utf-8")
+            before = subprocess.run(
+                ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            unconfigured.write_text("unconfigured change\n", encoding="utf-8")
+            config_path = self.write_config(
+                root, vault, commit_paths=["wiki/configured.md"]
+            )
+            env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "commit"],
+                text=True,
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+
+            committed = subprocess.run(
+                ["git", "-C", str(vault), "show", "--name-only", "--format="],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.splitlines()
+            status = subprocess.run(
+                ["git", "-C", str(vault), "status", "--porcelain"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            self.assertEqual(result.returncode, 0, result.stderr)
+            after = subprocess.run(
+                ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            self.assertNotEqual(before, after)
+            self.assertEqual(committed, ["wiki/configured.md"])
+            self.assertIn("daily/unconfigured.md", status)
+
 
 if __name__ == "__main__":
     unittest.main()

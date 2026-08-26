@@ -44,9 +44,9 @@ inspect the two `obsidian-memory` commands, and trust them. Trust is tied to the
 hook definition, so changed hooks require a new review.
 
 Auto-commit is disabled by default for new installations. Pass `--auto-commit`
-to preserve the current personal behavior. When enabled, only `wiki/`,
-`projects/`, `daily/`, and `inbox/` are committed; `.obsidian/`, `.raw/`, and
-unrelated paths remain untouched.
+to preserve the current personal behavior. When enabled, changed Markdown notes
+under `wiki/`, `projects/`, `daily/`, and `inbox/` are committed; dot-private,
+non-Markdown, and unrelated paths remain untouched.
 
 For an explicit, one-off commit of exactly selected Markdown notes, repeat
 `--path`; the Stop hook remains driven only by configured commit paths:
