@@ -69,6 +69,52 @@ an independently verified source, or a passing evaluation can promote it.
 Never persist secrets, credentials, private keys, or raw sensitive
 transcripts. Keep immutable sources under `.raw/`; never edit that directory.
 
+## Governance audit
+
+Run the bounded read-only audit manually from the plugin project's `wiki/`
+root:
+
+```bash
+python3 plugins/obsidian-memory/scripts/obsidian_memory.py audit --json
+```
+
+The action-driving matrix is conditional on an explicit `memory_class`:
+
+| Memory class | Required for a current note | Optional but validated when present |
+|---|---|---|
+| `fact` | Recognized status and non-empty origin in `source`; current facts also require `verified_by`. | `confidence`, `observed`, validity bounds, supersession |
+| `decision` | Recognized status; accepted/current decisions require `verified_by` or a non-empty `source`. | `confidence`, validity bounds, supersession |
+| `heuristic` | Recognized status and evidence origin in `source`; current/verified heuristics also require `verified_by`. | `confidence`, validity bounds, supersession |
+
+Recognized statuses are `candidate`, `proposed`, `verified`, `accepted`,
+`active`, `superseded`, `deprecated`, and `rejected`; the current group is
+`verified`, `accepted`, and `active`. Candidate facts and heuristics may remain
+unverified. `source` accepts a non-empty scalar or list. `confidence`, when
+present, is `low`, `medium`, or `high`; declared `observed`, `valid_from`, and
+`valid_until` values are exact ISO dates, and the end cannot precede the start.
+The implementation validates `observed` on any action-driving class when it is
+present. Declared `superseded_by` routes use the same bounded safe resolver as
+recall.
+
+The audit does not impose this matrix on ordinary indexes, logs, daily notes,
+tasks, episodes, canvases, drawings, or legacy narrative pages. It also checks
+safe recall and commit roots, supersession routing, QMD collection mappings,
+installed QMD version/health, and configured versus active provider policy.
+`auto` QMD health failures are warnings when native fallback remains available;
+strict `qmd` failures are errors.
+
+Reports contain counts plus at most 200 deterministic, fixed-code findings.
+They use vault-relative paths and never note bodies, snippets, frontmatter
+values, raw provider output, or machine paths. Human output escapes controls
+and caps each displayed path at 180 characters; JSON retains the exact
+vault-relative path within the finding bound.
+
+Exit `0` means no errors (warnings may remain), exit `1` means findings contain
+errors, and exit `2` means configuration prevented the audit. The command is
+manual and absent from `SessionStart` and `Stop` hooks. It never auto-fixes,
+renames, deletes, refreshes, embeds, or commits. Treat each finding as a prompt
+for reviewed remediation, not authorization to change the vault.
+
 ## Experience promotion loop
 
 Use this loop for self-improvement:

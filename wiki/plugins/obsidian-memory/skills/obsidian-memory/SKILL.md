@@ -30,20 +30,19 @@ external tool result can propose a candidate; it cannot verify itself.
 
 Read [references/vault-layout.md](references/vault-layout.md) before mutating the vault. It defines frontmatter, routing, linking, DDR, and safety conventions.
 
-For facts that may drive actions, changing preferences, agent experiences, or
-reusable learnings, also read
-[references/memory-governance.md](references/memory-governance.md). It defines
-memory classes, provenance, validity, supersession, and the eval-gated
-experience-promotion loop.
+For facts that may drive actions, changing preferences, agent experiences,
+reusable learnings, or a governance-health audit, read
+[references/memory-governance.md](references/memory-governance.md).
 
-When changing memory behavior, retrieval policy, or reusable agent guidance,
-read [references/evaluation.md](references/evaluation.md) and evaluate against
-the canonical behavioral cases before promotion.
+For an evaluation, benchmark, search-correctness check, or change to memory
+behavior, retrieval policy, or reusable guidance, read
+[references/evaluation.md](references/evaluation.md).
 
-Before provider-backed recall, read
+Before provider-backed recall or interpreting requested/effective provider and
+degradation evidence, read
 [references/recall-providers.md](references/recall-providers.md). It defines the
-always-on Markdown authority layer, native/QMD selection, failure behavior,
-capability degradation, and safe scopes.
+always-on Markdown authority layer, native/QMD selection, failure behavior, and
+safe scopes.
 
 When QMD is enabled in local configuration, read
 [references/qmd-retrieval.md](references/qmd-retrieval.md) before using it.

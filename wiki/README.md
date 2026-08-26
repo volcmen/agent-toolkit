@@ -69,10 +69,12 @@ python3 scripts/check.py
 
 It checks Python syntax, manifests, marketplace metadata, the shared hook
 contract, safe configuration defaults, memory-governance invariants, the
-behavioral evaluation *schema*, relative documentation links, and the unit suite
-using only the Python standard library. CI runs the same command. The behavioral
-eval cases in `plugins/obsidian-memory/evals/memory-evals.json` are validated for
-shape, never executed; running them is a manual review activity described in
+behavioral and retrieval-contract evaluation schemas, relative documentation
+links, and the unit suite using only the Python standard library. CI runs the
+same command. The checked recall-eval example is validated, not executed. The
+behavioral cases in `plugins/obsidian-memory/evals/memory-evals.json` are also
+validated for shape, never executed; running them is a manual review activity
+described in
 [the evaluation reference](plugins/obsidian-memory/skills/obsidian-memory/references/evaluation.md).
 
 The plugin deliberately keeps Obsidian Markdown as the always-on, auditable
@@ -121,6 +123,36 @@ Inspect the canonical store, provider selection, capabilities, and health:
 ```bash
 python3 plugins/obsidian-memory/scripts/obsidian_memory.py providers --json
 ```
+
+Run retrieval-contract evaluation and governance audit manually from the
+`wiki/` project root:
+
+```bash
+python3 plugins/obsidian-memory/scripts/obsidian_memory.py \
+  evaluate path/to/recall-evals.json --json
+python3 plugins/obsidian-memory/scripts/obsidian_memory.py audit --json
+```
+
+`evaluate` returns 0 when every case passes, 1 when a valid suite has failed
+cases, and 2 when the fixture or configuration is invalid. Its report contains
+case IDs, requested and effective provider/mode, degradation, elapsed time,
+result-token and stale-filter counts, and vault-relative result paths. It never
+emits fixture queries, note bodies or snippets, tracebacks, or resolved fixture
+and vault paths.
+
+`audit` returns 0 when no errors are present, 1 when findings include errors,
+and 2 when configuration prevents the audit. Its bounded findings use fixed
+codes and vault-relative paths, never note bodies or frontmatter values. Human
+output escapes controls and truncates each displayed path to 180 characters;
+JSON preserves the vault-relative path inside the 200-finding report bound.
+
+Both commands are read-only, manual operations and are absent from the
+`SessionStart` and `Stop` hooks. They never fix or rename notes, delete history,
+refresh or embed QMD, or commit changes. The framework-neutral
+`evals/memory-evals.json` remains the separate agent-behavior suite and is not
+automatically graded by `evaluate`. Use QMD's `qmd bench` for raw engine
+precision, recall, MRR, and F1; the wrapper evaluator instead checks governed
+paths, provider fallback, scope, and token behavior.
 
 Enable QMD in the local configuration after creating safe collections:
 

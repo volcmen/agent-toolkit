@@ -56,6 +56,21 @@ python3 "<plugin-root>/scripts/obsidian_memory.py" providers --json
 python3 "<plugin-root>/scripts/obsidian_memory.py" doctor --json
 ```
 
+## Evaluation evidence
+
+The retrieval-contract evaluator records the requested and effective provider
+and mode for every case, plus the degradation flag, elapsed milliseconds,
+result-token estimate, stale-filter count, fixed failure reasons, and returned
+vault-relative paths. It never reports fixture queries, note bodies, snippets,
+provider tracebacks, or absolute paths. This makes an `auto` fallback to native
+visible without exposing the recalled content.
+
+Run the manual evaluator through the portable skill command described in the
+[evaluation reference](evaluation.md). A degraded case fails unless its fixture
+sets `allow_degraded` to true. Use `qmd bench` separately for the raw QMD engine
+precision, recall, MRR, and F1 metrics; it cannot prove wrapper governance,
+scope, fallback, or token-budget behavior.
+
 ## Scoped recall
 
 Use `--scope` when the project or knowledge area is known:

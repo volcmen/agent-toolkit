@@ -32,6 +32,29 @@ unconditional source of instructions.
 8. `Stop` emits valid hook JSON. It commits only configured vault paths when
    the user explicitly enabled `auto_commit`; the default is off.
 
+## Manual evaluation and audit
+
+The manual `evaluate FIXTURE [--json]` command passes every version-1 case
+through the same provider selection, fallback, governance, scope, and token
+boundary as normal recall. It compares only safe vault-relative Markdown paths
+and emits bounded case IDs, requested/effective provider and mode, degradation,
+timing, token/stale counts, fixed failure reasons, and result paths. Queries,
+note bodies, snippets, tracebacks, and resolved fixture or vault paths do not
+enter its report.
+
+The manual `audit [--json]` command walks configured safe recall roots without
+following symlinks. It checks explicitly action-driving metadata, declared
+supersession routes, recall/commit/QMD root safety, and configured-versus-active
+provider health. Reports contain fixed, value-free findings and vault-relative
+paths; findings are capped at 200, while human path rendering escapes control
+characters and is capped at 180 characters.
+
+These commands are read-only observers of the canonical and derived layers.
+They never auto-fix, rename, delete, refresh, embed, or commit, and neither is
+declared in the `SessionStart` or `Stop` hook. QMD `bench` remains a separate
+raw-engine metric tool, while `evals/memory-evals.json` remains a separate
+agent-behavior specification.
+
 ## Trust boundaries
 
 - The repository contains plugin code and schemas, never the local vault path.
@@ -88,6 +111,8 @@ unconditional source of instructions.
 - `plugins/obsidian-memory/evals/memory-evals.json`: framework-neutral
   behavioral regression cases for recall, conflict, action grounding,
   security, selectivity, forgetting, and experiential learning.
+- `plugins/obsidian-memory/evals/recall-evals.example.json`: versioned safe
+  example for the executable retrieval-contract evaluator.
 - `docs/research/2026-08-01-agent-memory-systems.md`: source review and the
   adopt/defer/reject rationale behind progressive disclosure, provider-backed
   recall, and memory governance.

@@ -9,7 +9,7 @@ import json
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -46,6 +46,30 @@ def safe_indexed_path(root: Any) -> bool:
         return False
     folded = [part.casefold() for part in parts]
     return not any(part in {".obsidian", ".raw"} for part in folded) and folded[0] != "inbox"
+
+
+def safe_recall_eval_path(value: Any, *, markdown: bool) -> bool:
+    """Validate the portable lexical boundary used by recall-eval fixtures."""
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or "\\" in value
+        or "\x00" in value
+    ):
+        return False
+    relative = PurePosixPath(value)
+    parts = relative.parts
+    if (
+        relative.is_absolute()
+        or not parts
+        or ".." in parts
+        or relative.as_posix() != value
+        or any(part.casefold().startswith(".") for part in parts)
+        or parts[0].casefold() == "inbox"
+    ):
+        return False
+    return not markdown or relative.suffix.casefold() == ".md"
 
 
 def validate_python() -> None:
@@ -246,6 +270,135 @@ def validate_memory_policy() -> None:
         <= categories,
         "memory eval suite is missing a required category",
     )
+
+    recall_evals = load_json("plugins/obsidian-memory/evals/recall-evals.example.json")
+    require(
+        isinstance(recall_evals, dict)
+        and set(recall_evals) == {"schema_version", "cases"},
+        "recall eval example must contain exactly schema_version and cases",
+    )
+    require(
+        type(recall_evals["schema_version"]) is int
+        and recall_evals["schema_version"] == 1,
+        "unsupported recall eval schema",
+    )
+    recall_cases = recall_evals["cases"]
+    require(
+        isinstance(recall_cases, list) and 1 <= len(recall_cases) <= 200,
+        "recall eval example must contain 1 to 200 cases",
+    )
+    required_case_keys = {
+        "id",
+        "query",
+        "mode",
+        "provider",
+        "expected_paths",
+        "any_of_paths",
+        "forbidden_paths",
+    }
+    allowed_case_keys = required_case_keys | {
+        "scope",
+        "top",
+        "max_tokens",
+        "allow_degraded",
+    }
+    recall_ids: set[str] = set()
+    configured_roots = load_json("plugins/obsidian-memory/config.example.json").get(
+        "recall_roots", []
+    )
+    for index, case in enumerate(recall_cases, start=1):
+        label = f"recall eval case {index}"
+        require(isinstance(case, dict), f"{label} must be an object")
+        require(
+            required_case_keys <= set(case) <= allowed_case_keys,
+            f"{label} has missing or unknown keys",
+        )
+        raw_case_id = case.get("id")
+        case_id = raw_case_id.strip() if isinstance(raw_case_id, str) else ""
+        require(
+            bool(case_id)
+            and len(case_id) <= 120
+            and not any(
+                ord(character) < 32 or ord(character) == 127
+                for character in case_id
+            ),
+            f"{label} id must be a bounded non-empty string",
+        )
+        require(case_id not in recall_ids, "recall eval ids must be unique")
+        recall_ids.add(case_id)
+        label = case_id
+
+        query = case.get("query")
+        require(
+            isinstance(query, str)
+            and bool(query.split())
+            and len(" ".join(query.split())) <= 1000,
+            f"{label}: query must be a non-empty string of at most 1000 characters",
+        )
+        mode = case.get("mode")
+        require(
+            isinstance(mode, str) and mode in {"fast", "semantic", "hybrid"},
+            f"{label}: invalid mode",
+        )
+        provider = case.get("provider")
+        require(
+            isinstance(provider, str) and provider in {"auto", "native", "qmd"},
+            f"{label}: invalid provider",
+        )
+
+        scope = case.get("scope")
+        if scope is not None:
+            require(
+                safe_recall_eval_path(scope, markdown=False),
+                f"{label}: scope must be a safe vault-relative path",
+            )
+            require(
+                any(scope == root or scope.startswith(f"{root}/") for root in configured_roots),
+                f"{label}: scope must be inside a configured recall root",
+            )
+        top = case.get("top")
+        require(
+            top is None or (type(top) is int and 1 <= top <= 20),
+            f"{label}: top must be an integer from 1 to 20",
+        )
+        max_tokens = case.get("max_tokens")
+        require(
+            max_tokens is None or (type(max_tokens) is int and 64 <= max_tokens <= 4000),
+            f"{label}: max_tokens must be an integer from 64 to 4000",
+        )
+        require(
+            isinstance(case.get("allow_degraded", False), bool),
+            f"{label}: allow_degraded must be boolean",
+        )
+        for field in ("expected_paths", "any_of_paths", "forbidden_paths"):
+            paths = case.get(field)
+            require(isinstance(paths, list), f"{label}: {field} must be an array")
+            require(
+                all(safe_recall_eval_path(path, markdown=True) for path in paths),
+                f"{label}: {field} must contain safe vault-relative Markdown paths",
+            )
+            require(
+                len(paths) == len(set(paths)),
+                f"{label}: {field} paths must be unique",
+            )
+            require(
+                all(
+                    any(path == root or path.startswith(f"{root}/") for root in configured_roots)
+                    and (scope is None or path == scope or path.startswith(f"{scope}/"))
+                    for path in paths
+                ),
+                f"{label}: {field} paths must stay inside recall roots and scope",
+            )
+
+    required_documentation = {
+        evaluation: ("evaluate", "retrieval contract", "does not grade model answers"),
+        governance: ("audit", "action-driving", "never auto-fixes"),
+        providers: ("effective provider", "degradation", "note bodies"),
+    }
+    for document, terms in required_documentation.items():
+        text = document.read_text(encoding="utf-8")
+        for term in terms:
+            require(term in text, f"{document.name}: missing documented contract: {term}")
 
 
 def validate_documentation_links() -> None:
