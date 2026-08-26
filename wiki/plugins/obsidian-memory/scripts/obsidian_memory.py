@@ -552,6 +552,7 @@ def safe_commit_paths(
 
     override_paths = raw_path_override is not None
     allowed: list[str] = []
+    allowed_roots: list[Path] = []
     for value in raw_paths:
         if not isinstance(value, str):
             continue
@@ -579,7 +580,10 @@ def safe_commit_paths(
             return False, f"private commit path in {config_file}: {value!r}"
         if override_paths and not resolved_relative.as_posix().endswith(".md"):
             return False, f"explicit commit path must resolve to Markdown: {value!r}"
+        if override_paths and candidate.exists() and not candidate.is_file():
+            return False, f"explicit commit path must be a file: {value!r}"
         allowed.append(normalized)
+        allowed_roots.append(relative)
     if not allowed:
         return True, "no usable commit paths are configured"
 
@@ -603,12 +607,62 @@ def safe_commit_paths(
 
     try:
         dirty_paths: list[str] = []
-        for relative in allowed:
-            status = run_git(vault, ["status", "--porcelain", "--", relative])
+        if override_paths:
+            for relative in allowed:
+                status = run_git(vault, ["status", "--porcelain", "--", relative])
+                if status.returncode != 0:
+                    return False, clipped_line(status.stderr or "git status failed", 500)
+                if status.stdout.strip():
+                    dirty_paths.append(relative)
+        else:
+            status = run_git(
+                vault,
+                ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            )
             if status.returncode != 0:
                 return False, clipped_line(status.stderr or "git status failed", 500)
-            if status.stdout.strip():
-                dirty_paths.append(relative)
+            entries = status.stdout.split("\0")
+            changed_paths: list[str] = []
+            index = 0
+            while index < len(entries):
+                entry = entries[index]
+                if not entry:
+                    index += 1
+                    continue
+                if len(entry) < 4 or entry[2] != " ":
+                    return False, "git status returned an unexpected path record"
+                code = entry[:2]
+                changed_paths.append(entry[3:])
+                if "R" in code or "C" in code:
+                    index += 1
+                    if index >= len(entries) or not entries[index]:
+                        return False, "git status returned an incomplete rename record"
+                    changed_paths.append(entries[index])
+                index += 1
+
+            selected: set[str] = set()
+            for value in changed_paths:
+                relative = Path(value)
+                if not any(
+                    relative == root or root in relative.parents
+                    for root in allowed_roots
+                ):
+                    continue
+                if not value.endswith(".md") or has_private_vault_segment(relative.parts):
+                    continue
+                candidate = (vault / relative).resolve()
+                try:
+                    resolved_relative = candidate.relative_to(vault)
+                except ValueError:
+                    continue
+                if (
+                    has_private_vault_segment(resolved_relative.parts)
+                    or not resolved_relative.as_posix().endswith(".md")
+                    or (candidate.exists() and not candidate.is_file())
+                ):
+                    continue
+                selected.add(relative.as_posix())
+            dirty_paths = sorted(selected)
         if not dirty_paths:
             return True, "vault is clean"
 
@@ -1782,7 +1836,8 @@ def parse_args() -> argparse.Namespace:
     subparsers.add_parser("session-start", help="Emit bounded context for a SessionStart hook")
     subparsers.add_parser("stop", help="Run the non-blocking Stop hook")
     commit_parser = subparsers.add_parser(
-        "commit", help="Commit configured vault paths explicitly"
+        "commit",
+        help="Commit configured Markdown paths, or repeat --path for exact files",
     )
     commit_parser.add_argument(
         "--path",
