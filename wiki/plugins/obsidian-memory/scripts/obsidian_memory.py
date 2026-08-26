@@ -159,6 +159,7 @@ def load_config() -> tuple[dict[str, Any], Path]:
         raise ConfigurationError(
             f"{path} field 'commit_paths' must be an array of non-empty strings"
         )
+    config["_commit_paths_from_defaults"] = "commit_paths" not in raw
     prefix = config.get("commit_message_prefix")
     if not isinstance(prefix, str) or not prefix.strip():
         raise ConfigurationError(
@@ -215,6 +216,9 @@ def load_config() -> tuple[dict[str, Any], Path]:
         raise ConfigurationError(
             f"{path} field 'qmd_collection_roots' must be an object"
         )
+    config["_qmd_mappings_from_defaults"] = (
+        "qmd_collections" not in raw and "qmd_collection_roots" not in raw
+    )
     normalized_roots: dict[str, str] = {}
     for collection, root in qmd_collection_roots.items():
         if (
@@ -833,9 +837,23 @@ def qmd_status(config: dict[str, Any]) -> dict[str, Any]:
         "available": executable is not None,
         "modes": ["fast", "semantic", "hybrid"],
         "collections": config["qmd_collections"],
+        "version": "",
     }
     if not enabled or executable is None:
         return result
+    try:
+        version = subprocess.run(
+            [executable, "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        version_output = version.stdout or version.stderr
+        if isinstance(version_output, str):
+            result["version"] = clipped_line(version_output, 120)
+    except (OSError, subprocess.SubprocessError):
+        pass
     try:
         status = subprocess.run(
             [executable, "status"],
@@ -845,7 +863,10 @@ def qmd_status(config: dict[str, Any]) -> dict[str, Any]:
             timeout=20,
         )
         result["healthy"] = status.returncode == 0
-        result["status"] = clipped_line(status.stdout or status.stderr, 1000)
+        status_output = status.stdout or status.stderr
+        result["status"] = clipped_line(
+            status_output if isinstance(status_output, str) else "", 1000
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         result["healthy"] = False
         result["error"] = str(exc)
@@ -1055,6 +1076,18 @@ _AUDIT_DATE_FIELDS = {
         "valid_until must be an exact ISO date",
     ),
 }
+_AUDIT_SUPERSESSION_CODES = {
+    "missing": "supersession-missing",
+    "missing-reference": "supersession-missing",
+    "ambiguous": "supersession-ambiguous",
+    "cycle": "supersession-cycle",
+    "hop-limit": "supersession-hop-limit",
+    "unsafe": "supersession-unsafe",
+    "out-of-root": "supersession-out-of-root",
+    "non-markdown": "supersession-non-markdown",
+    "future": "supersession-future",
+    "expired": "supersession-expired",
+}
 
 
 def _audit_value_present(value: Any) -> bool:
@@ -1219,6 +1252,304 @@ def _validated_audit_roots(config: dict[str, Any]) -> list[str]:
     return sorted(normalized)
 
 
+def _audit_commit_root_findings(config: dict[str, Any]) -> list[AuditFinding]:
+    """Validate configured commit roots without invoking Git or changing files."""
+    if config.get("_commit_paths_from_defaults") is True:
+        return []
+    vault = config.get("vault")
+    raw_paths = config.get("commit_paths")
+    if not isinstance(vault, Path) or not isinstance(raw_paths, list):
+        raise ConfigurationError("audit commit roots are invalid")
+
+    findings: list[AuditFinding] = []
+
+    def finding(index: int, code: str, detail: str) -> AuditFinding:
+        return AuditFinding(
+            "error",
+            code,
+            "configuration",
+            f"commit_paths[{index}]",
+            detail,
+        )
+
+    for index, value in enumerate(raw_paths):
+        if not isinstance(value, str) or not value.strip():
+            findings.append(
+                finding(
+                    index,
+                    "commit-root-unsafe",
+                    "commit root is not a usable path",
+                )
+            )
+            continue
+        normalized = Path(value).as_posix()
+        relative = Path(normalized)
+        if relative.is_absolute():
+            findings.append(
+                finding(
+                    index,
+                    "commit-root-absolute",
+                    "commit root must be vault-relative",
+                )
+            )
+            continue
+        if ".." in relative.parts:
+            findings.append(
+                finding(
+                    index,
+                    "commit-root-parent",
+                    "commit root cannot contain a parent segment",
+                )
+            )
+            continue
+        if not relative.parts:
+            findings.append(
+                finding(
+                    index,
+                    "commit-root-unsafe",
+                    "commit root is not a usable path",
+                )
+            )
+            continue
+        if has_private_vault_segment(relative.parts):
+            findings.append(
+                finding(
+                    index,
+                    "commit-root-private",
+                    "commit root cannot contain a private path segment",
+                )
+            )
+            continue
+
+        candidate = vault / relative
+        cursor = vault
+        routes_through_symlink = False
+        try:
+            for part in relative.parts:
+                cursor /= part
+                if cursor.is_symlink():
+                    routes_through_symlink = True
+                    break
+            resolved = candidate.resolve()
+        except (OSError, RuntimeError, ValueError):
+            findings.append(
+                finding(
+                    index,
+                    "commit-root-unsafe",
+                    "commit root could not be inspected safely",
+                )
+            )
+            continue
+        try:
+            resolved_relative = resolved.relative_to(vault)
+        except ValueError:
+            findings.append(
+                finding(
+                    index,
+                    "commit-root-escape",
+                    "commit root resolves outside the vault",
+                )
+            )
+            continue
+        if has_private_vault_segment(resolved_relative.parts):
+            findings.append(
+                finding(
+                    index,
+                    "commit-root-private",
+                    "commit root resolves through a private path segment",
+                )
+            )
+            continue
+        if routes_through_symlink or candidate.absolute() != resolved:
+            findings.append(
+                finding(
+                    index,
+                    "commit-root-symlink",
+                    "commit root is or traverses a symlink",
+                )
+            )
+            continue
+        try:
+            exists = candidate.exists()
+            is_directory = candidate.is_dir() if exists else False
+            is_file = candidate.is_file() if exists else False
+        except OSError:
+            findings.append(
+                finding(
+                    index,
+                    "commit-root-unsafe",
+                    "commit root could not be inspected safely",
+                )
+            )
+            continue
+        if not exists:
+            findings.append(
+                finding(index, "commit-root-missing", "commit root does not exist")
+            )
+        elif not is_directory and not (
+            is_file and is_markdown_path(resolved_relative)
+        ):
+            findings.append(
+                finding(
+                    index,
+                    "commit-root-shape",
+                    "commit root must be a directory or Markdown file",
+                )
+            )
+    return findings
+
+
+def _audit_qmd_root_findings(config: dict[str, Any]) -> list[AuditFinding]:
+    """Validate QMD mappings and inspect enabled collection roots safely."""
+    enabled = bool(config.get("qmd_enabled"))
+    if not enabled and config.get("_qmd_mappings_from_defaults") is True:
+        return []
+    vault = config.get("vault")
+    collections = config.get("qmd_collections")
+    mappings = config.get("qmd_collection_roots")
+    roots = config.get("recall_roots")
+    if (
+        not isinstance(vault, Path)
+        or not isinstance(collections, list)
+        or not isinstance(mappings, dict)
+        or not isinstance(roots, list)
+    ):
+        raise ConfigurationError("audit QMD roots are invalid")
+
+    findings: list[AuditFinding] = []
+
+    def finding(collection: str, code: str, detail: str) -> AuditFinding:
+        return AuditFinding(
+            "error",
+            code,
+            "configuration",
+            f"qmd_collection_roots[{collection}]",
+            detail,
+        )
+
+    for collection in collections:
+        root_value = mappings.get(collection)
+        if not isinstance(collection, str) or not isinstance(root_value, str):
+            raise ConfigurationError("audit QMD roots are invalid")
+        relative = PurePosixPath(root_value)
+        if not path_within_roots(relative.as_posix(), roots):
+            findings.append(
+                finding(
+                    collection,
+                    "qmd-root-outside-recall",
+                    "QMD collection root is outside configured recall roots",
+                )
+            )
+            continue
+        if not enabled:
+            continue
+
+        candidate = vault.joinpath(*relative.parts)
+        cursor = vault
+        routes_through_symlink = False
+        try:
+            for part in relative.parts:
+                cursor /= part
+                if cursor.is_symlink():
+                    routes_through_symlink = True
+                    break
+            if routes_through_symlink:
+                findings.append(
+                    finding(
+                        collection,
+                        "qmd-root-symlink",
+                        "QMD collection root is or traverses a symlink",
+                    )
+                )
+                continue
+            resolved = candidate.resolve()
+            resolved.relative_to(vault)
+        except (OSError, RuntimeError, ValueError):
+            findings.append(
+                finding(
+                    collection,
+                    "qmd-root-unsafe",
+                    "QMD collection root could not be inspected safely",
+                )
+            )
+            continue
+        if candidate.absolute() != resolved:
+            findings.append(
+                finding(
+                    collection,
+                    "qmd-root-symlink",
+                    "QMD collection root is or traverses a symlink",
+                )
+            )
+            continue
+        try:
+            is_directory = candidate.is_dir()
+        except OSError:
+            is_directory = False
+        if not is_directory:
+            findings.append(
+                finding(
+                    collection,
+                    "qmd-root-missing",
+                    "QMD collection root is missing or is not a directory",
+                )
+            )
+    return findings
+
+
+def _audit_provider_summary(
+    config: dict[str, Any],
+) -> tuple[dict[str, Any], list[AuditFinding]]:
+    """Return the safe audit projection of provider health and its findings."""
+    status = recall_provider_status(config)
+    raw_qmd = status["providers"]["qmd"]
+    raw_version = raw_qmd.get("version", "")
+    version = (
+        clipped_line(sanitize_reference_text(raw_version), 120)
+        if isinstance(raw_version, str)
+        else ""
+    )
+    qmd = {
+        "enabled": bool(raw_qmd.get("enabled")),
+        "available": bool(raw_qmd.get("available")),
+        "healthy": bool(raw_qmd.get("healthy")),
+        "version": version,
+        "collections": list(config["qmd_collections"]),
+    }
+    summary = {
+        "canonical": status["canonical"]["name"],
+        "configured": status["configured"],
+        "active": status["active"],
+        "qmd": qmd,
+    }
+
+    findings: list[AuditFinding] = []
+    configured = status["configured"]
+    if configured == "qmd" or (configured == "auto" and qmd["enabled"]):
+        severity = "error" if configured == "qmd" else "warning"
+        if not qmd["enabled"] or not qmd["available"]:
+            findings.append(
+                AuditFinding(
+                    severity,
+                    "qmd-unavailable",
+                    "configuration",
+                    "recall_provider",
+                    "configured QMD provider is unavailable",
+                )
+            )
+        elif not qmd["healthy"]:
+            findings.append(
+                AuditFinding(
+                    severity,
+                    "qmd-unhealthy",
+                    "configuration",
+                    "recall_provider",
+                    "configured QMD provider health check failed",
+                )
+            )
+    return summary, findings
+
+
 def _audit_scan_events(
     config: dict[str, Any], roots: list[str]
 ) -> list[tuple[str, str, Path, Path | None]]:
@@ -1228,6 +1559,7 @@ def _audit_scan_events(
         raise ConfigurationError("audit vault is invalid")
 
     root_symlinks: dict[str, Path] = {}
+    missing_roots: dict[str, Path] = {}
     file_symlinks: dict[str, Path] = {}
     files: dict[Path, tuple[str, Path]] = {}
     for root_relative in roots:
@@ -1244,6 +1576,13 @@ def _audit_scan_events(
             root_symlinks.setdefault(root_relative, root)
             continue
         try:
+            root_is_directory = root.is_dir()
+        except OSError:
+            root_is_directory = False
+        if not root_is_directory:
+            missing_roots.setdefault(root_relative, root)
+            continue
+        try:
             resolved_root = root.resolve()
         except (OSError, RuntimeError, ValueError):
             continue
@@ -1255,8 +1594,7 @@ def _audit_scan_events(
         except ValueError:
             continue
         if (
-            not root.is_dir()
-            or not safe_recall_parts(resolved_relative.parts)
+            not safe_recall_parts(resolved_relative.parts)
             or not path_within_roots(resolved_relative.as_posix(), roots)
         ):
             continue
@@ -1317,6 +1655,10 @@ def _audit_scan_events(
         for relative, path in root_symlinks.items()
     )
     events.extend(
+        (relative, "missing-root", path, None)
+        for relative, path in missing_roots.items()
+    )
+    events.extend(
         (relative, "symlink-file", path, None)
         for relative, path in file_symlinks.items()
     )
@@ -1375,6 +1717,17 @@ def audit_vault(config: dict[str, Any]) -> dict[str, Any]:
                 )
             )
             continue
+        if kind == "missing-root":
+            record(
+                AuditFinding(
+                    "error",
+                    "missing-recall-root",
+                    vault_relative,
+                    None,
+                    "configured recall root is missing or is not a directory",
+                )
+            )
+            continue
 
         try:
             if path.is_symlink() or path.resolve() != expected_resolved:
@@ -1394,6 +1747,45 @@ def audit_vault(config: dict[str, Any]) -> dict[str, Any]:
         metadata = parse_frontmatter_document(path)
         for finding in governance_findings(path, vault_relative, metadata):
             record(finding)
+        recall_metadata = parse_frontmatter(path)
+        successor = recall_metadata.get("superseded_by")
+        if isinstance(successor, str) and successor.strip():
+            route = follow_supersession_chain(
+                config,
+                source_path=path,
+                source_relative=vault_relative,
+                metadata=recall_metadata,
+                allowed_roots=roots,
+            )
+            route_code = _AUDIT_SUPERSESSION_CODES.get(route.issue or "")
+            if route_code:
+                record(
+                    AuditFinding(
+                        "error",
+                        route_code,
+                        vault_relative,
+                        "superseded_by",
+                        "declared successor did not route to a current safe note",
+                    )
+                )
+        elif memory_state(recall_metadata) == "stale":
+            record(
+                AuditFinding(
+                    "error",
+                    "stale-without-successor",
+                    vault_relative,
+                    "superseded_by",
+                    "stale memory does not declare a non-empty successor",
+                )
+            )
+
+    for finding in _audit_commit_root_findings(config):
+        record(finding)
+    for finding in _audit_qmd_root_findings(config):
+        record(finding)
+    provider, provider_findings = _audit_provider_summary(config)
+    for finding in provider_findings:
+        record(finding)
 
     return {
         "ok": error_count == 0,
@@ -1402,6 +1794,7 @@ def audit_vault(config: dict[str, Any]) -> dict[str, Any]:
         "truncated": truncated,
         "counts": {"errors": error_count, "warnings": warning_count},
         "findings": [finding.as_dict() for finding in bounded],
+        "provider": provider,
     }
 
 

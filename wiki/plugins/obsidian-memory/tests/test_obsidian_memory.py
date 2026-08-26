@@ -4476,6 +4476,650 @@ Prior: old unrelated outcome.
         for secret in ("PRIVATE CLASS VALUE", "PRIVATE NOTE BODY VALUE"):
             self.assertNotIn(secret, combined)
 
+    def test_audit_reports_broken_supersession_and_never_follows_symlinks(
+        self,
+    ) -> None:
+        """Catches routing audits that omit broken links or read symlink targets."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            decisions = vault / "projects" / "alpha" / "decisions"
+            decisions.mkdir()
+            old = decisions / "old.md"
+            old.write_text(
+                '---\nstatus: superseded\nsuperseded_by: "[[missing]]"\n---\n',
+                encoding="utf-8",
+            )
+            outside = root / "outside.md"
+            outside.write_text("PRIVATE SENTINEL", encoding="utf-8")
+            (vault / "wiki" / "escaped.md").symlink_to(outside)
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        codes = {(item["path"], item["code"]) for item in report["findings"]}
+        self.assertIn(
+            ("projects/alpha/decisions/old.md", "supersession-missing"),
+            codes,
+        )
+        self.assertIn(("wiki/escaped.md", "symlink-file"), codes)
+        self.assertNotIn("PRIVATE SENTINEL", json.dumps(report))
+
+    def test_qmd_status_reports_bounded_installed_version(self) -> None:
+        """Catches a missing or unbounded QMD version health field."""
+        config = {
+            "qmd_enabled": True,
+            "qmd_collections": ["obsidian-wiki"],
+        }
+        version = subprocess.CompletedProcess(
+            ["qmd", "--version"], 0, stdout="qmd 2.8.3\n", stderr=""
+        )
+        status = subprocess.CompletedProcess(
+            ["qmd", "status"], 0, stdout="healthy\n", stderr=""
+        )
+        with (
+            mock.patch.object(MODULE.shutil, "which", return_value="/tmp/qmd"),
+            mock.patch.object(
+                MODULE.subprocess, "run", side_effect=[version, status]
+            ),
+        ):
+            report = MODULE.qmd_status(config)
+
+        self.assertEqual(report["version"], "qmd 2.8.3")
+        self.assertTrue(report["healthy"])
+        self.assertEqual(
+            set(report),
+            {
+                "name",
+                "role",
+                "enabled",
+                "available",
+                "modes",
+                "collections",
+                "version",
+                "healthy",
+                "status",
+            },
+        )
+
+    def test_audit_maps_every_supersession_issue_and_accepts_a_safe_successor(
+        self,
+    ) -> None:
+        """Catches missing route codes, stale omissions, and false safe-route errors."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            routes = vault / "wiki" / "routes"
+            routes.mkdir()
+
+            def write_note(
+                name: str,
+                status: str,
+                successor: str = "",
+                extra: str = "",
+            ) -> None:
+                successor_line = (
+                    f'superseded_by: "{successor}"\n' if successor else ""
+                )
+                (routes / name).write_text(
+                    f"---\nstatus: {status}\n{successor_line}{extra}---\n",
+                    encoding="utf-8",
+                )
+
+            write_note("missing.md", "superseded", "[[absent]]")
+            write_note("missing-reference.md", "superseded", "[[stale-no-next]]")
+            write_note("stale-no-next.md", "superseded")
+
+            write_note("ambiguous.md", "superseded", "[[duplicate]]")
+            (vault / "wiki" / "one").mkdir()
+            (vault / "wiki" / "two").mkdir()
+            write_note("safe-current.md", "accepted")
+            for directory in (vault / "wiki" / "one", vault / "wiki" / "two"):
+                (directory / "duplicate.md").write_text(
+                    "---\nstatus: accepted\n---\n", encoding="utf-8"
+                )
+
+            write_note("cycle-a.md", "superseded", "[[cycle-b]]")
+            write_note("cycle-b.md", "superseded", "[[cycle-a]]")
+            write_note("unsafe.md", "superseded", "[[.raw/PRIVATE-SECRET]]")
+            (vault / ".raw").mkdir()
+            (vault / ".raw" / "PRIVATE-SECRET.md").write_text(
+                "PRIVATE ROUTE BODY", encoding="utf-8"
+            )
+            write_note(
+                "out-of-root.md",
+                "superseded",
+                "[[projects/alpha/outside]]",
+            )
+            (vault / "projects" / "alpha" / "outside.md").write_text(
+                "---\nstatus: accepted\n---\n", encoding="utf-8"
+            )
+            write_note(
+                "non-markdown.md",
+                "superseded",
+                "[[wiki/routes/current.txt]]",
+            )
+            (routes / "current.txt").write_text("PRIVATE TEXT BODY", encoding="utf-8")
+            write_note(
+                "future-source.md",
+                "superseded",
+                "[[future]]",
+            )
+            write_note("future.md", "accepted", extra="valid_from: 2999-01-01\n")
+            write_note(
+                "expired-source.md",
+                "superseded",
+                "[[expired]]",
+            )
+            write_note("expired.md", "accepted", extra="valid_until: 2000-01-01\n")
+
+            for number in range(1, MODULE.MAX_SUPERSESSION_HOPS + 2):
+                write_note(
+                    f"hop-{number}.md",
+                    "superseded",
+                    f"[[hop-{number + 1}]]",
+                )
+            write_note(
+                f"hop-{MODULE.MAX_SUPERSESSION_HOPS + 2}.md",
+                "accepted",
+            )
+            write_note("safe-source.md", "superseded", "[[safe-current]]")
+
+            config_path = self.write_config(root, vault, recall_roots=["wiki"])
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        codes = {(item["path"], item["code"]) for item in report["findings"]}
+        expected = {
+            ("wiki/routes/missing.md", "supersession-missing"),
+            ("wiki/routes/missing-reference.md", "supersession-missing"),
+            ("wiki/routes/ambiguous.md", "supersession-ambiguous"),
+            ("wiki/routes/cycle-a.md", "supersession-cycle"),
+            ("wiki/routes/hop-1.md", "supersession-hop-limit"),
+            ("wiki/routes/unsafe.md", "supersession-unsafe"),
+            ("wiki/routes/out-of-root.md", "supersession-out-of-root"),
+            ("wiki/routes/non-markdown.md", "supersession-non-markdown"),
+            ("wiki/routes/future-source.md", "supersession-future"),
+            ("wiki/routes/expired-source.md", "supersession-expired"),
+            ("wiki/routes/stale-no-next.md", "stale-without-successor"),
+        }
+        self.assertTrue(expected.issubset(codes), expected - codes)
+        self.assertFalse(
+            any(
+                path == "wiki/routes/safe-source.md"
+                and code.startswith("supersession-")
+                for path, code in codes
+            )
+        )
+        encoded = json.dumps(report)
+        self.assertNotIn("PRIVATE ROUTE BODY", encoded)
+        self.assertNotIn("PRIVATE TEXT BODY", encoded)
+
+    def test_audit_reports_missing_recall_roots_alongside_symlink_roots(self) -> None:
+        """Catches silent omission of missing roots and symlinked parent routes."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            outside = root / "PRIVATE-OUTSIDE"
+            (outside / "nested").mkdir(parents=True)
+            (outside / "nested" / "PRIVATE.md").write_text(
+                "PRIVATE ROOT BODY", encoding="utf-8"
+            )
+            (vault / "root-link").symlink_to(outside, target_is_directory=True)
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_roots=["wiki", "missing", "root-link/nested"],
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        codes = {(item["path"], item["code"]) for item in report["findings"]}
+        self.assertIn(("missing", "missing-recall-root"), codes)
+        self.assertIn(("root-link/nested", "symlink-root"), codes)
+        encoded = json.dumps(report)
+        self.assertNotIn(str(outside), encoded)
+        self.assertNotIn("PRIVATE ROOT BODY", encoded)
+
+    def test_audit_classifies_commit_roots_without_touching_head_or_index(
+        self,
+    ) -> None:
+        """Catches commit-root drift, unsafe resolution, and audit-side Git writes."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            safe_directory = vault / "wiki" / "safe-directory"
+            safe_directory.mkdir()
+            safe_markdown = vault / "wiki" / "safe.md"
+            safe_markdown.write_text("safe\n", encoding="utf-8")
+            (safe_directory / "note.md").write_text("safe\n", encoding="utf-8")
+            non_markdown = vault / "wiki" / "state.txt"
+            non_markdown.write_text("state\n", encoding="utf-8")
+            private_link = vault / "wiki" / "private-link"
+            private_link.symlink_to(vault / ".obsidian", target_is_directory=True)
+            direct_link = vault / "wiki" / "direct-link"
+            direct_link.symlink_to(safe_directory, target_is_directory=True)
+            parent_link = vault / "wiki" / "parent-link"
+            parent_link.symlink_to(safe_directory, target_is_directory=True)
+            outside = root / "PRIVATE-OUTSIDE"
+            outside.mkdir()
+            outside_link = vault / "outside-link"
+            outside_link.symlink_to(outside, target_is_directory=True)
+            staged = vault / "daily" / "staged.md"
+            staged.write_text("before\n", encoding="utf-8")
+            self.init_git_vault(vault)
+            staged.write_text("PRIVATE STAGED CONTENT\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(vault), "add", "--", "daily/staged.md"],
+                check=True,
+            )
+
+            private_absolute = root / "PRIVATE-ABSOLUTE-COMMIT-ROOT"
+            commit_paths = [
+                str(private_absolute),
+                "wiki/../projects",
+                "wiki/.private",
+                "wiki/private-link",
+                "outside-link",
+                "wiki/direct-link",
+                "wiki/parent-link/note.md",
+                "wiki/missing",
+                "wiki/state.txt",
+                "wiki",
+                "wiki/safe.md",
+                ".",
+            ]
+            config_path = self.write_config(root, vault, commit_paths=commit_paths)
+            head_before = self.git_stdout(vault, "rev-parse", "HEAD")
+            index_before = self.git_stdout(vault, "diff", "--cached", "--binary")
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                first = MODULE.audit_vault(config)
+                second = MODULE.audit_vault(config)
+            head_after = self.git_stdout(vault, "rev-parse", "HEAD")
+            index_after = self.git_stdout(vault, "diff", "--cached", "--binary")
+
+        self.assertEqual(first, second)
+        commit_findings = [
+            finding
+            for finding in first["findings"]
+            if finding["code"].startswith("commit-root-")
+        ]
+        self.assertEqual(
+            [(item.get("field"), item["code"]) for item in commit_findings],
+            [
+                ("commit_paths[0]", "commit-root-absolute"),
+                ("commit_paths[1]", "commit-root-parent"),
+                ("commit_paths[2]", "commit-root-private"),
+                ("commit_paths[3]", "commit-root-private"),
+                ("commit_paths[4]", "commit-root-escape"),
+                ("commit_paths[5]", "commit-root-symlink"),
+                ("commit_paths[6]", "commit-root-symlink"),
+                ("commit_paths[7]", "commit-root-missing"),
+                ("commit_paths[8]", "commit-root-shape"),
+                ("commit_paths[11]", "commit-root-unsafe"),
+            ],
+        )
+        self.assertFalse(
+            any(
+                item.get("field") in {"commit_paths[9]", "commit_paths[10]"}
+                for item in commit_findings
+            )
+        )
+        self.assertEqual(head_before, head_after)
+        self.assertEqual(index_before, index_after)
+        encoded = json.dumps(first)
+        for secret in (
+            str(private_absolute),
+            str(outside),
+            str(vault),
+            "PRIVATE STAGED CONTENT",
+        ):
+            self.assertNotIn(secret, encoded)
+
+    def test_audit_reports_qmd_mapping_boundaries_and_safe_provider_summary(
+        self,
+    ) -> None:
+        """Catches unsafe collection roots and provider-summary path leakage."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            target = vault / "wiki" / "qmd-target"
+            target.mkdir()
+            (vault / "wiki" / "qmd-direct").symlink_to(
+                target, target_is_directory=True
+            )
+            (vault / "wiki" / "qmd-parent").symlink_to(
+                target, target_is_directory=True
+            )
+            outside_target = root / "PRIVATE-QMD-OUTSIDE"
+            outside_target.mkdir()
+            (vault / "wiki" / "qmd-escape").symlink_to(
+                outside_target, target_is_directory=True
+            )
+            collections = [
+                "safe",
+                "outside",
+                "missing",
+                "direct",
+                "parent",
+                "escape",
+            ]
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_roots=["wiki"],
+                recall_provider="auto",
+                qmd_enabled=True,
+                qmd_collections=collections,
+                qmd_collection_roots={
+                    "safe": "wiki",
+                    "outside": "projects",
+                    "missing": "wiki/qmd-missing",
+                    "direct": "wiki/qmd-direct",
+                    "parent": "wiki/qmd-parent/nested",
+                    "escape": "wiki/qmd-escape",
+                },
+            )
+            version = subprocess.CompletedProcess(
+                ["qmd", "--version"], 0, stdout="qmd 2.8.3\n", stderr=""
+            )
+            status = subprocess.CompletedProcess(
+                ["qmd", "status"], 0, stdout="PRIVATE RAW STATUS\n", stderr=""
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(
+                    MODULE.shutil,
+                    "which",
+                    return_value="/PRIVATE/QMD/EXECUTABLE",
+                ),
+                mock.patch.object(
+                    MODULE.subprocess, "run", side_effect=[version, status]
+                ),
+            ):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        mapping_findings = [
+            (item.get("field"), item["code"])
+            for item in report["findings"]
+            if item["code"].startswith("qmd-root-")
+        ]
+        self.assertEqual(
+            mapping_findings,
+            [
+                ("qmd_collection_roots[outside]", "qmd-root-outside-recall"),
+                ("qmd_collection_roots[missing]", "qmd-root-missing"),
+                ("qmd_collection_roots[direct]", "qmd-root-symlink"),
+                ("qmd_collection_roots[parent]", "qmd-root-symlink"),
+                ("qmd_collection_roots[escape]", "qmd-root-symlink"),
+            ],
+        )
+        self.assertEqual(
+            report["provider"],
+            {
+                "canonical": "obsidian-markdown",
+                "configured": "auto",
+                "active": "qmd",
+                "qmd": {
+                    "enabled": True,
+                    "available": True,
+                    "healthy": True,
+                    "version": "qmd 2.8.3",
+                    "collections": collections,
+                },
+            },
+        )
+        encoded = json.dumps(report)
+        for secret in (
+            "/PRIVATE/QMD/EXECUTABLE",
+            "PRIVATE RAW STATUS",
+            str(config_path),
+            str(vault),
+            str(outside_target),
+        ):
+            self.assertNotIn(secret, encoded)
+
+    def test_audit_qmd_health_severity_matches_auto_and_strict_policy(self) -> None:
+        """Catches silent provider failure or wrong auto/strict severity."""
+        cases = (
+            ("auto", "unavailable", "warning", "qmd-unavailable", "native"),
+            ("qmd", "unavailable", "error", "qmd-unavailable", None),
+            ("qmd", "disabled", "error", "qmd-unavailable", None),
+            ("auto", "unhealthy", "warning", "qmd-unhealthy", "qmd"),
+            ("qmd", "unhealthy", "error", "qmd-unhealthy", "qmd"),
+            ("native", "unhealthy", None, None, "native"),
+        )
+        for provider, health, severity, code, active in cases:
+            with (
+                self.subTest(provider=provider, health=health),
+                tempfile.TemporaryDirectory() as temp,
+            ):
+                root = Path(temp)
+                vault = self.make_vault(root)
+                config_path = self.write_config(
+                    root,
+                    vault,
+                    recall_provider=provider,
+                    qmd_enabled=health != "disabled",
+                )
+                if health in {"unavailable", "disabled"}:
+                    executable = None
+                    run_side_effect: list[object] = []
+                else:
+                    executable = "/PRIVATE/QMD/EXECUTABLE"
+                    run_side_effect = [
+                        subprocess.CompletedProcess(
+                            ["qmd", "--version"],
+                            0,
+                            stdout="qmd 2.8.3\n",
+                            stderr="",
+                        ),
+                        subprocess.CompletedProcess(
+                            ["qmd", "status"],
+                            1,
+                            stdout="",
+                            stderr="PRIVATE PROVIDER FAILURE /PRIVATE/CACHE",
+                        ),
+                    ]
+                with (
+                    mock.patch.dict(
+                        os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                    ),
+                    mock.patch.object(
+                        MODULE.shutil, "which", return_value=executable
+                    ),
+                    mock.patch.object(
+                        MODULE.subprocess, "run", side_effect=run_side_effect
+                    ),
+                ):
+                    config, _ = MODULE.load_config()
+                    report = MODULE.audit_vault(config)
+
+                health_findings = [
+                    item
+                    for item in report["findings"]
+                    if item["code"] in {"qmd-unavailable", "qmd-unhealthy"}
+                ]
+                if code is None:
+                    self.assertEqual(health_findings, [])
+                else:
+                    self.assertEqual(
+                        [(item["severity"], item["code"]) for item in health_findings],
+                        [(severity, code)],
+                    )
+                self.assertEqual(report["provider"]["active"], active)
+                encoded = json.dumps(report)
+                for secret in (
+                    "/PRIVATE/QMD/EXECUTABLE",
+                    "PRIVATE PROVIDER FAILURE",
+                    "/PRIVATE/CACHE",
+                    str(config_path),
+                    str(vault),
+                ):
+                    self.assertNotIn(secret, encoded)
+
+    def test_audit_reports_outside_qmd_mapping_even_when_qmd_is_disabled(
+        self,
+    ) -> None:
+        """Catches a dormant mapping that could later widen recall silently."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_roots=["wiki"],
+                qmd_enabled=False,
+                qmd_collections=["outside"],
+                qmd_collection_roots={"outside": "projects"},
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        self.assertIn(
+            ("qmd_collection_roots[outside]", "qmd-root-outside-recall"),
+            [
+                (item.get("field"), item["code"])
+                for item in report["findings"]
+            ],
+        )
+
+    def test_qmd_status_clips_version_and_survives_timeout_malformed_and_missing(
+        self,
+    ) -> None:
+        """Catches unbounded probes and failures that suppress the status check."""
+        config = {
+            "qmd_enabled": True,
+            "qmd_collections": ["obsidian-wiki"],
+        }
+        healthy = subprocess.CompletedProcess(
+            ["qmd", "status"], 0, stdout="healthy\n", stderr=""
+        )
+        long_version = subprocess.CompletedProcess(
+            ["qmd", "--version"],
+            0,
+            stdout=f"qmd {'x' * 300}\nsecond line",
+            stderr="",
+        )
+        with (
+            mock.patch.object(MODULE.shutil, "which", return_value="/tmp/qmd"),
+            mock.patch.object(
+                MODULE.subprocess, "run", side_effect=[long_version, healthy]
+            ) as run,
+        ):
+            clipped = MODULE.qmd_status(config)
+        self.assertEqual(len(clipped["version"]), 120)
+        self.assertTrue(clipped["version"].endswith("…"))
+        self.assertTrue(clipped["healthy"])
+        self.assertEqual(run.call_args_list[0].args[0], ["/tmp/qmd", "--version"])
+        self.assertEqual(run.call_args_list[0].kwargs["timeout"], 5)
+        self.assertEqual(run.call_args_list[1].args[0], ["/tmp/qmd", "status"])
+
+        timeout = subprocess.TimeoutExpired(["qmd", "--version"], 5)
+        with (
+            mock.patch.object(MODULE.shutil, "which", return_value="/tmp/qmd"),
+            mock.patch.object(
+                MODULE.subprocess, "run", side_effect=[timeout, healthy]
+            ),
+        ):
+            timed_out = MODULE.qmd_status(config)
+        self.assertEqual(timed_out["version"], "")
+        self.assertTrue(timed_out["healthy"])
+
+        malformed = subprocess.CompletedProcess(
+            ["qmd", "--version"], 0, stdout=None, stderr=None
+        )
+        with (
+            mock.patch.object(MODULE.shutil, "which", return_value="/tmp/qmd"),
+            mock.patch.object(
+                MODULE.subprocess, "run", side_effect=[malformed, healthy]
+            ),
+        ):
+            malformed_report = MODULE.qmd_status(config)
+        self.assertEqual(malformed_report["version"], "")
+        self.assertTrue(malformed_report["healthy"])
+
+        with (
+            mock.patch.object(MODULE.shutil, "which", return_value=None),
+            mock.patch.object(
+                MODULE.subprocess,
+                "run",
+                side_effect=AssertionError("missing QMD must not be executed"),
+            ),
+        ):
+            missing = MODULE.qmd_status(config)
+        self.assertEqual(missing["version"], "")
+        self.assertFalse(missing["available"])
+        self.assertNotIn("healthy", missing)
+
+    def test_audit_extended_findings_preserve_bounds_counts_privacy_and_bytes(
+        self,
+    ) -> None:
+        """Catches route findings that bypass Task 4 bounds or mutate notes."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            for index in range(205):
+                (vault / "wiki" / f"route-{index:03}.md").write_text(
+                    "---\n"
+                    "status: superseded\n"
+                    f"superseded_by: '[[PRIVATE-MISSING-{index:03}]]'\n"
+                    "---\n"
+                    "PRIVATE NOTE BODY\n",
+                    encoding="utf-8",
+                )
+            config_path = self.write_config(root, vault)
+            before = {
+                path.relative_to(vault).as_posix(): path.read_bytes()
+                for path in vault.rglob("*")
+                if path.is_file()
+            }
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                first = MODULE.audit_vault(config)
+                second = MODULE.audit_vault(config)
+            after = {
+                path.relative_to(vault).as_posix(): path.read_bytes()
+                for path in vault.rglob("*")
+                if path.is_file()
+            }
+
+        self.assertEqual(first, second)
+        self.assertEqual(first["counts"], {"errors": 205, "warnings": 0})
+        self.assertEqual(len(first["findings"]), MODULE.MAX_AUDIT_FINDINGS)
+        self.assertEqual(first["findings"][0]["path"], "wiki/route-000.md")
+        self.assertEqual(first["findings"][-1]["path"], "wiki/route-199.md")
+        self.assertTrue(first["truncated"])
+        self.assertFalse(first["ok"])
+        self.assertEqual(before, after)
+        encoded = json.dumps(first)
+        for secret in (
+            str(vault),
+            "PRIVATE-MISSING",
+            "PRIVATE NOTE BODY",
+        ):
+            self.assertNotIn(secret, encoded)
+
 
 if __name__ == "__main__":
     unittest.main()
