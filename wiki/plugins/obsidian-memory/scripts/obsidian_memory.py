@@ -1080,9 +1080,9 @@ def qmd_status(config: dict[str, Any]) -> dict[str, Any]:
         result["status"] = clipped_line(
             status_output if isinstance(status_output, str) else "", 1000
         )
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, UnicodeError, subprocess.SubprocessError):
         result["healthy"] = False
-        result["error"] = str(exc)
+        result["status"] = ""
     return result
 
 
@@ -1215,10 +1215,10 @@ def parse_frontmatter_document(
     if not text.startswith("---"):
         return {}
     lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
+    if not lines or lines[0] != "---":
         return {}
     closing_index = next(
-        (index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"),
+        (index for index, line in enumerate(lines[1:], start=1) if line == "---"),
         None,
     )
     if closing_index is None:

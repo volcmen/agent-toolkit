@@ -268,7 +268,7 @@ Prior: old unrelated outcome.
                 self.assertIn(field, str(raised.exception))
 
     def test_recall_payload_is_the_cli_contract_without_printing(self) -> None:
-        """Catches a payload helper that emits CLI output instead of returning it."""
+        """Catches any drift between the reusable payload and complete CLI JSON."""
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             vault = self.make_vault(root)
@@ -290,15 +290,47 @@ Prior: old unrelated outcome.
                         provider="native",
                         scope="projects/alpha",
                     )
+                with contextlib.redirect_stdout(io.StringIO()) as cli_stdout:
+                    exit_status = MODULE.recall(
+                        "Markdown remains canonical",
+                        "fast",
+                        3,
+                        provider="native",
+                        scope="projects/alpha",
+                    )
             self.assertEqual(output.getvalue(), "")
-            self.assertEqual(payload["provider"], "native")
-            self.assertEqual(payload["requested_provider"], "native")
-            self.assertEqual(payload["requested_mode"], "fast")
-            self.assertEqual(payload["results"][0]["path"], "projects/alpha/decision.md")
-            self.assertLessEqual(
-                payload["results_estimated_tokens"],
-                payload["result_token_limit"],
-            )
+            self.assertEqual(exit_status, 0)
+            self.assertEqual(json.loads(cli_stdout.getvalue()), payload)
+
+    def test_recall_cli_maps_exception_classes_to_documented_exit_statuses(self) -> None:
+        """Catches exception-class exit drift and unintended traceback output."""
+        failures = (
+            (ValueError("recall query cannot be empty"), 2),
+            (MODULE.ConfigurationError("recall configuration is invalid"), 1),
+            (MODULE.RecallProviderError("recall provider failed"), 1),
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            for failure, expected_status in failures:
+                with (
+                    self.subTest(failure=type(failure).__name__),
+                    mock.patch.dict(
+                        os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                    ),
+                    mock.patch.object(
+                        MODULE, "recall_payload", side_effect=failure
+                    ),
+                    contextlib.redirect_stdout(io.StringIO()) as stdout,
+                    contextlib.redirect_stderr(io.StringIO()) as stderr,
+                ):
+                    status = MODULE.recall("safe query", "fast", 3)
+
+                self.assertEqual(status, expected_status)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertEqual(stderr.getvalue(), f"ERROR: {failure}\n")
+                self.assertNotIn("Traceback", stderr.getvalue())
 
     def test_configured_qmd_collection_requires_a_root_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1171,6 +1203,50 @@ Prior: old unrelated outcome.
 
         self.assertEqual(exact_metadata, {"status": "accepted"})
         self.assertEqual(truncated_metadata, {})
+
+    def test_frontmatter_delimiters_must_be_exact_top_level_lines(self) -> None:
+        """Catches an indented YAML separator terminating governed metadata early."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            note = vault / "wiki" / "governed.md"
+            frontmatter = (
+                "---\n"
+                "memory_class: fact\n"
+                "  ---\n"
+                "status: active\n"
+                "source: operator record\n"
+                "verified_by: deterministic review\n"
+                "confidence: impossible\n"
+                "---"
+            )
+            note.write_text(frontmatter + "\nPRIVATE BODY\n", encoding="utf-8")
+            indented_open = vault / "wiki" / "indented-open.md"
+            indented_open.write_text(
+                "  ---\nstatus: active\n---\n", encoding="utf-8"
+            )
+            config_path = self.write_config(root, vault, recall_roots=["wiki"])
+
+            metadata = MODULE.parse_frontmatter_document(
+                note, limit=len(frontmatter)
+            )
+            indented_metadata = MODULE.parse_frontmatter_document(indented_open)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        self.assertEqual(metadata["status"], "active")
+        self.assertEqual(metadata["source"], "operator record")
+        self.assertEqual(metadata["verified_by"], "deterministic review")
+        self.assertEqual(metadata["confidence"], "impossible")
+        self.assertEqual(indented_metadata, {})
+        self.assertIn(
+            ("wiki/governed.md", "invalid-confidence"),
+            [(item["path"], item["code"]) for item in report["findings"]],
+        )
+        self.assertNotIn("PRIVATE BODY", json.dumps(report))
 
     def test_scalar_frontmatter_wrapper_preserves_recall_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -3828,6 +3904,48 @@ Prior: old unrelated outcome.
         self.assertEqual([case.id for case in cases], ["scoped-current-decision"])
         self.assertNotIn(str(Path.home()), example.read_text(encoding="utf-8"))
 
+    def test_hook_checker_rejects_chained_posix_and_windows_commands(self) -> None:
+        """Catches a trailing allowed token laundering another lifecycle command."""
+        check_script = SCRIPT.parents[3] / "scripts" / "check.py"
+        check_spec = importlib.util.spec_from_file_location(
+            "obsidian_memory_repository_check", check_script
+        )
+        assert check_spec and check_spec.loader
+        check_module = importlib.util.module_from_spec(check_spec)
+        check_spec.loader.exec_module(check_module)
+        hooks_path = SCRIPT.parents[1] / "hooks" / "hooks.json"
+        baseline = json.loads(hooks_path.read_text(encoding="utf-8"))
+        check_module.validate_hook_document(baseline)
+
+        mutations = (
+            (
+                "command",
+                'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/obsidian_memory.py" '
+                "stop; echo session-start",
+            ),
+            (
+                "command",
+                'python3 "${CLAUDE_PLUGIN_ROOT}/scripts/obsidian_memory.py" '
+                "evaluate suite.json; echo session-start",
+            ),
+            (
+                "commandWindows",
+                'py -3 "%CLAUDE_PLUGIN_ROOT%\\scripts\\obsidian_memory.py" '
+                "stop & echo session-start",
+            ),
+            (
+                "commandWindows",
+                'py -3 "%CLAUDE_PLUGIN_ROOT%\\scripts\\obsidian_memory.py" '
+                "evaluate suite.json & echo session-start",
+            ),
+        )
+        for field, command in mutations:
+            with self.subTest(field=field, command=command):
+                document = json.loads(json.dumps(baseline))
+                document["hooks"]["SessionStart"][0]["hooks"][0][field] = command
+                with self.assertRaises(check_module.ValidationError):
+                    check_module.validate_hook_document(document)
+
     def test_governance_findings_enforce_full_action_driving_matrix(self) -> None:
         """Catches a wrong status/provenance/verification branch for any class."""
         statuses = (
@@ -5879,6 +5997,141 @@ Prior: old unrelated outcome.
                 else:
                     self.assertNotIn("healthy", report)
                     self.assertEqual(len(run.call_args_list), 1)
+
+    def test_qmd_status_decode_error_returns_fixed_unhealthy_state(self) -> None:
+        """Catches malformed status bytes escaping or entering provider output."""
+        version = subprocess.CompletedProcess(
+            ["qmd", "--version"], 0, stdout="qmd 2.8.3\n", stderr=""
+        )
+        decode_error = UnicodeDecodeError(
+            "utf-8",
+            b"\xffPRIVATE STATUS BYTES",
+            0,
+            1,
+            "PRIVATE DECODER DETAIL",
+        )
+        with (
+            mock.patch.object(MODULE.shutil, "which", return_value="/opt/bin/qmd"),
+            mock.patch.object(
+                MODULE.subprocess, "run", side_effect=[version, decode_error]
+            ),
+        ):
+            report = MODULE.qmd_status(
+                {"qmd_enabled": True, "qmd_collections": ["obsidian-wiki"]}
+            )
+
+        self.assertFalse(report["healthy"])
+        self.assertEqual(report["status"], "")
+        self.assertNotIn("error", report)
+        encoded = json.dumps(report)
+        for secret in (
+            "PRIVATE STATUS BYTES",
+            "PRIVATE DECODER DETAIL",
+            "UnicodeDecodeError",
+            "Traceback",
+        ):
+            self.assertNotIn(secret, encoded)
+
+    def test_provider_status_contains_decode_failure_as_unhealthy_qmd(self) -> None:
+        """Catches provider health aggregation losing malformed-status isolation."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(
+                root, vault, qmd_enabled=True, recall_provider="auto"
+            )
+            version = subprocess.CompletedProcess(
+                ["qmd", "--version"], 0, stdout="qmd 2.8.3\n", stderr=""
+            )
+            decode_error = UnicodeDecodeError(
+                "utf-8", b"\xffPRIVATE PROVIDER BYTES", 0, 1, "invalid"
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(
+                    MODULE.shutil, "which", return_value="/opt/bin/qmd"
+                ),
+                mock.patch.object(
+                    MODULE.subprocess,
+                    "run",
+                    side_effect=[version, decode_error],
+                ),
+            ):
+                config, _ = MODULE.load_config()
+                report = MODULE.recall_provider_status(config)
+
+        self.assertFalse(report["providers"]["qmd"]["healthy"])
+        self.assertEqual(report["providers"]["qmd"]["status"], "")
+        self.assertNotIn("PRIVATE PROVIDER BYTES", json.dumps(report))
+
+    def test_audit_completes_on_qmd_status_decode_error_with_policy_exit(self) -> None:
+        """Catches malformed QMD bytes aborting audit or changing auto/strict exits."""
+        for provider, expected_status, severity in (
+            ("auto", 0, "warning"),
+            ("qmd", 1, "error"),
+        ):
+            with (
+                self.subTest(provider=provider),
+                tempfile.TemporaryDirectory() as temp,
+            ):
+                root = Path(temp)
+                vault = self.make_vault(root)
+                config_path = self.write_config(
+                    root,
+                    vault,
+                    qmd_enabled=True,
+                    recall_provider=provider,
+                )
+                version = subprocess.CompletedProcess(
+                    ["qmd", "--version"], 0, stdout="qmd 2.8.3\n", stderr=""
+                )
+                decode_error = UnicodeDecodeError(
+                    "utf-8",
+                    b"\xffPRIVATE AUDIT BYTES",
+                    0,
+                    1,
+                    "PRIVATE AUDIT DETAIL",
+                )
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"OBSIDIAN_MEMORY_CONFIG": str(config_path)},
+                    ),
+                    mock.patch.object(
+                        MODULE.shutil, "which", return_value="/opt/bin/qmd"
+                    ),
+                    mock.patch.object(
+                        MODULE.subprocess,
+                        "run",
+                        side_effect=[version, decode_error],
+                    ),
+                    contextlib.redirect_stdout(io.StringIO()) as stdout,
+                    contextlib.redirect_stderr(io.StringIO()) as stderr,
+                ):
+                    status = MODULE.audit(True)
+
+                self.assertEqual(status, expected_status)
+                self.assertEqual(stderr.getvalue(), "")
+                report = json.loads(stdout.getvalue())
+                self.assertEqual(report["files_scanned"], 3)
+                self.assertEqual(
+                    [
+                        (item["severity"], item["code"])
+                        for item in report["findings"]
+                        if item["code"] == "qmd-unhealthy"
+                    ],
+                    [(severity, "qmd-unhealthy")],
+                )
+                combined = stdout.getvalue() + stderr.getvalue()
+                for secret in (
+                    "PRIVATE AUDIT BYTES",
+                    "PRIVATE AUDIT DETAIL",
+                    "UnicodeDecodeError",
+                    "Traceback",
+                ):
+                    self.assertNotIn(secret, combined)
 
     def test_audit_extended_findings_preserve_bounds_counts_privacy_and_bytes(
         self,

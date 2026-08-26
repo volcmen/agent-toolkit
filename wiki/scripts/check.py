@@ -149,6 +149,16 @@ def validate_hook_document(document: Any) -> None:
     require(isinstance(hooks, dict), "hooks.json must contain a hooks object")
     require(set(hooks) == {"SessionStart", "Stop"}, "unexpected lifecycle hook events")
     expected_subcommands = {"SessionStart": "session-start", "Stop": "stop"}
+    command_patterns = {
+        "command": re.compile(
+            r'python3 "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/obsidian_memory\.py" '
+            r'(session-start|stop)'
+        ),
+        "commandWindows": re.compile(
+            r'py -3 "%CLAUDE_PLUGIN_ROOT%\\scripts\\obsidian_memory\.py" '
+            r'(session-start|stop)'
+        ),
+    }
     for event, groups in hooks.items():
         require(isinstance(groups, list) and groups, f"{event} must define hook groups")
         for group in groups:
@@ -168,20 +178,15 @@ def validate_hook_document(document: Any) -> None:
                         isinstance(command, str) and bool(command.strip()),
                         f"{event} {field} must be a non-empty command",
                     )
-                    normalized = command.replace("\\", "/")
+                    matched = command_patterns[field].fullmatch(command)
                     require(
-                        "scripts/obsidian_memory.py" in normalized,
-                        f"{event} {field} does not target the canonical lifecycle script",
+                        matched is not None,
+                        f"{event} {field} is not an allowlisted canonical command",
                     )
                     require(
-                        command.strip().split()[-1]
-                        == expected_subcommands[event],
+                        matched is not None
+                        and matched.group(1) == expected_subcommands[event],
                         f"{event} {field} must invoke {expected_subcommands[event]}",
-                    )
-                    lowered = command.casefold()
-                    require(
-                        "evaluate" not in lowered and "audit" not in lowered,
-                        f"{event} {field} must not invoke manual evaluate or audit flows",
                     )
 
 
