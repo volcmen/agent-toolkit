@@ -2192,14 +2192,30 @@ def _evaluation_payload_fields(
     result_token_limit = payload.get("result_token_limit")
     filtered_stale = payload.get("filtered_stale")
     results = payload.get("results")
+    coherent_transition = False
+    if case.provider == "native":
+        coherent_transition = (
+            provider == "native"
+            and mode == "fast"
+            and degraded == (case.mode != "fast")
+        )
+    elif case.provider == "qmd":
+        coherent_transition = (
+            provider == "qmd" and mode == case.mode and degraded is False
+        )
+    elif case.provider == "auto":
+        coherent_transition = (
+            provider == "qmd" and mode == case.mode and degraded is False
+        ) or (provider == "native" and mode == "fast" and degraded is True)
     if (
         not isinstance(provider, str)
-        or provider not in _RECALL_EVAL_PROVIDERS
+        or provider not in {"native", "qmd"}
         or not isinstance(mode, str)
         or mode not in _RECALL_EVAL_MODES
         or payload.get("requested_provider") != case.provider
         or payload.get("requested_mode") != case.mode
         or not isinstance(degraded, bool)
+        or not coherent_transition
         or type(result_tokens) is not int
         or result_tokens < 0
         or type(result_token_limit) is not int
@@ -2323,7 +2339,7 @@ def evaluate_recall_cases(
 def evaluate_recall(path: Path, as_json: bool) -> int:
     try:
         config, _ = load_config()
-    except ConfigurationError:
+    except Exception:
         report: dict[str, Any] = {"ok": False, "error": "configuration-error"}
         if as_json:
             print(json.dumps(report, ensure_ascii=False, indent=2))

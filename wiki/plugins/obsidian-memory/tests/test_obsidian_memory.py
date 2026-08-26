@@ -2941,7 +2941,7 @@ Prior: old unrelated outcome.
                                 "id": "failing",
                                 "query": "SECRET FAILING QUERY",
                                 "mode": "semantic",
-                                "provider": "qmd",
+                                "provider": "auto",
                                 "scope": "projects/alpha",
                                 "top": 2,
                                 "max_tokens": 900,
@@ -2977,7 +2977,7 @@ Prior: old unrelated outcome.
                     },
                     {
                         "provider": "native",
-                        "requested_provider": "qmd",
+                        "requested_provider": "auto",
                         "mode": "fast",
                         "requested_mode": "semantic",
                         "degraded": True,
@@ -3099,6 +3099,134 @@ Prior: old unrelated outcome.
         self.assertEqual(report["cases"][0]["reasons"], [])
         self.assertTrue(report["cases"][0]["degraded"])
         self.assertNotIn("PRIVATE ALLOWED QUERY", json.dumps(report))
+
+    def test_recall_evaluator_rejects_incoherent_provider_mode_transitions(
+        self,
+    ) -> None:
+        """Catches impossible effective providers, modes, and fallback flags."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            transitions = (
+                ("auto-effective", "auto", "fast", "auto", "fast", False),
+                ("explicit-native-changed", "native", "fast", "qmd", "fast", False),
+                ("explicit-qmd-changed", "qmd", "fast", "native", "fast", True),
+                ("unmarked-mode-change", "qmd", "hybrid", "qmd", "fast", False),
+                ("unmarked-auto-fallback", "auto", "fast", "native", "fast", False),
+                ("native-semantic", "native", "semantic", "native", "semantic", True),
+                ("qmd-mode-change", "qmd", "hybrid", "qmd", "fast", True),
+                ("native-false-degradation", "native", "fast", "native", "fast", True),
+                ("qmd-false-degradation", "qmd", "fast", "qmd", "fast", True),
+                ("auto-qmd-false-degradation", "auto", "fast", "qmd", "fast", True),
+            )
+            for (
+                case_id,
+                requested_provider,
+                requested_mode,
+                effective_provider,
+                effective_mode,
+                degraded,
+            ) in transitions:
+                with self.subTest(case_id=case_id):
+                    case = MODULE.RecallEvalCase(
+                        id=case_id,
+                        query="PRIVATE TRANSITION QUERY",
+                        mode=requested_mode,
+                        provider=requested_provider,
+                        scope=None,
+                        top=3,
+                        max_tokens=900,
+                        expected_paths=(),
+                        any_of_paths=(),
+                        forbidden_paths=(),
+                        allow_degraded=True,
+                    )
+                    payload = {
+                        "provider": effective_provider,
+                        "requested_provider": requested_provider,
+                        "mode": effective_mode,
+                        "requested_mode": requested_mode,
+                        "degraded": degraded,
+                        "results": [],
+                        "results_estimated_tokens": 0,
+                        "result_token_limit": 900,
+                        "filtered_stale": 0,
+                    }
+                    report = MODULE.evaluate_recall_cases(
+                        config,
+                        [case],
+                        recall_runner=lambda *_args, **_kwargs: payload,
+                    )
+                    self.assertEqual(
+                        report["cases"][0]["reasons"],
+                        ["recall-error"],
+                    )
+                    self.assertNotIn("PRIVATE TRANSITION QUERY", json.dumps(report))
+
+    def test_recall_evaluator_preserves_valid_provider_mode_transitions(self) -> None:
+        """Catches rejection of real explicit-native and auto fallback payloads."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            transitions = (
+                ("explicit-native", "native", "semantic", "native", "fast", True),
+                ("explicit-qmd", "qmd", "hybrid", "qmd", "hybrid", False),
+                ("auto-qmd", "auto", "hybrid", "qmd", "hybrid", False),
+                ("auto-native-mode", "auto", "hybrid", "native", "fast", True),
+                ("auto-native-provider", "auto", "fast", "native", "fast", True),
+            )
+            for (
+                case_id,
+                requested_provider,
+                requested_mode,
+                effective_provider,
+                effective_mode,
+                degraded,
+            ) in transitions:
+                with self.subTest(case_id=case_id):
+                    case = MODULE.RecallEvalCase(
+                        id=case_id,
+                        query="PRIVATE VALID TRANSITION QUERY",
+                        mode=requested_mode,
+                        provider=requested_provider,
+                        scope=None,
+                        top=3,
+                        max_tokens=900,
+                        expected_paths=(),
+                        any_of_paths=(),
+                        forbidden_paths=(),
+                        allow_degraded=True,
+                    )
+                    payload = {
+                        "provider": effective_provider,
+                        "requested_provider": requested_provider,
+                        "mode": effective_mode,
+                        "requested_mode": requested_mode,
+                        "degraded": degraded,
+                        "results": [],
+                        "results_estimated_tokens": 0,
+                        "result_token_limit": 900,
+                        "filtered_stale": 0,
+                    }
+                    report = MODULE.evaluate_recall_cases(
+                        config,
+                        [case],
+                        recall_runner=lambda *_args, **_kwargs: payload,
+                    )
+                    self.assertTrue(report["ok"], report)
+                    self.assertEqual(report["cases"][0]["reasons"], [])
 
     def test_recall_evaluator_sanitizes_runtime_and_malformed_provider_failures(
         self,
@@ -3311,6 +3439,67 @@ Prior: old unrelated outcome.
                 self.assertNotIn("PRIVATE NOTE BODY", output)
                 self.assertNotIn(str(fixture), output)
                 self.assertNotIn(str(missing_config), output)
+
+    def test_recall_evaluate_cli_sanitizes_malformed_utf8_configuration(self) -> None:
+        """Catches decode failures escaping the evaluate configuration boundary."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config_path = root / "PRIVATE-CONFIG-PATH.json"
+            config_path.write_bytes(b"\xffPRIVATE CONFIG BYTES")
+            fixture = root / "PRIVATE-FIXTURE-PATH.json"
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "evaluate", str(fixture), "--json"],
+                env={**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)},
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {"ok": False, "error": "configuration-error"},
+        )
+        self.assertEqual(result.stderr, "")
+        output = result.stdout + result.stderr
+        for secret in (
+            str(config_path),
+            str(fixture),
+            "PRIVATE CONFIG BYTES",
+            "UnicodeDecodeError",
+            "Traceback",
+        ):
+            self.assertNotIn(secret, output)
+
+    def test_recall_evaluate_sanitizes_vault_resolution_failure(self) -> None:
+        """Catches vault path resolution failures leaking from load_config."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            fixture = root / "PRIVATE-FIXTURE-PATH.json"
+            error_text = f"PRIVATE RESOLUTION ERROR {vault}"
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(
+                    MODULE.Path,
+                    "resolve",
+                    side_effect=RuntimeError(error_text),
+                ),
+                contextlib.redirect_stdout(io.StringIO()) as stdout,
+                contextlib.redirect_stderr(io.StringIO()) as stderr,
+            ):
+                result = MODULE.evaluate_recall(fixture, True)
+        self.assertEqual(result, 2)
+        self.assertEqual(
+            json.loads(stdout.getvalue()),
+            {"ok": False, "error": "configuration-error"},
+        )
+        self.assertEqual(stderr.getvalue(), "")
+        output = stdout.getvalue() + stderr.getvalue()
+        for secret in (str(config_path), str(vault), str(fixture), error_text, "Traceback"):
+            self.assertNotIn(secret, output)
 
     def test_recall_eval_example_is_safe_and_loadable(self) -> None:
         """Catches a malformed or machine-specific checked-in example."""
