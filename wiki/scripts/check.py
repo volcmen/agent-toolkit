@@ -344,6 +344,10 @@ def validate_memory_operations(operations: Path) -> None:
         "## 7. Derived-only rollback"
     )
     require(rollback_marker, "memory operations omits rollback section")
+    rollback_plan, recovery_marker, recovery = rollback.partition(
+        "### Failed-rollback recovery"
+    )
+    require(recovery_marker, "memory operations omits failed-rollback recovery")
     required_in_order = (
         "## 1. Repository gates",
         "python3 wiki/scripts/check.py",
@@ -398,7 +402,7 @@ def validate_memory_operations(operations: Path) -> None:
     )
     cursor = -1
     for term in rollback_required_in_order:
-        position = rollback.find(term, cursor + 1)
+        position = rollback_plan.find(term, cursor + 1)
         require(
             position >= 0,
             f"memory rollback omits ordered recovery: {term}",
@@ -408,19 +412,86 @@ def validate_memory_operations(operations: Path) -> None:
         "refresh-index --embed" not in rollback,
         "memory rollback must build a fresh index, not incrementally refresh it",
     )
-    normalized_rollback = " ".join(rollback.split())
+    normalized_rollback = " ".join(rollback_plan.split())
     for term in (
         "unique non-overwriting",
         "Never delete or overwrite that backup",
         "global QMD collection YAML unchanged",
-        "newly derived database as evidence",
-        "moving the recorded pre-rollback files back",
-        "proceed without rewriting Markdown and leave the global collection "
-        "YAML and vault configuration untouched",
     ):
         require(
             term.casefold() in normalized_rollback.casefold(),
             f"memory rollback omits recovery boundary: {term}",
+        )
+
+    restore_command = 'cp -p "$qmd_backup_dir/index.sqlite" "$qmd_index"'
+    before_saved_restore, restore_marker, after_saved_restore = recovery.partition(
+        restore_command
+    )
+    require(restore_marker, "memory recovery omits saved database restoration")
+    require(
+        'if [ -f "$qmd_index" ]; then' in before_saved_restore,
+        "memory recovery omits conditional quarantine",
+    )
+    recovery_required_before_restore = (
+        "exact upgraded plugin commit",
+        "QMD 2.8.3",
+        "python3 bun-global-tools/sync.py apply",
+        "python3 scripts/plugins.py install --force",
+        "qmd --version",
+        "python3 bun-global-tools/sync.py check --deep",
+        "python3 scripts/plugins.py status",
+        'qmd_index="${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}/qmd/index.sqlite"',
+        'qmd_backup_dir="/recorded/pre-rollback/backup-directory"',
+        'if [ ! -d "$qmd_backup_dir" ] || [ ! -f "$qmd_backup_dir/index.sqlite" ]; then',
+        'if [ -f "$qmd_index" ]; then',
+        'qmd_failed_backup_dir="$(mktemp -d "${qmd_index}.failed-rollback.XXXXXX")"',
+        'mv "$qmd_index" "$qmd_failed_backup_dir/index.sqlite"',
+        'mv "${qmd_index}-wal" "$qmd_failed_backup_dir/index.sqlite-wal"',
+        'mv "${qmd_index}-shm" "$qmd_failed_backup_dir/index.sqlite-shm"',
+        'elif [ -e "${qmd_index}-wal" ] || [ -e "${qmd_index}-shm" ]; then',
+        'if [ -e "$qmd_index" ] || [ -e "${qmd_index}-wal" ] || [ -e "${qmd_index}-shm" ]; then',
+    )
+    cursor = -1
+    for term in recovery_required_before_restore:
+        position = before_saved_restore.find(term, cursor + 1)
+        require(
+            position >= 0,
+            f"memory recovery omits ordered restoration: {term}",
+        )
+        cursor = position
+
+    recovery_required_after_restore = (
+        'cp -p "$qmd_backup_dir/index.sqlite-wal" "${qmd_index}-wal"',
+        'cp -p "$qmd_backup_dir/index.sqlite-shm" "${qmd_index}-shm"',
+        "qmd status",
+        "qmd doctor",
+        "providers --json",
+        "doctor --json",
+        "audit --json",
+        "evaluate path/to/private-recall-evals.json --json",
+    )
+    cursor = -1
+    for term in recovery_required_after_restore:
+        position = after_saved_restore.find(term, cursor + 1)
+        require(
+            position >= 0,
+            f"memory recovery omits post-restoration proof: {term}",
+        )
+        cursor = position
+
+    normalized_recovery = " ".join(recovery.split())
+    for term in (
+        "early failure before `qmd update` may leave no newly derived database",
+        "pre-rollback QMD 2.8.3 and upgraded plugin state",
+        "before restoring any saved SQLite file",
+        "only when that database exists",
+        "Never delete the pre-rollback or failed-rebuild backup",
+        "proceed without rewriting Markdown and leave the global collection "
+        "YAML and vault configuration untouched",
+    ):
+        require(
+            term.casefold() in normalized_recovery.casefold(),
+            f"memory recovery omits safety boundary: {term}",
         )
 
     for command in ("providers --json", "doctor --json", "audit --json"):

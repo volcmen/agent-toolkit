@@ -86,7 +86,10 @@ non-overwriting backup before downgrade, then restores the prior plugin and
 QMD 2.5.3 pin. `qmd update` followed by `qmd embed` creates a fresh database
 from unchanged global collection YAML; post-rollback QMD, Bun, installed-plugin,
 provider, doctor, audit, and private-evaluation checks must pass. The procedure
-never deletes its backup or rewrites Markdown or configuration.
+never deletes its backup or rewrites Markdown or configuration. If rollback
+fails, recovery restores the recorded upgraded plugin and QMD 2.8.3 runtime
+before the saved database; a failed rebuilt database is quarantined only when
+it exists.
 
 ## Trust boundaries
 

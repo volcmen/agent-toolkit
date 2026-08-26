@@ -92,6 +92,53 @@ class MemoryOperationsContractTests(unittest.TestCase):
             ):
                 MODULE.validate_memory_operations(mutation)
 
+    def test_failed_rollback_recovery_quarantines_only_an_existing_database(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            mutation = Path(temporary) / "memory-operations.md"
+            mutation.write_text(
+                OPERATIONS.read_text(encoding="utf-8").replace(
+                    'if [ -f "$qmd_index" ]; then\n', "", 1
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                MODULE.ValidationError,
+                "memory recovery omits conditional quarantine",
+            ):
+                MODULE.validate_memory_operations(mutation)
+
+    def test_failed_rollback_recovery_restores_runtime_before_saved_database(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            mutation = Path(temporary) / "memory-operations.md"
+            original = OPERATIONS.read_text(encoding="utf-8")
+            marker = "### Failed-rollback recovery"
+            if marker in original:
+                prefix, recovery = original.split(marker, 1)
+                runtime = (
+                    "python3 bun-global-tools/sync.py apply\n"
+                    "python3 scripts/plugins.py install --force\n"
+                )
+                restore = (
+                    'cp -p "$qmd_backup_dir/index.sqlite" "$qmd_index"\n'
+                )
+                recovery = recovery.replace(runtime, "", 1).replace(
+                    restore, restore + runtime, 1
+                )
+                mutated = prefix + marker + recovery
+            else:
+                mutated = original
+            mutation.write_text(mutated, encoding="utf-8")
+            with self.assertRaisesRegex(
+                MODULE.ValidationError,
+                "memory recovery omits ordered restoration: python3 "
+                "bun-global-tools/sync.py apply",
+            ):
+                MODULE.validate_memory_operations(mutation)
+
     def test_installed_package_rejects_an_escaping_relative_link(self) -> None:
         with tempfile.TemporaryDirectory(dir=MODULE.PLUGIN / "skills") as temporary:
             package = Path(temporary)

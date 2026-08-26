@@ -76,12 +76,13 @@ python3 "<plugin-root>/scripts/obsidian_memory.py" \
 
 ## 7. Derived-only rollback
 
-Before changing the plugin source or Bun pin, read the default index path from
-`qmd status` and preserve that exact SQLite database. The only accepted path is
-the default QMD cache path reported by QMD itself. This backup block stops on a
-missing, duplicate, unexpected, or non-file `Index:` value. It creates a
-unique non-overwriting directory beside the database, then moves only that
-database and its matching WAL/SHM sidecars when present:
+Before changing the plugin source or Bun pin, record the exact upgraded plugin
+commit so failed-rollback recovery can restore it. Then read the default index
+path from `qmd status` and preserve that exact SQLite database. The only
+accepted path is the default QMD cache path reported by QMD itself. This backup
+block stops on a missing, duplicate, unexpected, or non-file `Index:` value. It
+creates a unique non-overwriting directory beside the database, then moves only
+that database and its matching WAL/SHM sidecars when present:
 
 ```sh
 (
@@ -143,10 +144,85 @@ python3 "<plugin-root>/scripts/obsidian_memory.py" \
   evaluate path/to/private-recall-evals.json --json
 ```
 
-If any later step fails, stop and retain both the printed pre-rollback backup
-and the newly derived database as evidence. Recovery means first moving the
-failed database and its matching WAL/SHM files into another unique
-non-overwriting backup, then moving the recorded pre-rollback files back to the
-same verified exact paths; never copy over or delete either set. Rollback and
-recovery proceed without rewriting Markdown and leave the global collection
-YAML and vault configuration untouched.
+### Failed-rollback recovery
+
+If any later step fails, stop and retain the printed pre-rollback backup. An
+early failure before `qmd update` may leave no newly derived database, so do not
+create an empty quarantine or attempt to move a database that does not exist.
+First restore the exact upgraded plugin commit recorded before rollback through
+the reviewed Git integration flow and re-pin only `@tobilu/qmd` to QMD 2.8.3.
+The saved database belongs to that pre-rollback QMD 2.8.3 and upgraded plugin
+state. Apply and verify those pre-rollback runtime/plugin states before
+restoring any saved SQLite file:
+
+```sh
+python3 bun-global-tools/sync.py apply
+python3 scripts/plugins.py install --force
+qmd --version
+python3 bun-global-tools/sync.py check --deep
+python3 scripts/plugins.py status
+```
+
+Set `qmd_backup_dir` to the exact directory printed by the backup block. The
+following recovery block rejects a missing saved database or an unexpected
+backup path. It quarantines a failed rebuilt database and its matching
+sidecars only when that database exists; sidecars without a database stop
+recovery. It never overwrites the saved or failed sets:
+
+```sh
+(
+  set -eu
+  qmd_index="${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}/qmd/index.sqlite"
+  qmd_backup_dir="/recorded/pre-rollback/backup-directory"
+  case "$qmd_backup_dir" in
+    "${qmd_index}.pre-rollback."*) ;;
+    *) printf '%s\n' "STOP: unexpected pre-rollback backup path" >&2; exit 1 ;;
+  esac
+  if [ ! -d "$qmd_backup_dir" ] || [ ! -f "$qmd_backup_dir/index.sqlite" ]; then
+    printf '%s\n' "STOP: pre-rollback SQLite backup is missing" >&2
+    exit 1
+  fi
+  if [ -f "$qmd_index" ]; then
+    qmd_failed_backup_dir="$(mktemp -d "${qmd_index}.failed-rollback.XXXXXX")"
+    mv "$qmd_index" "$qmd_failed_backup_dir/index.sqlite"
+    if [ -e "${qmd_index}-wal" ]; then
+      mv "${qmd_index}-wal" "$qmd_failed_backup_dir/index.sqlite-wal"
+    fi
+    if [ -e "${qmd_index}-shm" ]; then
+      mv "${qmd_index}-shm" "$qmd_failed_backup_dir/index.sqlite-shm"
+    fi
+    printf 'Failed rollback QMD backup: %s\n' "$qmd_failed_backup_dir"
+  elif [ -e "${qmd_index}-wal" ] || [ -e "${qmd_index}-shm" ]; then
+    printf '%s\n' "STOP: QMD sidecar exists without its database" >&2
+    exit 1
+  fi
+  if [ -e "$qmd_index" ] || [ -e "${qmd_index}-wal" ] || [ -e "${qmd_index}-shm" ]; then
+    printf '%s\n' "STOP: recovery target already exists" >&2
+    exit 1
+  fi
+  cp -p "$qmd_backup_dir/index.sqlite" "$qmd_index"
+  if [ -f "$qmd_backup_dir/index.sqlite-wal" ]; then
+    cp -p "$qmd_backup_dir/index.sqlite-wal" "${qmd_index}-wal"
+  fi
+  if [ -f "$qmd_backup_dir/index.sqlite-shm" ]; then
+    cp -p "$qmd_backup_dir/index.sqlite-shm" "${qmd_index}-shm"
+  fi
+)
+```
+
+Finally prove the restored database with the restored pre-rollback runtime and
+plugin:
+
+```sh
+qmd status
+qmd doctor
+python3 "<plugin-root>/scripts/obsidian_memory.py" providers --json
+python3 "<plugin-root>/scripts/obsidian_memory.py" doctor --json
+python3 "<plugin-root>/scripts/obsidian_memory.py" audit --json
+python3 "<plugin-root>/scripts/obsidian_memory.py" \
+  evaluate path/to/private-recall-evals.json --json
+```
+
+Never delete the pre-rollback or failed-rebuild backup. Rollback and recovery
+proceed without rewriting Markdown and leave the global collection YAML and
+vault configuration untouched.

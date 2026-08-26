@@ -230,7 +230,10 @@ global collection YAML with `qmd update` followed by `qmd embed`; do not use the
 incremental `refresh-index --embed` command as the rollback rebuild. Finish
 with QMD version/status/doctor, Bun deep state, installed-plugin status, and
 provider/doctor/audit/private-evaluation checks. Never delete the backup or
-rewrite Markdown or configuration.
+rewrite Markdown or configuration. Failed-rollback recovery first restores the
+recorded upgraded plugin and QMD 2.8.3 runtime, quarantines a failed rebuilt
+database only when it exists, and only then restores the saved database and
+matching sidecars.
 
 Enable QMD in the local configuration after creating safe collections:
 
