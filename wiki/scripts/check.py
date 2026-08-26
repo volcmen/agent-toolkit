@@ -203,6 +203,13 @@ def validate_memory_policy() -> None:
             f"recall provider policy omits required control: {term}",
         )
 
+    architecture = (ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    for term in ("exact Markdown files", "source note's directory", "ambiguous"):
+        require(
+            term in architecture,
+            f"architecture omits memory hardening contract: {term}",
+        )
+
     evals = load_json("plugins/obsidian-memory/evals/memory-evals.json")
     require(evals.get("schema_version") == 1, "unsupported memory eval schema")
     cases = evals.get("cases")

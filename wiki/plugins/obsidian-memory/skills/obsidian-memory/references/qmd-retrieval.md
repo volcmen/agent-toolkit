@@ -36,6 +36,9 @@ selection, native fallback, and scope rules.
    result-token estimate, and the configured limit. It hides stale, expired,
    and not-yet-valid notes by default and follows exact `superseded_by` chains.
    Use `--include-stale` only for explicit historical questions.
+   Source-aware supersession routing is provider-independent: links resolve from
+   the source note's directory unless explicitly rooted under an active recall
+   root, and numeric prefixes are never guessed.
 7. Open only the top candidate notes and verify their frontmatter, provenance,
    status, validity, and supersession relationships. Prefer accepted decisions
    and current verified facts over higher-scoring episodes.

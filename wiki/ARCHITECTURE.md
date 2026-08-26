@@ -57,10 +57,19 @@ unconditional source of instructions.
   an isolation boundary that supersession routing also respects.
 - Configured auto-commit paths are checked for dot-private segments before and
   after resolution. Direct, nested, case-variant, and symlink-routed private
-  targets fail before staging. Configured directory roots enumerate changed
-  Markdown files and stage only individually rechecked safe files, including
-  tracked deletions; unlike recall, top-level `inbox` remains commit-eligible so
-  new capture can be preserved.
+  targets fail before staging. Automatic commits enumerate exact Markdown files
+  under configured roots and commit only those literal paths. Unrelated staged
+  changes, dot-prefixed paths, symlink escapes, non-Markdown files, and
+  directory-shaped explicit targets are excluded or rejected before commit
+  creation. `commit --path <vault-relative.md>` is repeatable and exact;
+  omitting `--path` uses the configured safe roots. Configured directory roots
+  stage only individually rechecked safe files, including tracked deletions;
+  unlike recall, top-level `inbox` remains commit-eligible so new capture can
+  be preserved.
+- Supersession links resolve from the source note's directory unless they are
+  explicitly rooted under an active recall root. A bare filename may fall back
+  only to one unique safe match. Missing, ambiguous, cyclic, private,
+  out-of-root, and out-of-scope routes fail closed.
 - QMD is optional and local. Its caches are derived data, scoped collections
   exclude `.raw/`, `.obsidian/`, and untriaged inbox material, and model loading
   never occurs in lifecycle hooks.

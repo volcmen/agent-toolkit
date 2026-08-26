@@ -96,6 +96,17 @@ Memory is progressively disclosed:
 3. **L2 — source notes:** agents open only relevant Markdown files and verify
    provenance before acting.
 
+Automatic commits enumerate exact Markdown files under configured roots and
+commit only those literal paths. Unrelated staged changes, dot-prefixed paths,
+symlink escapes, non-Markdown files, and directory-shaped explicit targets are
+excluded or rejected before commit creation. `commit --path <vault-relative.md>`
+is repeatable and exact; omitting `--path` uses the configured safe roots.
+
+Supersession links resolve from the source note's directory unless they are
+explicitly rooted under an active recall root. A bare filename may fall back
+only to one unique safe match. Missing, ambiguous, cyclic, private,
+out-of-root, and out-of-scope routes fail closed.
+
 The default provider works without setup. Restrict a query to a known project
 when possible:
 
