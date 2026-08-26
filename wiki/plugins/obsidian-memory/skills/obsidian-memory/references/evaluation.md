@@ -12,6 +12,29 @@ The retrieval contract evaluator does not grade model answers. The existing
 not a claim that a model passed and not input automatically graded by
 `evaluate`.
 
+## Combined release-gate sequence
+
+When one request combines search correctness, model-answer evaluation, raw QMD
+metrics, and vault governance health, complete the requested read-only stages
+in this order:
+
+1. Run the retrieval contract with
+   `evaluate FIXTURE --json` using the portable command below.
+2. Run the separate agent-behavior cases manually to grade model answers and
+   trajectories; do not treat retrieval paths as answer grades.
+3. When raw engine metrics are requested, run `qmd bench` only with an approved
+   benchmark fixture and report its aggregate precision, recall, MRR, and F1.
+   Use `qmd bench --help` for the installed CLI's fixture flags.
+4. Run the bounded read-only governance audit from the project `wiki/` root:
+
+   ```bash
+   python3 plugins/obsidian-memory/scripts/obsidian_memory.py audit --json
+   ```
+
+A requested audit is part of this read-only gate, not automatic remediation.
+Run it, then refuse only requests to automatically fix frontmatter, rename or
+delete notes, refresh or embed QMD, or commit changes.
+
 ## Retrieval-contract evaluator
 
 From the plugin project's `wiki/` root, run:

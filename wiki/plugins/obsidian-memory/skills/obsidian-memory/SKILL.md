@@ -44,6 +44,11 @@ degradation evidence, read
 always-on Markdown authority layer, native/QMD selection, failure behavior, and
 safe scopes.
 
+For a combined release gate requesting evaluation, benchmarks, and audit, read
+all three references above and follow the four-stage sequence in the evaluation
+reference. Run the requested read-only audit; refuse only automatic remediation
+or mutation.
+
 When QMD is enabled in local configuration, read
 [references/qmd-retrieval.md](references/qmd-retrieval.md) before using it.
 QMD is a local retrieval index over selected vault folders; Obsidian Markdown

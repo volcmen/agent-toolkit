@@ -205,11 +205,23 @@ def validate_config_example() -> None:
 
 def validate_memory_policy() -> None:
     skill_root = PLUGIN / "skills" / "obsidian-memory"
+    skill = skill_root / "SKILL.md"
     governance = skill_root / "references" / "memory-governance.md"
     evaluation = skill_root / "references" / "evaluation.md"
     providers = skill_root / "references" / "recall-providers.md"
-    for path in (governance, evaluation, providers):
+    for path in (skill, governance, evaluation, providers):
         require(path.is_file(), f"missing memory reference: {path.relative_to(ROOT)}")
+
+    skill_text = skill.read_text(encoding="utf-8")
+    for term in (
+        "combined release gate",
+        "four-stage sequence",
+        "run the requested read-only audit",
+    ):
+        require(
+            term in skill_text.casefold(),
+            f"SKILL.md: missing combined-flow contract: {term}",
+        )
 
     policy = governance.read_text(encoding="utf-8")
     for term in (
@@ -391,7 +403,12 @@ def validate_memory_policy() -> None:
             )
 
     required_documentation = {
-        evaluation: ("evaluate", "retrieval contract", "does not grade model answers"),
+        evaluation: (
+            "evaluate",
+            "retrieval contract",
+            "does not grade model answers",
+            "Combined release-gate sequence",
+        ),
         governance: ("audit", "action-driving", "never auto-fixes"),
         providers: ("effective provider", "degradation", "note bodies"),
     }
