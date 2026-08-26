@@ -311,6 +311,18 @@ def validate_memory_policy() -> None:
             f"architecture omits memory hardening contract: {term}",
         )
 
+    research = (ROOT / "docs" / "research" / "2026-08-01-agent-memory-systems.md").read_text(
+        encoding="utf-8"
+    )
+    for term in (
+        "b2bd1ac63ff137a6287ce989d65dccee6b9155e2",
+        "nine available",
+        "Memori",
+        "source- and contract-level",
+        "not a claim of live end-to-end success",
+    ):
+        require(term in research, f"memory-provider research omits: {term}")
+
     evals = load_json("plugins/obsidian-memory/evals/memory-evals.json")
     require(evals.get("schema_version") == 1, "unsupported memory eval schema")
     cases = evals.get("cases")

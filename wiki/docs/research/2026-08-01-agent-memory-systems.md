@@ -9,12 +9,16 @@ complete current worktrees and inspected at commits `b5d8439c8f1b8aa158f4e827833
 and `c4d2b27c641586e43f212bd8ce3b95ec5be67680`, respectively. Project claims are
 treated as self-reported unless a linked paper supplies evaluation evidence.
 
-The [Hermes Agent repository](https://github.com/NousResearch/hermes-agent) was
-also shallow-cloned and inspected at commit
-`9fc12bf7a4bc232698a14acfb18621523a711ceb`. The review covered its
-`MemoryProvider` contract, `MemoryManager`, provider discovery, failure tests,
-developer guide, and eight-provider comparison rather than relying only on the
-feature page supplied for this task.
+The Hermes Agent repository was shallow-cloned and inspected at revision
+`b2bd1ac63ff137a6287ce989d65dccee6b9155e2`. Its provider contract, manager,
+developer guide, failure containment, and every available provider were checked
+independently. The feature page currently says eight providers while enumerating
+nine. Eight providers are bundled in that revision—ByteRover,
+Hindsight, Holographic, Honcho, Mem0, OpenViking, RetainDB, and Supermemory.
+Memori is delivered separately as `hermes-memori`, making nine available
+choices. The provider modules compiled locally. This was source- and contract-level
+validation, not a claim of live end-to-end success: hosted
+credentials and separate databases/services were deliberately not provisioned.
 
 The existing constraints remain decisive: Markdown and Git are canonical; QMD
 is optional derived retrieval; lifecycle hooks cannot load models; retrieved
@@ -82,9 +86,19 @@ keeps built-in memory active beside at most one external provider. Its source
 formalizes provider lifecycle and capability boundaries, exposes status and
 setup separately, isolates provider failures, limits blocking prefetch, scopes
 state by profile, and keeps provider-specific tools out of the core surface
-until selected. Across Honcho, OpenViking, Mem0, Hindsight, Holographic,
-RetainDB, ByteRover, and Supermemory, the durable insight is the orchestration
-contract rather than any single backend.
+until selected.
+
+| Provider | Verified design surface | Local decision |
+| --- | --- | --- |
+| Honcho | Events/messages, peer representations, session context, hybrid search, dialectic modeling | Do not adopt; social modeling does not replace a canonical wiki and requires added service/LLM infrastructure. |
+| OpenViking | Hierarchical L0/L1/L2 context, filesystem-like organization, vector index, session extraction | Do not adopt; the useful progressive-disclosure pattern is already local and a second hierarchy would split authority. |
+| Mem0 | LLM extraction/deduplication plus vector/entity storage; hosted graph capability | Do not adopt; automatic extraction and a second truth store conflict with explicit admission. |
+| Hindsight | Retain/recall/reflect with semantic, BM25, graph, temporal retrieval and source-backed observations | Defer as the best synthetic-data pilot only after a measured graph/temporal failure. |
+| Holographic | Hermes-local SQLite FTS5, trust scores, optional holographic representations | Do not adopt; duplicates native/QMD and trust scoring is not provenance. |
+| RetainDB | Hosted company/user/session/agent memory with citations and API/MCP | Do not adopt; duplicates the local system and adds content egress. |
+| ByteRover | Local Markdown context tree, curation, daemon, semantic Git, human review | Do not adopt; closest philosophy, but still a second context tree and owner. |
+| Supermemory | Cloud/self-hosted graph memory, local embeddings support, LLM processing | Do not adopt; no measured gap justifies another database/service. |
+| Memori | Completed-turn and tool-execution capture with entity/project attribution | Do not adopt; automatic tool-trace capture has the largest privacy/governance mismatch. |
 
 The local integration had only policy-level fallback: its `recall` command
 failed when QMD was disabled or missing even though the skill advised a manual
@@ -206,4 +220,13 @@ explicit historical query, and a source-note drill-down after retrieval changes.
 - [TencentDB Agent Memory](https://github.com/TencentCloud/TencentDB-Agent-Memory)
 - [Cloud.ru/Habr practitioner article](https://habr.com/ru/companies/cloud_ru/articles/1065290/)
 - [Hermes Agent memory-provider guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers)
-- [Hermes Agent repository](https://github.com/NousResearch/hermes-agent)
+- https://github.com/NousResearch/hermes-agent
+- https://github.com/plastic-labs/honcho
+- https://github.com/volcengine/OpenViking/blob/main/docs/en/concepts/01-architecture.md
+- https://github.com/mem0ai/mem0/blob/main/docs/core-concepts/how-it-works.mdx
+- https://github.com/vectorize-io/hindsight
+- https://www.retaindb.com/docs/intro
+- https://docs.byterover.dev/reference/cli-reference
+- https://github.com/supermemoryai/supermemory/blob/main/apps/docs/self-hosting/quickstart.mdx
+- https://github.com/MemoriLabs/Memori/blob/main/docs/memori-cloud/hermes/quickstart.mdx
+- https://github.com/tobi/qmd
