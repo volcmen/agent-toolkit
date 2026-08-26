@@ -4880,6 +4880,30 @@ Prior: old unrelated outcome.
             },
         )
 
+    def test_qmd_status_reports_real_commit_suffixed_version(self) -> None:
+        """Catches rejection of QMD's bounded commit-suffixed version output."""
+        config = {
+            "qmd_enabled": True,
+            "qmd_collections": ["obsidian-wiki"],
+        }
+        version = subprocess.CompletedProcess(
+            ["qmd", "--version"], 0, stdout="qmd 2.8.3 (facd35e)\n", stderr=""
+        )
+        status = subprocess.CompletedProcess(
+            ["qmd", "status"], 0, stdout="healthy\n", stderr=""
+        )
+        with (
+            mock.patch.object(MODULE.shutil, "which", return_value="/tmp/qmd"),
+            mock.patch.object(
+                MODULE.subprocess, "run", side_effect=[version, status]
+            ),
+        ):
+            report = MODULE.qmd_status(config)
+
+        self.assertEqual(report["version"], "qmd 2.8.3 (facd35e)")
+        self.assertLessEqual(len(report["version"]), 120)
+        self.assertTrue(report["healthy"])
+
     def test_audit_maps_every_supersession_issue_and_accepts_a_safe_successor(
         self,
     ) -> None:

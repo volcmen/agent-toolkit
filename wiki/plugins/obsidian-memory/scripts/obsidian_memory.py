@@ -25,6 +25,8 @@ QMD_VERSION_RE = re.compile(
     r"qmd (?:0|[1-9][0-9]{0,9})\."
     r"(?:0|[1-9][0-9]{0,9})\."
     r"(?:0|[1-9][0-9]{0,9})"
+    # QMD may append a short or full Git commit: one bounded lowercase hex ID.
+    r"(?: \([0-9a-f]{7,40}\))?"
 )
 DEFAULTS: dict[str, Any] = {
     "context_profile": "focused",
