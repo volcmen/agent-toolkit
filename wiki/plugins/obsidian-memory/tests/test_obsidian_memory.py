@@ -1110,6 +1110,190 @@ Prior: old unrelated outcome.
             ).stdout
             self.assertIn(".obsidian/", status)
 
+    def test_auto_commit_rejects_private_configured_paths_before_staging(self) -> None:
+        hostile_paths = [
+            ".raw",
+            ".obsidian",
+            ".git",
+            "projects/factorio-bot/.raw",
+            "projects/factorio-bot/.ObSiDiAn",
+        ]
+        for hostile in hostile_paths:
+            with self.subTest(hostile=hostile), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                vault = self.make_vault(root)
+                (vault / "wiki" / "log.md").write_text("before\n", encoding="utf-8")
+                private_target = vault / hostile / "secret.md"
+                if hostile == ".git":
+                    private_target = vault / ".git" / "private-memory"
+                else:
+                    private_target.parent.mkdir(parents=True, exist_ok=True)
+                    private_target.write_text("before\n", encoding="utf-8")
+                subprocess.run(["git", "init", "-q", str(vault)], check=True)
+                subprocess.run(
+                    ["git", "-C", str(vault), "config", "user.name", "Test"], check=True
+                )
+                subprocess.run(
+                    ["git", "-C", str(vault), "config", "user.email", "test@example.com"],
+                    check=True,
+                )
+                subprocess.run(["git", "-C", str(vault), "add", "."], check=True)
+                subprocess.run(["git", "-C", str(vault), "commit", "-qm", "initial"], check=True)
+
+                (vault / "wiki" / "log.md").write_text("allowed change\n", encoding="utf-8")
+                private_target.write_text("private change\n", encoding="utf-8")
+                config_path = self.write_config(
+                    root,
+                    vault,
+                    auto_commit=True,
+                    commit_paths=["wiki/log.md", hostile],
+                )
+                with mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ):
+                    config, _ = MODULE.load_config()
+                before = subprocess.run(
+                    ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout
+
+                ok, detail = MODULE.safe_commit_paths(config, config_path)
+
+                after = subprocess.run(
+                    ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout
+                staged = subprocess.run(
+                    ["git", "-C", str(vault), "diff", "--cached", "--name-only"],
+                    text=True,
+                    capture_output=True,
+                    check=True,
+                ).stdout
+                self.assertFalse(ok)
+                self.assertIn(hostile, detail)
+                self.assertEqual(before, after)
+                self.assertEqual(staged, "")
+
+    def test_auto_commit_rejects_symlink_to_private_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            (vault / "wiki" / "log.md").write_text("before\n", encoding="utf-8")
+            (vault / ".raw").mkdir()
+            (vault / ".raw" / "secret.md").write_text("before\n", encoding="utf-8")
+            os.symlink("../.raw", vault / "wiki" / "private-link")
+            subprocess.run(["git", "init", "-q", str(vault)], check=True)
+            subprocess.run(
+                ["git", "-C", str(vault), "config", "user.name", "Test"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(vault), "config", "user.email", "test@example.com"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(vault), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(vault), "commit", "-qm", "initial"], check=True)
+
+            (vault / "wiki" / "log.md").write_text("allowed change\n", encoding="utf-8")
+            (vault / ".raw" / "secret.md").write_text("private change\n", encoding="utf-8")
+            config_path = self.write_config(
+                root,
+                vault,
+                auto_commit=True,
+                commit_paths=["wiki/log.md", "wiki/private-link"],
+            )
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            before = subprocess.run(
+                ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+
+            ok, detail = MODULE.safe_commit_paths(config, config_path)
+
+            after = subprocess.run(
+                ["git", "-C", str(vault), "rev-parse", "HEAD"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            staged = subprocess.run(
+                ["git", "-C", str(vault), "diff", "--cached", "--name-only"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            self.assertFalse(ok)
+            self.assertIn("wiki/private-link", detail)
+            self.assertEqual(before, after)
+            self.assertEqual(staged, "")
+
+    def test_auto_commit_accepts_exact_public_markdown_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            readme = vault / "projects" / "factorio-bot" / "README.md"
+            readme.parent.mkdir(parents=True)
+            readme.write_text("before\n", encoding="utf-8")
+            log = vault / "wiki" / "log.md"
+            log.write_text("before\n", encoding="utf-8")
+            workspace = vault / ".obsidian" / "workspace.json"
+            workspace.write_text("before\n", encoding="utf-8")
+            subprocess.run(["git", "init", "-q", str(vault)], check=True)
+            subprocess.run(
+                ["git", "-C", str(vault), "config", "user.name", "Test"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(vault), "config", "user.email", "test@example.com"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(vault), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(vault), "commit", "-qm", "initial"], check=True)
+
+            readme.write_text("readme change\n", encoding="utf-8")
+            log.write_text("log change\n", encoding="utf-8")
+            workspace.write_text("private change\n", encoding="utf-8")
+            config_path = self.write_config(
+                root,
+                vault,
+                auto_commit=True,
+                commit_paths=["projects/factorio-bot/README.md", "wiki/log.md"],
+            )
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+
+            ok, detail = MODULE.safe_commit_paths(config, config_path)
+
+            committed = subprocess.run(
+                ["git", "-C", str(vault), "show", "--name-only", "--format="],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout.splitlines()
+            staged = subprocess.run(
+                ["git", "-C", str(vault), "diff", "--cached", "--name-only"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            status = subprocess.run(
+                ["git", "-C", str(vault), "status", "--porcelain", "--", ".obsidian"],
+                text=True,
+                capture_output=True,
+                check=True,
+            ).stdout
+            self.assertTrue(ok, detail)
+            self.assertEqual(
+                committed, ["projects/factorio-bot/README.md", "wiki/log.md"]
+            )
+            self.assertEqual(staged, "")
+            self.assertIn(" .obsidian/workspace.json", status)
+
 
 if __name__ == "__main__":
     unittest.main()
