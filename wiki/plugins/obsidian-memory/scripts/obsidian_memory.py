@@ -60,6 +60,7 @@ MAX_RECALL_EVAL_CASES = 200
 MAX_RECALL_EVAL_FIXTURE_CHARS = 1_000_000
 MAX_RECALL_EVAL_RESULT_PATHS = 20
 MAX_AUDIT_FINDINGS = 200
+MAX_AUDIT_HUMAN_PATH_CHARS = 180
 
 
 class ConfigurationError(RuntimeError):
@@ -1404,6 +1405,23 @@ def audit_vault(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def format_audit_human_path(value: str) -> str:
+    """Return one bounded ASCII display string without changing report data."""
+    encoded = json.dumps(value, ensure_ascii=True)[1:-1]
+    if len(encoded) <= MAX_AUDIT_HUMAN_PATH_CHARS:
+        return encoded
+    parts: list[str] = []
+    length = 0
+    content_limit = MAX_AUDIT_HUMAN_PATH_CHARS - 3
+    for character in value:
+        escaped = json.dumps(character, ensure_ascii=True)[1:-1]
+        if length + len(escaped) > content_limit:
+            return "".join(parts) + "..."
+        parts.append(escaped)
+        length += len(escaped)
+    return "".join(parts)
+
+
 def audit(as_json: bool) -> int:
     """Run the manual read-only governance audit with sanitized failures."""
     try:
@@ -1431,8 +1449,9 @@ def audit(as_json: bool) -> int:
         )
         for finding in report["findings"]:
             field = f" field={finding['field']}" if finding.get("field") else ""
+            path_display = format_audit_human_path(finding["path"])
             print(
-                f"{finding['severity']} {finding['code']} {finding['path']}"
+                f"{finding['severity']} {finding['code']} {path_display}"
                 f"{field}: {finding['detail']}"
             )
     return 0 if report["ok"] else 1

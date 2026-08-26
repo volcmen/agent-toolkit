@@ -4371,6 +4371,111 @@ Prior: old unrelated outcome.
         ):
             self.assertNotIn(secret, all_output)
 
+    def test_audit_cli_escapes_and_bounds_only_the_human_path_display(self) -> None:
+        """Catches control-character line forging and unbounded terminal paths."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = root / "vault"
+            (vault / "wiki").mkdir(parents=True)
+            document = (
+                "---\n"
+                "memory_class: PRIVATE CLASS VALUE\n"
+                "---\n"
+                "PRIVATE NOTE BODY VALUE\n"
+            )
+            long_name = f"long-{'x' * 230}.md"
+            requested_names = (
+                "carriage\rreturn.md",
+                "escape\x1b[31mred.md",
+                "line\nbreak.md",
+                long_name,
+                "tab\tname.md",
+            )
+            created_names: list[str] = []
+            for name in requested_names:
+                try:
+                    (vault / "wiki" / name).write_text(document, encoding="utf-8")
+                except OSError:
+                    if name == long_name:
+                        raise
+                else:
+                    created_names.append(name)
+            if os.name == "posix":
+                self.assertEqual(created_names, list(requested_names))
+
+            config_path = self.write_config(root, vault, recall_roots=["wiki"])
+            env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            human = subprocess.run(
+                [sys.executable, str(SCRIPT), "audit"],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            machine = subprocess.run(
+                [sys.executable, str(SCRIPT), "audit", "--json"],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(human.returncode, 0, human.stderr)
+        self.assertEqual(machine.returncode, 0, machine.stderr)
+        human_lines = human.stdout.splitlines()
+        self.assertEqual(
+            human_lines[0],
+            f"audit: ok=true files={len(created_names)} errors=0 "
+            f"warnings={len(created_names)} truncated=false",
+        )
+        self.assertEqual(len(human_lines), len(created_names) + 1)
+        for character in human.stdout:
+            if character != "\n":
+                codepoint = ord(character)
+                self.assertFalse(codepoint < 32 or 127 <= codepoint <= 159)
+        self.assertNotIn("\x1b[", human.stdout)
+
+        prefix = "warning unknown-memory-class "
+        suffix = (
+            " field=memory_class: "
+            "memory_class is not recognized by the governance audit"
+        )
+        displays: set[str] = set()
+        for line in human_lines[1:]:
+            self.assertTrue(line.startswith(prefix), line)
+            self.assertTrue(line.endswith(suffix), line)
+            display = line[len(prefix) : -len(suffix)]
+            self.assertLessEqual(len(display), 180)
+            displays.add(display)
+
+        escaped_displays = {
+            "carriage\rreturn.md": "wiki/carriage\\rreturn.md",
+            "escape\x1b[31mred.md": "wiki/escape\\u001b[31mred.md",
+            "line\nbreak.md": "wiki/line\\nbreak.md",
+            "tab\tname.md": "wiki/tab\\tname.md",
+        }
+        expected_displays = {
+            escaped_displays[name]
+            for name in created_names
+            if name in escaped_displays
+        }
+        long_relative = f"wiki/{long_name}"
+        expected_displays.add(f"{long_relative[:177]}...")
+        self.assertEqual(displays, expected_displays)
+
+        machine_report = json.loads(machine.stdout)
+        self.assertCountEqual(
+            [finding["path"] for finding in machine_report["findings"]],
+            [f"wiki/{name}" for name in created_names],
+        )
+        self.assertIn(
+            long_relative,
+            [item["path"] for item in machine_report["findings"]],
+        )
+        combined = human.stdout + human.stderr + machine.stdout + machine.stderr
+        for secret in ("PRIVATE CLASS VALUE", "PRIVATE NOTE BODY VALUE"):
+            self.assertNotIn(secret, combined)
+
 
 if __name__ == "__main__":
     unittest.main()
