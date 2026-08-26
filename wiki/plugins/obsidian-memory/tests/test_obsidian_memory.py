@@ -687,6 +687,144 @@ Prior: old unrelated outcome.
             self.assertIsNone(result.path)
             self.assertEqual(result.issue, "missing")
 
+    def test_vault_reference_detailed_reports_unsafe_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            result = MODULE.resolve_vault_reference_detailed(
+                config,
+                ".git/config",
+                allowed_roots=["wiki"],
+            )
+            self.assertIsNone(result.path)
+            self.assertEqual(result.issue, "unsafe")
+
+    def test_vault_reference_detailed_reports_out_of_root_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            target = vault / "projects" / "alpha" / "current.md"
+            target.write_text("current", encoding="utf-8")
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            result = MODULE.resolve_vault_reference_detailed(
+                config,
+                "projects/alpha/current",
+                allowed_roots=["wiki"],
+            )
+            self.assertIsNone(result.path)
+            self.assertEqual(result.issue, "out-of-root")
+
+    def test_vault_reference_detailed_reports_non_markdown_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            (vault / "wiki" / "notes.txt").write_text("plain", encoding="utf-8")
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            result = MODULE.resolve_vault_reference_detailed(
+                config,
+                "wiki/notes.txt",
+                allowed_roots=["wiki"],
+            )
+            self.assertIsNone(result.path)
+            self.assertEqual(result.issue, "non-markdown")
+
+    def test_vault_reference_reports_excluded_configured_root_as_out_of_root(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            source = vault / "wiki" / "old.md"
+            target = vault / "projects" / "alpha" / "new.md"
+            source.write_text("old", encoding="utf-8")
+            target.write_text("new", encoding="utf-8")
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            result = MODULE.resolve_vault_reference_detailed(
+                config,
+                "projects/alpha/new",
+                source_path=source,
+                allowed_roots=["wiki"],
+            )
+            self.assertIsNone(result.path)
+            self.assertEqual(result.issue, "out-of-root")
+
+    def test_vault_reference_rejects_safe_root_symlink_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            target = vault / "projects" / "alpha" / "new.md"
+            target.write_text("new", encoding="utf-8")
+            os.symlink(target, vault / "wiki" / "link.md")
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            result = MODULE.resolve_vault_reference_detailed(
+                config,
+                "wiki/link",
+                allowed_roots=["wiki"],
+            )
+            self.assertIsNone(result.path)
+            self.assertEqual(result.issue, "unsafe")
+
+    def test_vault_reference_rejects_allowed_root_symlink_during_fallback(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            source = vault / "wiki" / "old.md"
+            source.write_text("old", encoding="utf-8")
+            target_root = vault / "projects" / "alpha"
+            (target_root / "current.md").write_text("current", encoding="utf-8")
+            os.symlink(target_root, vault / "alias")
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_roots=["wiki", "alias"],
+            )
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            result = MODULE.resolve_vault_reference_detailed(
+                config,
+                "current",
+                source_path=source,
+                allowed_roots=["alias"],
+            )
+            self.assertIsNone(result.path)
+            self.assertEqual(result.issue, "unsafe")
+
+    def test_vault_reference_fails_closed_on_nul_and_resolve_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            nul_result = MODULE.resolve_vault_reference_detailed(
+                config,
+                "wiki/\0.md",
+                allowed_roots=["wiki"],
+            )
+            self.assertIsNone(nul_result.path)
+            self.assertEqual(nul_result.issue, "unsafe")
+            with mock.patch.object(MODULE.Path, "resolve", side_effect=RuntimeError("loop")):
+                error_result = MODULE.resolve_vault_reference_detailed(
+                    config,
+                    "wiki/hot",
+                    allowed_roots=["wiki"],
+                )
+            self.assertIsNone(error_result.path)
+            self.assertEqual(error_result.issue, "unsafe")
+
     def test_private_paths_survive_case_and_symlink_variants(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

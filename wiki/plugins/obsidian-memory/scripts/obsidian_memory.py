@@ -987,15 +987,61 @@ def resolve_vault_reference_detailed(
             return VaultReferenceResult(None, None, "unsafe")
         roots.append(root.as_posix())
 
-    vault = Path(config["vault"]).resolve()
+    configured_roots: list[str] = []
+    for value in config["recall_roots"]:
+        root = PurePosixPath(value)
+        if (
+            not root.parts
+            or root.is_absolute()
+            or ".." in root.parts
+            or not safe_recall_parts(root.parts)
+        ):
+            return VaultReferenceResult(None, None, "unsafe")
+        configured_roots.append(root.as_posix())
+
+    try:
+        vault = Path(config["vault"]).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return VaultReferenceResult(None, None, "unsafe")
+
+    root_paths: list[Path] = []
+    for root_name in roots:
+        root = vault / PurePosixPath(root_name)
+        try:
+            resolved_root = root.resolve()
+            resolved_root.relative_to(vault)
+        except (OSError, RuntimeError, ValueError):
+            return VaultReferenceResult(None, None, "unsafe")
+        if resolved_root != root:
+            return VaultReferenceResult(None, None, "unsafe")
+        root_paths.append(root)
+
+    def is_within(path: Path, root: Path) -> bool:
+        try:
+            path.relative_to(root)
+        except ValueError:
+            return False
+        return True
 
     def detailed_candidate(candidate: Path) -> VaultReferenceResult:
-        resolved = candidate.resolve()
         try:
+            lexical = candidate.absolute()
+            lexical_relative = lexical.relative_to(vault).as_posix()
+        except (OSError, RuntimeError, ValueError):
+            return VaultReferenceResult(None, None, "unsafe")
+        if not safe_recall_parts(PurePosixPath(lexical_relative).parts):
+            return VaultReferenceResult(None, None, "unsafe")
+        candidate_roots = [root for root in root_paths if is_within(lexical, root)]
+        if not candidate_roots:
+            return VaultReferenceResult(None, None, "out-of-root")
+        try:
+            resolved = lexical.resolve()
             vault_relative = resolved.relative_to(vault).as_posix()
-        except ValueError:
+        except (OSError, RuntimeError, ValueError):
             return VaultReferenceResult(None, None, "unsafe")
         if not safe_recall_parts(PurePosixPath(vault_relative).parts):
+            return VaultReferenceResult(None, None, "unsafe")
+        if not any(is_within(resolved, root) for root in candidate_roots):
             return VaultReferenceResult(None, None, "unsafe")
         if not resolved.is_file():
             return VaultReferenceResult(None, None, "missing")
@@ -1012,10 +1058,17 @@ def resolve_vault_reference_detailed(
     if source_path is None:
         return detailed_candidate(target_from(vault))
 
+    if path_within_roots(relative.as_posix(), configured_roots):
+        return detailed_candidate(target_from(vault))
+
     if path_within_roots(relative.as_posix(), roots):
         return detailed_candidate(target_from(vault))
 
-    source_result = detailed_candidate(target_from(source_path.parent))
+    try:
+        source_directory = source_path.resolve().parent
+    except (OSError, RuntimeError, ValueError):
+        return VaultReferenceResult(None, None, "unsafe")
+    source_result = detailed_candidate(target_from(source_directory))
     if source_result.issue != "missing":
         return source_result
     if len(relative.parts) != 1:
@@ -1023,14 +1076,7 @@ def resolve_vault_reference_detailed(
 
     filename = target_from(Path()).name.casefold()
     matches: dict[Path, VaultReferenceResult] = {}
-    for root_name in roots:
-        root = (vault / PurePosixPath(root_name)).resolve()
-        try:
-            root_relative = root.relative_to(vault).as_posix()
-        except ValueError:
-            return VaultReferenceResult(None, None, "unsafe")
-        if not safe_recall_parts(PurePosixPath(root_relative).parts):
-            return VaultReferenceResult(None, None, "unsafe")
+    for root in root_paths:
         for directory, directories, filenames in os.walk(root, followlinks=False):
             directories[:] = [
                 name for name in directories if not name.casefold().startswith(".")
