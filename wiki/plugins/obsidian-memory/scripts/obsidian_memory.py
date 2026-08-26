@@ -996,8 +996,15 @@ def resolve_vault_reference_detailed(
             return VaultReferenceResult(None, None, "unsafe")
         roots.append(root.as_posix())
 
+    # Explicit vault-root-qualified references may name a canonical native
+    # recall root or a configured QMD collection root. Recognition here does
+    # not grant access: `roots` above remains the caller's active boundary.
     configured_roots: list[str] = []
-    for value in config["recall_roots"]:
+    configured_root_values = [
+        *config["recall_roots"],
+        *config["qmd_collection_roots"].values(),
+    ]
+    for value in configured_root_values:
         root = PurePosixPath(value)
         if (
             not root.parts
@@ -1006,7 +1013,9 @@ def resolve_vault_reference_detailed(
             or not safe_recall_parts(root.parts)
         ):
             return VaultReferenceResult(None, None, "unsafe")
-        configured_roots.append(root.as_posix())
+        normalized_root = root.as_posix()
+        if normalized_root not in configured_roots:
+            configured_roots.append(normalized_root)
 
     try:
         vault = Path(config["vault"]).resolve()

@@ -996,6 +996,15 @@ Prior: old unrelated outcome.
             ):
                 config, _ = MODULE.load_config()
 
+            out_of_root = MODULE.follow_supersession_chain(
+                config,
+                source_path=vault / "wiki" / "old.md",
+                source_relative="wiki/old.md",
+                metadata=MODULE.parse_frontmatter(vault / "wiki" / "old.md"),
+                allowed_roots=["wiki"],
+            )
+            self.assertEqual(out_of_root.issue, "out-of-root")
+
             escaped, filtered = MODULE.compact_recall_results(
                 config,
                 [{"path": "wiki/old.md", "snippet": "decision"}],
@@ -1014,6 +1023,30 @@ Prior: old unrelated outcome.
                 include_stale=False,
             )
             self.assertEqual([hit["path"] for hit in contained], ["wiki/fresh.md"])
+
+    def test_vault_reference_recognizes_configured_qmd_roots_outside_allowed_roots(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            source = vault / "wiki" / "old.md"
+            target = vault / "projects" / "alpha" / "new.md"
+            source.write_text("old", encoding="utf-8")
+            target.write_text("new", encoding="utf-8")
+            config_path = self.write_config(root, vault, recall_roots=["wiki"])
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+            result = MODULE.resolve_vault_reference_detailed(
+                config,
+                "projects/alpha/new.md",
+                source_path=source,
+                allowed_roots=["wiki"],
+            )
+            self.assertIsNone(result.path)
+            self.assertEqual(result.issue, "out-of-root")
 
     def test_qmd_uri_resolution_survives_normalized_path_segments(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
