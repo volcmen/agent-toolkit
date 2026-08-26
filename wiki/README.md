@@ -48,6 +48,15 @@ to preserve the current personal behavior. When enabled, only `wiki/`,
 `projects/`, `daily/`, and `inbox/` are committed; `.obsidian/`, `.raw/`, and
 unrelated paths remain untouched.
 
+For an explicit, one-off commit of exactly selected Markdown notes, repeat
+`--path`; the Stop hook remains driven only by configured commit paths:
+
+```bash
+python3 plugins/obsidian-memory/scripts/obsidian_memory.py commit \
+  --path wiki/hot.md \
+  --path projects/acme/decision.md
+```
+
 Start new Claude Code and Codex threads after installation.
 
 ## Validate

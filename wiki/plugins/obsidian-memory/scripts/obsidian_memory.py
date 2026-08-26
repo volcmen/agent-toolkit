@@ -535,22 +535,32 @@ def run_git(vault: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def safe_commit_paths(config: dict[str, Any], config_file: Path) -> tuple[bool, str]:
+def safe_commit_paths(
+    config: dict[str, Any], config_file: Path, raw_path_override: list[str] | None = None
+) -> tuple[bool, str]:
     vault: Path = config["vault"]
     if shutil.which("git") is None or not (vault / ".git").exists():
         return False, "vault is not a Git repository or git is unavailable"
 
-    raw_paths = config.get("commit_paths", DEFAULTS["commit_paths"])
+    raw_paths = (
+        raw_path_override
+        if raw_path_override is not None
+        else config.get("commit_paths", DEFAULTS["commit_paths"])
+    )
     if not isinstance(raw_paths, list):
         return False, "commit_paths must be an array"
 
+    override_paths = raw_path_override is not None
     allowed: list[str] = []
     for value in raw_paths:
         if not isinstance(value, str):
             continue
-        relative = Path(value)
+        normalized = Path(value).as_posix()
+        if override_paths and normalized in allowed:
+            return False, f"duplicate explicit commit path: {value!r}"
+        relative = Path(normalized)
         if (
-            not value.strip()
+            not normalized.strip()
             or not relative.parts
             or relative.is_absolute()
             or ".." in relative.parts
@@ -558,6 +568,8 @@ def safe_commit_paths(config: dict[str, Any], config_file: Path) -> tuple[bool, 
             return False, f"unsafe commit path in {config_file}: {value!r}"
         if has_private_vault_segment(relative.parts):
             return False, f"private commit path in {config_file}: {value!r}"
+        if override_paths and not value.endswith(".md"):
+            return False, f"explicit commit path must be Markdown: {value!r}"
         candidate = (vault / relative).resolve()
         try:
             resolved_relative = candidate.relative_to(vault)
@@ -565,7 +577,9 @@ def safe_commit_paths(config: dict[str, Any], config_file: Path) -> tuple[bool, 
             return False, f"commit path escapes vault: {value!r}"
         if has_private_vault_segment(resolved_relative.parts):
             return False, f"private commit path in {config_file}: {value!r}"
-        allowed.append(relative.as_posix())
+        if override_paths and not resolved_relative.as_posix().endswith(".md"):
+            return False, f"explicit commit path must resolve to Markdown: {value!r}"
+        allowed.append(normalized)
     if not allowed:
         return True, "no usable commit paths are configured"
 
@@ -661,13 +675,13 @@ def stop_hook() -> int:
     return 0
 
 
-def explicit_commit() -> int:
+def explicit_commit(paths: list[str] | None = None) -> int:
     try:
         config, path = load_config()
     except ConfigurationError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    ok, detail = safe_commit_paths(config, path)
+    ok, detail = safe_commit_paths(config, path, paths)
     stream = sys.stdout if ok else sys.stderr
     print(detail, file=stream)
     return 0 if ok else 1
@@ -1767,7 +1781,16 @@ def parse_args() -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("session-start", help="Emit bounded context for a SessionStart hook")
     subparsers.add_parser("stop", help="Run the non-blocking Stop hook")
-    subparsers.add_parser("commit", help="Commit configured vault paths explicitly")
+    commit_parser = subparsers.add_parser(
+        "commit", help="Commit configured vault paths explicitly"
+    )
+    commit_parser.add_argument(
+        "--path",
+        action="append",
+        dest="paths",
+        metavar="VAULT_RELATIVE_MARKDOWN",
+        help="Commit one exact vault-relative Markdown path; repeat for multiple paths",
+    )
     recall_parser = subparsers.add_parser(
         "recall", help="Search memory through the configured recall provider"
     )
@@ -1825,7 +1848,7 @@ def main() -> int:
     if args.command == "stop":
         return stop_hook()
     if args.command == "commit":
-        return explicit_commit()
+        return explicit_commit(args.paths)
     if args.command == "recall":
         return recall(
             args.query,
