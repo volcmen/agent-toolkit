@@ -55,6 +55,10 @@ unconditional source of instructions.
   case variant, a symlink, nor a `superseded_by` pointer at repository state
   such as `.git/config` can route private content into recall output. A scope is
   an isolation boundary that supersession routing also respects.
+- Configured auto-commit paths are checked for dot-private segments before and
+  after resolution. Direct, nested, case-variant, and symlink-routed private
+  targets fail before staging; unlike recall, top-level `inbox` remains
+  commit-eligible so new capture can be preserved.
 - QMD is optional and local. Its caches are derived data, scoped collections
   exclude `.raw/`, `.obsidian/`, and untriaged inbox material, and model loading
   never occurs in lifecycle hooks.

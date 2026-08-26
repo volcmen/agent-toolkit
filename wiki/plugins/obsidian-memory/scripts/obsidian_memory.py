@@ -60,6 +60,10 @@ class ConfigurationError(RuntimeError):
     """Raised when the local vault configuration is unusable."""
 
 
+def has_private_vault_segment(parts: tuple[str, ...]) -> bool:
+    return any(part.casefold().startswith(".") for part in parts)
+
+
 def safe_recall_parts(parts: tuple[str, ...]) -> bool:
     """Keep private/derived vault areas outside every recall-provider path.
 
@@ -70,11 +74,7 @@ def safe_recall_parts(parts: tuple[str, ...]) -> bool:
     """
     if not parts:
         return False
-    for index, part in enumerate(parts):
-        folded = part.casefold()
-        if folded.startswith(".") or (index == 0 and folded == "inbox"):
-            return False
-    return True
+    return not has_private_vault_segment(parts) and parts[0].casefold() != "inbox"
 
 
 def config_path() -> Path:
@@ -546,16 +546,25 @@ def safe_commit_paths(config: dict[str, Any], config_file: Path) -> tuple[bool, 
 
     allowed: list[str] = []
     for value in raw_paths:
-        if not isinstance(value, str) or not value.strip():
+        if not isinstance(value, str):
             continue
         relative = Path(value)
-        if relative.is_absolute() or ".." in relative.parts:
+        if (
+            not value.strip()
+            or not relative.parts
+            or relative.is_absolute()
+            or ".." in relative.parts
+        ):
             return False, f"unsafe commit path in {config_file}: {value!r}"
+        if has_private_vault_segment(relative.parts):
+            return False, f"private commit path in {config_file}: {value!r}"
         candidate = (vault / relative).resolve()
         try:
-            candidate.relative_to(vault)
+            resolved_relative = candidate.relative_to(vault)
         except ValueError:
             return False, f"commit path escapes vault: {value!r}"
+        if has_private_vault_segment(resolved_relative.parts):
+            return False, f"private commit path in {config_file}: {value!r}"
         allowed.append(relative.as_posix())
     if not allowed:
         return True, "no usable commit paths are configured"
