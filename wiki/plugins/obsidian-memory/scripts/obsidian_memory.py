@@ -580,8 +580,21 @@ def safe_commit_paths(
             return False, f"private commit path in {config_file}: {value!r}"
         if override_paths and not resolved_relative.as_posix().endswith(".md"):
             return False, f"explicit commit path must resolve to Markdown: {value!r}"
-        if override_paths and candidate.exists() and not candidate.is_file():
-            return False, f"explicit commit path must be a file: {value!r}"
+        if override_paths:
+            if candidate.exists():
+                if not candidate.is_file():
+                    return False, f"explicit commit path must be a file: {value!r}"
+            else:
+                tracked = run_git(vault, ["ls-files", "-z", "--", normalized])
+                if tracked.returncode != 0:
+                    return False, clipped_line(
+                        tracked.stderr or "git ls-files failed", 500
+                    )
+                if tracked.stdout != f"{normalized}\0":
+                    return False, (
+                        "absent explicit commit path must be an exact tracked "
+                        f"Markdown file: {value!r}"
+                    )
         allowed.append(normalized)
         allowed_roots.append(relative)
     if not allowed:
