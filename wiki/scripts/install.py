@@ -238,6 +238,56 @@ def configure(vault: Path, auto_commit: bool, replace: bool) -> None:
     print(f"wrote local configuration: {CONFIG}")
 
 
+def read_existing_config() -> dict[str, Any]:
+    if not CONFIG.is_file():
+        raise RuntimeError(f"configuration not found: {CONFIG}")
+    try:
+        payload = json.loads(CONFIG.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"configuration is invalid: {CONFIG}") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("vault"), str):
+        raise RuntimeError(f"configuration is invalid: {CONFIG}")
+    return payload
+
+
+def guidance_status() -> dict[str, Any]:
+    if not CONFIG.is_file():
+        return {
+            "configured": False,
+            "ok": True,
+            "claude": "not-configured",
+            "codex": "not-configured",
+        }
+    read_existing_config()
+
+    if CLAUDE_POLICY.is_symlink() and CLAUDE_POLICY.resolve() == POLICY.resolve():
+        claude = "current"
+    elif CLAUDE_POLICY.exists() or CLAUDE_POLICY.is_symlink():
+        claude = "stale"
+    else:
+        claude = "missing"
+
+    codex = "missing"
+    if CODEX_POLICY.exists() or CODEX_POLICY.is_symlink():
+        if not CODEX_POLICY.is_file() or CODEX_POLICY.is_symlink():
+            codex = "stale"
+        else:
+            existing = CODEX_POLICY.read_text(encoding="utf-8")
+            start_count = existing.count(CODEX_POLICY_START)
+            end_count = existing.count(CODEX_POLICY_END)
+            if start_count != end_count or start_count > 1:
+                codex = "malformed"
+            elif start_count == 1:
+                codex = "current" if codex_policy_block() in existing else "stale"
+
+    return {
+        "configured": True,
+        "ok": claude == "current" and codex == "current",
+        "claude": claude,
+        "codex": codex,
+    }
+
+
 def is_legacy_group(group: Any) -> bool:
     if not isinstance(group, dict):
         return False
@@ -308,7 +358,15 @@ def install_products() -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--vault", required=True, type=Path)
+    modes = parser.add_mutually_exclusive_group(required=True)
+    modes.add_argument("--vault", type=Path, help="configure an Obsidian vault")
+    modes.add_argument(
+        "--reuse-config",
+        action="store_true",
+        help="reuse local configuration and refresh global guidance",
+    )
+    modes.add_argument("--status", action="store_true", help="inspect guidance health")
+    parser.add_argument("--json", action="store_true", help="emit status as JSON")
     parser.add_argument(
         "--auto-commit",
         action=argparse.BooleanOptionalAction,
@@ -320,14 +378,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--keep-legacy-hooks", action="store_true")
     parser.add_argument("--skip-upstream-skill-link", action="store_true")
     parser.add_argument("--skip-product-install", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.json and not args.status:
+        parser.error("--json requires --status")
+    return args
 
 
 def main() -> int:
     args = parse_args()
-    configure(args.vault, args.auto_commit, args.replace_config)
-    link_policy(CLAUDE_POLICY, args.replace_guidance)
-    install_codex_policy(CODEX_POLICY, args.replace_guidance)
+    if args.status:
+        status = guidance_status()
+        if args.json:
+            print(json.dumps(status, sort_keys=True))
+        elif not status["configured"]:
+            print("guidance: not configured")
+        else:
+            print(f"guidance: Claude {status['claude']}; Codex {status['codex']}")
+        return 0 if status["ok"] else 1
+
+    if args.reuse_config:
+        read_existing_config()
+    else:
+        configure(args.vault, args.auto_commit, args.replace_config)
+    replace_guidance = args.replace_guidance or args.reuse_config
+    link_policy(CLAUDE_POLICY, replace_guidance)
+    install_codex_policy(CODEX_POLICY, replace_guidance)
     if not args.skip_upstream_skill_link:
         link_upstream_skills()
     if not args.keep_legacy_hooks:

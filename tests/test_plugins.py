@@ -7,11 +7,14 @@ user file — Codex hook-trust migration — is exercised against a temp config.
 
 from __future__ import annotations
 
+import argparse
+import io
 import json
 import os
 import shutil
 import sys
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -304,6 +307,97 @@ class StatusParsing(unittest.TestCase):
         source = (ROOT / "scripts" / "plugins.py").read_text(encoding="utf-8")
         self.assertIn('codex_state = "-"', source)
         self.assertNotIn('and "installed" in codex_list', source)
+
+
+class WorkspaceGuidanceParity(unittest.TestCase):
+    def args(self) -> argparse.Namespace:
+        return argparse.Namespace(scope="user", force=False)
+
+    def test_install_repairs_memory_guidance_when_configured(self) -> None:
+        with TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.json"
+            config.write_text('{"vault": "/private/vault"}\n', encoding="utf-8")
+            completed = mock.Mock(returncode=0, stdout="", stderr="")
+            with (
+                mock.patch.object(pl, "MEMORY_CONFIG", config),
+                mock.patch.object(pl, "load_catalog", return_value=catalog()),
+                mock.patch.object(pl.shutil, "which", return_value=None),
+                mock.patch.object(pl, "cmd_status", return_value=0),
+                mock.patch.object(pl, "run", return_value=completed) as run,
+            ):
+                self.assertEqual(pl.cmd_install(self.args()), 0)
+            run.assert_called_once_with(
+                [
+                    sys.executable,
+                    str(pl.MEMORY_INSTALLER),
+                    "--reuse-config",
+                    "--skip-product-install",
+                    "--skip-upstream-skill-link",
+                    "--keep-legacy-hooks",
+                ]
+            )
+
+    def test_install_skips_memory_guidance_repair_without_config(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(pl, "MEMORY_CONFIG", Path(tmp) / "missing.json"),
+                mock.patch.object(pl, "load_catalog", return_value=catalog()),
+                mock.patch.object(pl.shutil, "which", return_value=None),
+                mock.patch.object(pl, "cmd_status", return_value=0),
+                mock.patch.object(pl, "run") as run,
+            ):
+                self.assertEqual(pl.cmd_install(self.args()), 0)
+            run.assert_not_called()
+
+    def test_status_fails_when_configured_guidance_is_unhealthy(self) -> None:
+        output = io.StringIO()
+        with (
+            mock.patch.object(pl, "load_catalog", return_value=catalog()),
+            mock.patch.object(pl.shutil, "which", return_value=None),
+            mock.patch.object(
+                pl,
+                "memory_guidance_status",
+                return_value={
+                    "configured": True,
+                    "ok": False,
+                    "claude": "stale",
+                    "codex": "malformed",
+                },
+            ),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(pl.cmd_status(self.args()), 1)
+        self.assertIn("guidance:", output.getvalue())
+        self.assertIn("Claude stale", output.getvalue())
+        self.assertIn("Codex malformed", output.getvalue())
+
+    def test_status_reports_not_configured_without_failing(self) -> None:
+        output = io.StringIO()
+        with TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(pl, "MEMORY_CONFIG", Path(tmp) / "missing.json"),
+                mock.patch.object(pl, "load_catalog", return_value=catalog()),
+                mock.patch.object(pl.shutil, "which", return_value=None),
+                redirect_stdout(output),
+            ):
+                self.assertEqual(pl.cmd_status(self.args()), 0)
+        self.assertIn("guidance: not configured", output.getvalue())
+
+    def test_status_fails_closed_on_malformed_project_status_json(self) -> None:
+        output = io.StringIO()
+        with TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.json"
+            config.write_text('{"vault": "/private/vault"}\n', encoding="utf-8")
+            completed = mock.Mock(returncode=0, stdout="not-json", stderr="")
+            with (
+                mock.patch.object(pl, "MEMORY_CONFIG", config),
+                mock.patch.object(pl, "load_catalog", return_value=catalog()),
+                mock.patch.object(pl.shutil, "which", return_value=None),
+                mock.patch.object(pl, "run", return_value=completed),
+                redirect_stdout(output),
+            ):
+                self.assertEqual(pl.cmd_status(self.args()), 1)
+        self.assertIn("guidance: invalid status", output.getvalue())
 
 
 class WikiRelease(unittest.TestCase):

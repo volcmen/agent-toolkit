@@ -59,6 +59,27 @@ python3 plugins/obsidian-memory/scripts/obsidian_memory.py commit \
 
 Start new Claude Code and Codex threads after installation.
 
+For an existing local configuration, refresh only the project-owned guidance
+without rewriting `config.json`:
+
+```bash
+python3 scripts/install.py --reuse-config
+```
+
+Inspect the guidance links and managed block without changing them:
+
+```bash
+python3 scripts/install.py --status
+python3 scripts/install.py --status --json
+```
+
+At the workspace level, `python3 scripts/plugins.py install --force` refreshes
+live plugin bytes and, when memory is configured, both global policy surfaces.
+`python3 scripts/plugins.py status` reports plugin-content health separately
+from guidance health; an absent local memory configuration is a healthy “not
+configured” state. Newly started Claude Code and Codex sessions are required
+to load updated guidance.
+
 ## Validate
 
 Run the non-mutating gate during development:

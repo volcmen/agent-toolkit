@@ -102,6 +102,13 @@ python3 scripts/plugins.py install --force
 python3 scripts/plugins.py status
 ```
 
+When Obsidian memory is locally configured, `install --force` refreshes both
+the live plugin bytes and the shared memory policy used by Claude Code and
+Codex. `status` reports plugin-content health separately from the guidance row;
+an absent memory configuration is reported as “not configured” and is healthy.
+Start new Claude Code and Codex sessions after installation so they load the
+updated plugin and global guidance.
+
 `status` compares the installed Claude Code cache with this checkout and reports
 content drift. Release automation may deliberately change a version, but it must
 change the catalog and regenerate every manifest with `scripts/plugins.py sync`.
