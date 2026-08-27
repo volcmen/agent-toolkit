@@ -292,6 +292,61 @@ Prior: old unrelated outcome.
                         value, "\n".join(item["detail"] for item in matches)
                     )
 
+    def test_global_record_contract_rejects_whitespace_padded_controlled_values(self) -> None:
+        cases = {
+            "id": (" global.project_registry.agent_toolkit ", "global-invalid-id"),
+            "scope": (" global ", "global-invalid-scope"),
+            "evidence_type": (" inferred ", "global-invalid-evidence-type"),
+        }
+        for field, (value, expected_code) in cases.items():
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                vault = self.make_vault(root)
+                overrides = {field: value}
+                if field == "evidence_type":
+                    overrides["status"] = "candidate"
+                self.write_global_record(vault, **overrides)
+                config_path = self.write_config(
+                    root, vault, global_memory_root="wiki/global"
+                )
+                with mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ):
+                    config, _ = MODULE.load_config()
+                    report = MODULE.audit_vault(config)
+                matches = [
+                    item for item in report["findings"] if item["code"] == expected_code
+                ]
+                self.assertEqual(len(matches), 1)
+                self.assertNotIn(value, "\n".join(item["detail"] for item in matches))
+
+    def test_global_record_contract_counts_raw_statement_characters_at_the_boundary(self) -> None:
+        cases = {
+            "at-boundary": ("x" * 598 + "  ", []),
+            "over-boundary": ("x" * 599 + "  ", ["global-statement-too-long"]),
+        }
+        for label, (statement, expected_codes) in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                vault = self.make_vault(root)
+                self.write_global_record(vault, statement=statement)
+                config_path = self.write_config(
+                    root, vault, global_memory_root="wiki/global"
+                )
+                with mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ):
+                    config, _ = MODULE.load_config()
+                    report = MODULE.audit_vault(config)
+                self.assertEqual(
+                    [
+                        item["code"]
+                        for item in report["findings"]
+                        if item["code"] == "global-statement-too-long"
+                    ],
+                    expected_codes,
+                )
+
     def test_global_record_contract_reports_duplicate_ids_on_each_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -316,6 +371,38 @@ Prior: old unrelated outcome.
                 first.relative_to(vault).as_posix(),
                 second.relative_to(vault).as_posix(),
             },
+        )
+
+    def test_global_record_contract_does_not_normalize_padded_duplicate_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            padded_id = " global.project_registry.agent_toolkit "
+            first = self.write_global_record(vault, id=padded_id)
+            second = self.write_global_record(
+                vault,
+                "wiki/global/records/project-registry/second-toolkit.md",
+                id=padded_id,
+            )
+            config_path = self.write_config(root, vault, global_memory_root="wiki/global")
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        invalid_paths = {
+            item["path"]
+            for item in report["findings"]
+            if item["code"] == "global-invalid-id"
+        }
+        self.assertEqual(
+            invalid_paths,
+            {
+                first.relative_to(vault).as_posix(),
+                second.relative_to(vault).as_posix(),
+            },
+        )
+        self.assertNotIn(
+            "global-duplicate-id", [item["code"] for item in report["findings"]]
         )
 
     def test_global_record_contract_rejects_misplaced_global_id(self) -> None:

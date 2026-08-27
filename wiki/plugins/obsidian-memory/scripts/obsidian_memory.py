@@ -1536,7 +1536,7 @@ def global_record_findings(
 
     def scalar(field: str) -> str | None:
         value = metadata.get(field)
-        return value.strip() if isinstance(value, str) and value.strip() else None
+        return value if isinstance(value, str) and value.strip() else None
 
     identifier = scalar("id")
     if identifier is None or GLOBAL_ID_RE.fullmatch(identifier) is None:
