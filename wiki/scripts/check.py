@@ -583,6 +583,42 @@ def validate_global_memory_skill() -> None:
             f"{case_id}: must forbid automatic global promotion",
         )
 
+    private_chat = cases["global-curation-private-dating-chat"]
+    private_expected = " ".join(private_chat.get("expected", [])).casefold()
+    for term in (
+        "private dating chat",
+        "derivative summary",
+        "inference",
+        "outside global memory",
+    ):
+        require(
+            term in private_expected,
+            "global-curation-private-dating-chat: expected behavior must keep "
+            f"the chat and derivatives outside global memory: {term}",
+        )
+    require(
+        any(
+            term in private_expected
+            for term in ("session-local", "project-local", "omitted")
+        ),
+        "global-curation-private-dating-chat: narrow sensitive persistence must "
+        "remain session/project-local or omitted",
+    )
+
+    private_forbidden = " ".join(private_chat.get("forbidden", [])).casefold()
+    for term in (
+        "automatic global promotion",
+        "private dating chat",
+        "summary",
+        "inference",
+        "derived",
+    ):
+        require(
+            term in private_forbidden,
+            "global-curation-private-dating-chat: forbidden behavior must reject "
+            f"global promotion of the chat and every derivative: {term}",
+        )
+
     for relative in ("ARCHITECTURE.md", "README.md"):
         documentation = (ROOT / relative).read_text(encoding="utf-8")
         for term in (
