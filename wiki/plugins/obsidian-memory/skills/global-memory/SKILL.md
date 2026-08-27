@@ -10,8 +10,11 @@ Markdown/Git vault.
 
 ## Route
 
-1. Load `~/.config/obsidian-memory/config.json`, resolve its absolute vault, and
-   use its `global_memory_root`; never assume a vault path.
+1. Load `~/.config/obsidian-memory/config.json` and resolve its absolute vault;
+   never assume a vault path.
+   If `global_memory_root` is absent, use the verified runtime default `wiki/global`.
+   If `recall_roots` is absent, use the verified
+   runtime defaults `wiki`, `projects`, and `daily` before validating containment.
 2. Read [references/global-memory-governance.md](references/global-memory-governance.md)
    completely before curating. Inspect before editing: audit, retrieve narrowly,
    and open only relevant records and sources.

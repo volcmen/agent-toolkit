@@ -20,9 +20,10 @@ system.
 
 ## Workflow
 
-1. Read `~/.config/obsidian-memory/config.json`. Resolve the configured vault and
-   `global_memory_root`; refuse an absent, unsafe, symlinked, or out-of-recall-root
-   destination.
+1. Read `~/.config/obsidian-memory/config.json` and resolve its configured vault.
+   If `global_memory_root` is absent, use the verified runtime default `wiki/global`.
+   If `recall_roots` is absent, use the verified runtime defaults `wiki`, `projects`,
+   and `daily`. Refuse an absent, unsafe, symlinked, or out-of-recall-root destination.
 2. Select `READ_ONLY` for an audit or review. Use `APPLY_SAFE` only when the user's
    request authorizes the named mutation; it never relaxes the evidence gate.
 3. Run the read-only audit, retrieve only the relevant global category, and inspect
