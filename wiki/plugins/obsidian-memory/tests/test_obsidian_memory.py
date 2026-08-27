@@ -760,6 +760,239 @@ Prior: old unrelated outcome.
                     )
                     self.assertEqual(counts, {"sensitive": 2})
 
+    def test_global_recall_fails_closed_on_malformed_frontmatter_for_every_provider(
+        self,
+    ) -> None:
+        """Catches malformed governed metadata entering ordinary or explicit L1."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            cases = {
+                "quoted-padding": lambda text: text.replace(
+                    'sensitivity: "internal"', 'sensitivity: "private "'
+                ),
+                "list": lambda text: text.replace(
+                    'sensitivity: "internal"', 'sensitivity:\n  - "private"'
+                ),
+                "duplicate": lambda text: text.replace(
+                    'sensitivity: "internal"',
+                    'sensitivity: "internal"\nsensitivity: "public"',
+                ),
+                "missing": lambda text: text.replace('sensitivity: "internal"\n', ""),
+                "incomplete": lambda text: text.replace("\n---\n# Agent Toolkit", "\n# Agent Toolkit"),
+                "oversized": lambda text: text.replace(
+                    'verified_by: "repository and installed-state checks"',
+                    f'verified_by: "{"x" * 12_100}"',
+                ),
+            }
+            paths: dict[str, Path] = {}
+            for name, mutate in cases.items():
+                path = self.write_global_record(
+                    vault,
+                    f"wiki/global/records/privacy/{name}.md",
+                    id=f"global.privacy.{name}",
+                    category="privacy",
+                    statement=f"MALFORMED-SENTINEL-{name}",
+                )
+                path.write_text(mutate(path.read_text(encoding="utf-8")), encoding="utf-8")
+                paths[name] = path
+
+            config_path = self.write_config(
+                root, vault, global_memory_root="wiki/global"
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            for name, path in paths.items():
+                relative = path.relative_to(vault).as_posix()
+                provider_rows = {
+                    "native": [{"path": relative, "snippet": f"MALFORMED-SENTINEL-{name}"}],
+                    "qmd": [
+                        {
+                            "file": f"qmd://obsidian-wiki/{relative.removeprefix('wiki/')}",
+                            "snippet": f"MALFORMED-SENTINEL-{name}",
+                        }
+                    ],
+                }
+                for provider, rows in provider_rows.items():
+                    for include_sensitive in (False, True):
+                        with self.subTest(
+                            shape=name,
+                            provider=provider,
+                            include_sensitive=include_sensitive,
+                        ):
+                            compact, _ = MODULE.compact_recall_results(
+                                config,
+                                rows,
+                                limit=5,
+                                max_tokens=900,
+                                include_stale=False,
+                                include_sensitive=include_sensitive,
+                                scope=(
+                                    "wiki/global/records/privacy"
+                                    if include_sensitive
+                                    else None
+                                ),
+                                provider=provider,
+                            )
+                            serialized = json.dumps(compact)
+                            self.assertEqual(compact, [])
+                            self.assertNotIn(relative, serialized)
+                            self.assertNotIn("MALFORMED-SENTINEL", serialized)
+
+    def test_global_recall_fails_closed_when_frontmatter_cannot_be_read(self) -> None:
+        """Catches a metadata read error being treated as public metadata."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            path = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/unreadable.md",
+                id="global.privacy.unreadable",
+                category="privacy",
+                statement="UNREADABLE-SENTINEL",
+            )
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+            with mock.patch.object(Path, "open", side_effect=OSError("denied")):
+                compact, _ = MODULE.compact_recall_results(
+                    config,
+                    [
+                        {
+                            "path": path.relative_to(vault).as_posix(),
+                            "snippet": "UNREADABLE-SENTINEL",
+                        }
+                    ],
+                    limit=5,
+                    max_tokens=900,
+                    include_stale=False,
+                )
+            serialized = json.dumps(compact)
+            self.assertEqual(compact, [])
+            self.assertNotIn("unreadable.md", serialized)
+            self.assertNotIn("UNREADABLE-SENTINEL", serialized)
+
+    def test_auto_fallback_rechecks_malformed_global_results(self) -> None:
+        """Catches provider fallback bypassing the final global-record classifier."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            malformed = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/malformed-auto.md",
+                id="global.privacy.malformed_auto",
+                category="privacy",
+                sensitivity="private ",
+                statement="AUTO-MALFORMED-SENTINEL",
+            )
+            safe = vault / "wiki" / "safe-auto.md"
+            safe.write_text("# Safe\nAUTO-MALFORMED-SENTINEL safe route\n", encoding="utf-8")
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_provider="auto",
+                qmd_enabled=True,
+            )
+            malformed_relative = malformed.relative_to(vault).as_posix()
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(
+                    MODULE, "select_recall_provider", return_value=("qmd", "")
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "qmd_recall_candidates",
+                    return_value=[
+                        {
+                            "file": "qmd://obsidian-wiki/global/records/privacy/malformed-auto.md",
+                            "snippet": "AUTO-MALFORMED-SENTINEL",
+                        }
+                    ],
+                ),
+            ):
+                config, _ = MODULE.load_config()
+                payload = MODULE.recall_payload(
+                    config,
+                    "AUTO-MALFORMED-SENTINEL",
+                    "semantic",
+                    5,
+                )
+            serialized = json.dumps(payload["results"])
+            self.assertEqual(payload["provider"], "native")
+            self.assertEqual(
+                [item["path"] for item in payload["results"]], ["wiki/safe-auto.md"]
+            )
+            self.assertNotIn(malformed_relative, serialized)
+
+    def test_supersession_checks_every_global_record_hop_before_redirecting(self) -> None:
+        """Catches malformed terminal and intermediate successors leaking through L1."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            old = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/old.md",
+                id="global.privacy.old",
+                category="privacy",
+                status="superseded",
+                superseded_by="wiki/global/records/privacy/malformed-middle.md",
+            )
+            middle = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/malformed-middle.md",
+                id="global.privacy.malformed_middle",
+                category="privacy",
+                status="superseded",
+                superseded_by="wiki/global/records/privacy/final.md",
+                sensitivity="private ",
+                statement="MALFORMED-MIDDLE-SENTINEL",
+            )
+            final = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/final.md",
+                id="global.privacy.final",
+                category="privacy",
+                statement="FINAL-SUCCESSOR-SENTINEL",
+            )
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            native_row = {"path": old.relative_to(vault).as_posix(), "snippet": "old"}
+            qmd_row = {
+                "file": "qmd://obsidian-wiki/global/records/privacy/old.md",
+                "snippet": "old",
+            }
+            for provider, row in (("native", native_row), ("qmd", qmd_row)):
+                with self.subTest(provider=provider):
+                    compact, filtered = MODULE.compact_recall_results(
+                        config,
+                        [row],
+                        limit=5,
+                        max_tokens=900,
+                        include_stale=False,
+                        provider=provider,
+                    )
+                    serialized = json.dumps(compact)
+                    self.assertEqual(compact, [])
+                    self.assertEqual(filtered, 1)
+                    for forbidden in (
+                        middle.relative_to(vault).as_posix(),
+                        final.relative_to(vault).as_posix(),
+                        "MALFORMED-MIDDLE-SENTINEL",
+                        "FINAL-SUCCESSOR-SENTINEL",
+                    ):
+                        self.assertNotIn(forbidden, serialized)
+
     def test_sensitive_recall_requires_an_explicit_narrow_scope_before_provider(self) -> None:
         """Catches provider execution before sensitive authorization is validated."""
         with tempfile.TemporaryDirectory() as temp:
@@ -972,13 +1205,13 @@ Prior: old unrelated outcome.
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             vault = self.make_vault(root)
-            old = vault / "wiki" / "global" / "records" / "privacy" / "old.md"
-            old.parent.mkdir(parents=True, exist_ok=True)
-            old.write_text(
-                "---\nstatus: superseded\n"
-                "superseded_by: wiki/global/records/privacy/private.md\n---\n"
-                "# Old public route\n",
-                encoding="utf-8",
+            old = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/old.md",
+                id="global.privacy.old",
+                category="privacy",
+                status="superseded",
+                superseded_by="wiki/global/records/privacy/private.md",
             )
             self.write_global_record(
                 vault,

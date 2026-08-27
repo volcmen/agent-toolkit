@@ -75,6 +75,7 @@ MAX_RECALL_EVAL_PATH_CHARS = 1_000
 RECALL_EVAL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}")
 MAX_AUDIT_FINDINGS = 200
 MAX_AUDIT_HUMAN_PATH_CHARS = 180
+MAX_GLOBAL_FRONTMATTER_CHARS = 12_000
 
 
 class ConfigurationError(RuntimeError):
@@ -1633,6 +1634,83 @@ def global_record_findings(
     return findings
 
 
+@dataclass(frozen=True)
+class RecallRecordClassification:
+    """Fail-closed metadata classification at the final recall boundary."""
+
+    allowed: bool
+    metadata: dict[str, str]
+    sensitivity: str | None
+    global_record: bool
+
+
+def _strict_global_frontmatter(
+    path: Path,
+) -> dict[str, FrontmatterValue] | None:
+    """Return one complete bounded frontmatter block with no duplicate keys."""
+    try:
+        if not path.is_file():
+            return None
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            text = handle.read(MAX_GLOBAL_FRONTMATTER_CHARS + 1)
+    except OSError:
+        return None
+    if not text.startswith("---"):
+        return None
+    lines = text.replace("\x00", "").splitlines()
+    if not lines or lines[0] != "---":
+        return None
+    closing_index = next(
+        (index for index, line in enumerate(lines[1:], start=1) if line == "---"),
+        None,
+    )
+    if closing_index is None:
+        return None
+    frontmatter_chars = sum(len(line) + 1 for line in lines[: closing_index + 1])
+    if frontmatter_chars > MAX_GLOBAL_FRONTMATTER_CHARS:
+        return None
+    seen: set[str] = set()
+    for line in lines[1:closing_index]:
+        match = _FRONTMATTER_KEY_RE.match(line)
+        if not match:
+            continue
+        key = match.group(1)
+        if key in seen:
+            return None
+        seen.add(key)
+    metadata = parse_frontmatter_document(path, MAX_GLOBAL_FRONTMATTER_CHARS)
+    return metadata or None
+
+
+def classify_recall_record(
+    config: dict[str, Any], path: Path, vault_relative: str
+) -> RecallRecordClassification:
+    """Classify one resolved recall result without trusting provider metadata."""
+    if not is_global_record_path(config, vault_relative):
+        metadata = parse_frontmatter(path)
+        return RecallRecordClassification(
+            True,
+            metadata,
+            metadata.get("sensitivity"),
+            False,
+        )
+
+    document = _strict_global_frontmatter(path)
+    if document is None:
+        return RecallRecordClassification(False, {}, None, True)
+    findings = [
+        *governance_findings(path, vault_relative, document),
+        *global_record_findings(vault_relative, document),
+    ]
+    sensitivity = document.get("sensitivity")
+    if findings or not isinstance(sensitivity, str):
+        return RecallRecordClassification(False, {}, None, True)
+    metadata = {
+        key: value for key, value in document.items() if isinstance(value, str)
+    }
+    return RecallRecordClassification(True, metadata, sensitivity, True)
+
+
 def _validated_audit_roots(config: dict[str, Any]) -> list[str]:
     raw_roots = config.get("recall_roots")
     if (
@@ -2642,6 +2720,7 @@ def follow_supersession_chain(
     metadata: dict[str, str],
     allowed_roots: list[str],
     scope: str | None = None,
+    include_sensitive: bool | None = None,
 ) -> SupersessionResult:
     """Resolve a stale note's bounded successor chain inside recall boundaries."""
     seen = {source_relative}
@@ -2671,7 +2750,18 @@ def follow_supersession_chain(
             return SupersessionResult(None, None, {}, "", "cycle")
         seen.add(resolved.vault_relative)
         current_path = resolved.path
-        current_metadata = parse_frontmatter(current_path)
+        classification = classify_recall_record(
+            config, current_path, resolved.vault_relative
+        )
+        if not classification.allowed:
+            return SupersessionResult(None, None, {}, "", "invalid-global-record")
+        if (
+            include_sensitive is not None
+            and classification.sensitivity in {"private", "restricted"}
+            and not include_sensitive
+        ):
+            return SupersessionResult(None, None, {}, "", "sensitive")
+        current_metadata = classification.metadata
         state = memory_state(current_metadata)
         if state == "stale":
             continue
@@ -2725,7 +2815,12 @@ def supersession_redirect(
         metadata=metadata,
         allowed_roots=allowed_roots,
         scope=scope,
+        include_sensitive=include_sensitive,
     )
+    if replacement.issue == "sensitive":
+        if filter_counts is not None:
+            filter_counts["sensitive"] = filter_counts.get("sensitive", 0) + 1
+        return None
     if replacement.issue is not None or replacement.path is None:
         return None
     source_path = replacement.path
@@ -2821,12 +2916,19 @@ def compact_recall_results(
         resolved = resolve_recall_item(config, item)
         if resolved is None:
             continue
-        metadata: dict[str, str] = {}
         source_path, vault_relative = resolved
         if not path_in_scope(vault_relative, scope):
             continue
-        metadata = parse_frontmatter(source_path)
-        if metadata_is_sensitive(metadata) and not include_sensitive:
+        classification = classify_recall_record(
+            config, source_path, vault_relative
+        )
+        if not classification.allowed:
+            continue
+        metadata = classification.metadata
+        if (
+            classification.sensitivity in {"private", "restricted"}
+            and not include_sensitive
+        ):
             if filter_counts is not None:
                 filter_counts["sensitive"] = filter_counts.get("sensitive", 0) + 1
             continue
