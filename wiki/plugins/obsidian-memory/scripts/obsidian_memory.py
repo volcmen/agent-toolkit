@@ -1318,6 +1318,34 @@ _AUDIT_STATUSES = {
     "rejected",
 }
 _AUDIT_CONFIDENCE = {"low", "medium", "high"}
+GLOBAL_ID_RE = re.compile(
+    r"global\.(identity|communication|operating_principle|approval_policy|"
+    r"technical_environment|recurring_goal|project_registry|privacy|preference|"
+    r"constraint)\.[a-z0-9][a-z0-9_-]{0,79}"
+)
+GLOBAL_CATEGORIES = {
+    "identity",
+    "communication",
+    "operating_principle",
+    "approval_policy",
+    "technical_environment",
+    "recurring_goal",
+    "project_registry",
+    "privacy",
+    "preference",
+    "constraint",
+}
+GLOBAL_EVIDENCE_TYPES = {
+    "user_stated",
+    "user_confirmed",
+    "repeated_user_pattern",
+    "environment_verified",
+    "assistant_recommended",
+    "inferred",
+}
+GLOBAL_STABILITIES = {"durable", "review_periodically", "time_sensitive"}
+GLOBAL_SENSITIVITIES = {"public", "internal", "private", "restricted"}
+MAX_GLOBAL_STATEMENT_CHARS = 600
 _AUDIT_DATE_FIELDS = {
     "observed": ("invalid-observed", "observed must be an exact ISO date"),
     "valid_from": ("invalid-valid-from", "valid_from must be an exact ISO date"),
@@ -1479,6 +1507,128 @@ def governance_findings(
                 "valid_until must not be earlier than valid_from",
             )
         )
+    return findings
+
+
+def global_records_prefix(config: dict[str, Any]) -> str:
+    return f"{config['global_memory_root'].rstrip('/')}/records"
+
+
+def is_global_record_path(config: dict[str, Any], vault_relative: str) -> bool:
+    return relative_path_is_within(vault_relative, global_records_prefix(config))
+
+
+def is_global_routing_readme(config: dict[str, Any], vault_relative: str) -> bool:
+    return PurePosixPath(vault_relative).parts == (
+        *PurePosixPath(config["global_memory_root"]).parts,
+        "README.md",
+    )
+
+
+def global_record_findings(
+    vault_relative: str, metadata: dict[str, FrontmatterValue]
+) -> list[AuditFinding]:
+    """Return fixed, value-free findings for records in the global namespace."""
+    findings: list[AuditFinding] = []
+
+    def record(code: str, field: str, detail: str) -> None:
+        findings.append(AuditFinding("error", code, vault_relative, field, detail))
+
+    def scalar(field: str) -> str | None:
+        value = metadata.get(field)
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+    identifier = scalar("id")
+    if identifier is None or GLOBAL_ID_RE.fullmatch(identifier) is None:
+        record("global-invalid-id", "id", "record ID must use the global category namespace")
+
+    memory_class = scalar("memory_class")
+    if memory_class is None:
+        record(
+            "global-missing-memory-class",
+            "memory_class",
+            "record memory class is required",
+        )
+
+    scope = scalar("scope")
+    if scope != "global":
+        record("global-invalid-scope", "scope", "record scope must be global")
+
+    owner = scalar("owner")
+    if owner != "david":
+        record("global-invalid-owner", "owner", "record owner must be david")
+
+    category = scalar("category")
+    if category not in GLOBAL_CATEGORIES or (
+        identifier is not None
+        and GLOBAL_ID_RE.fullmatch(identifier) is not None
+        and identifier.split(".", 2)[1] != category
+    ):
+        record(
+            "global-invalid-category",
+            "category",
+            "record category must match a recognized global ID category",
+        )
+
+    statement = scalar("statement")
+    if statement is None:
+        record("global-missing-statement", "statement", "record statement is required")
+    elif len(statement) > MAX_GLOBAL_STATEMENT_CHARS:
+        record(
+            "global-statement-too-long",
+            "statement",
+            "record statement exceeds the bounded global record limit",
+        )
+
+    status = scalar("status")
+    if status is None:
+        record("global-missing-status", "status", "record status is required")
+
+    evidence_type = scalar("evidence_type")
+    if evidence_type not in GLOBAL_EVIDENCE_TYPES:
+        record(
+            "global-invalid-evidence-type",
+            "evidence_type",
+            "record evidence type must be recognized",
+        )
+    elif evidence_type in {"assistant_recommended", "inferred"} and status in CURRENT_STATUSES:
+        record(
+            "global-unconfirmed-current",
+            "evidence_type",
+            "assistant-originated evidence cannot be current",
+        )
+
+    if not _audit_value_present(metadata.get("source")):
+        record("global-missing-source", "source", "record source provenance is required")
+
+    if scalar("confidence") is None:
+        record("global-missing-confidence", "confidence", "record confidence is required")
+
+    stability = scalar("stability")
+    if stability not in GLOBAL_STABILITIES:
+        record(
+            "global-invalid-stability",
+            "stability",
+            "record stability must be recognized",
+        )
+    elif stability == "time_sensitive" and scalar("valid_until") is None:
+        record(
+            "global-missing-valid-until",
+            "valid_until",
+            "time-sensitive record requires a valid-until date",
+        )
+
+    sensitivity = scalar("sensitivity")
+    if sensitivity not in GLOBAL_SENSITIVITIES:
+        record(
+            "global-invalid-sensitivity",
+            "sensitivity",
+            "record sensitivity must be recognized",
+        )
+
+    if scalar("observed") is None:
+        record("global-missing-observed", "observed", "record observed date is required")
+
     return findings
 
 
@@ -1851,6 +2001,61 @@ def _audit_scan_events(
     )
 
 
+def _audit_global_root_findings(config: dict[str, Any]) -> list[AuditFinding]:
+    """Inspect the global root without following it or requiring a default root."""
+    vault = config.get("vault")
+    root_relative = config.get("global_memory_root")
+    if not isinstance(vault, Path) or not isinstance(root_relative, str):
+        raise ConfigurationError("audit global memory root is invalid")
+
+    root = vault.joinpath(*PurePosixPath(root_relative).parts)
+    cursor = vault
+    try:
+        for part in PurePosixPath(root_relative).parts:
+            cursor /= part
+            if cursor.is_symlink():
+                return [
+                    AuditFinding(
+                        "error",
+                        "global-symlink-root",
+                        root_relative,
+                        None,
+                        "configured global memory root is or traverses a symlink",
+                    )
+                ]
+        if root.is_symlink() or root.absolute() != root.resolve():
+            return [
+                AuditFinding(
+                    "error",
+                    "global-symlink-root",
+                    root_relative,
+                    None,
+                    "configured global memory root is or traverses a symlink",
+                )
+            ]
+        if not root.is_dir() and config.get("_global_memory_root_from_defaults") is False:
+            return [
+                AuditFinding(
+                    "error",
+                    "global-missing-root",
+                    root_relative,
+                    None,
+                    "explicitly configured global memory root is missing or is not a directory",
+                )
+            ]
+    except (OSError, RuntimeError, ValueError):
+        return [
+            AuditFinding(
+                "error",
+                "global-symlink-root",
+                root_relative,
+                None,
+                "configured global memory root could not be inspected safely",
+            )
+        ]
+    return []
+
+
 def audit_vault(config: dict[str, Any]) -> dict[str, Any]:
     """Scan configured recall roots and return bounded governance findings."""
     roots = _validated_audit_roots(config)
@@ -1859,6 +2064,7 @@ def audit_vault(config: dict[str, Any]) -> dict[str, Any]:
     warning_count = 0
     files_scanned = 0
     truncated = False
+    global_id_paths: dict[str, list[str]] = {}
 
     def record(finding: AuditFinding) -> None:
         nonlocal error_count, warning_count, truncated
@@ -1870,6 +2076,9 @@ def audit_vault(config: dict[str, Any]) -> dict[str, Any]:
             bounded.append(finding)
         else:
             truncated = True
+
+    for finding in _audit_global_root_findings(config):
+        record(finding)
 
     for vault_relative, kind, path, expected_resolved in _audit_scan_events(
         config, roots
@@ -1926,6 +2135,24 @@ def audit_vault(config: dict[str, Any]) -> dict[str, Any]:
         metadata = parse_frontmatter_document(path)
         for finding in governance_findings(path, vault_relative, metadata):
             record(finding)
+        if is_global_record_path(config, vault_relative):
+            for finding in global_record_findings(vault_relative, metadata):
+                record(finding)
+            identifier = metadata.get("id")
+            if isinstance(identifier, str) and GLOBAL_ID_RE.fullmatch(identifier):
+                global_id_paths.setdefault(identifier, []).append(vault_relative)
+        elif not is_global_routing_readme(config, vault_relative):
+            identifier = metadata.get("id")
+            if isinstance(identifier, str) and identifier.startswith("global."):
+                record(
+                    AuditFinding(
+                        "error",
+                        "global-misplaced-record",
+                        vault_relative,
+                        "id",
+                        "global record ID is outside the configured records tree",
+                    )
+                )
         recall_metadata = parse_frontmatter(path)
         successor = recall_metadata.get("superseded_by")
         if isinstance(successor, str) and successor.strip():
@@ -1957,6 +2184,19 @@ def audit_vault(config: dict[str, Any]) -> dict[str, Any]:
                     "stale memory does not declare a non-empty successor",
                 )
             )
+
+    for paths in global_id_paths.values():
+        if len(paths) > 1:
+            for vault_relative in paths:
+                record(
+                    AuditFinding(
+                        "error",
+                        "global-duplicate-id",
+                        vault_relative,
+                        "id",
+                        "global record ID must be unique",
+                    )
+                )
 
     for finding in _audit_commit_root_findings(config):
         record(finding)

@@ -27,6 +27,27 @@ MAX_RECALL_EVAL_FIXTURE_CHARS = 1_000_000
 MAX_RECALL_EVAL_PATHS = 20
 MAX_RECALL_EVAL_PATH_CHARS = 1_000
 RECALL_EVAL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}")
+GLOBAL_CATEGORIES = {
+    "identity",
+    "communication",
+    "operating_principle",
+    "approval_policy",
+    "technical_environment",
+    "recurring_goal",
+    "project_registry",
+    "privacy",
+    "preference",
+    "constraint",
+}
+GLOBAL_EVIDENCE_TYPES = {
+    "user_stated",
+    "user_confirmed",
+    "repeated_user_pattern",
+    "environment_verified",
+    "assistant_recommended",
+    "inferred",
+}
+GLOBAL_SENSITIVITIES = {"public", "internal", "private", "restricted"}
 
 
 class ValidationError(RuntimeError):
@@ -280,6 +301,41 @@ def validate_config_example() -> None:
         isinstance(config.get("max_recall_tokens"), int)
         and 64 <= config["max_recall_tokens"] <= 4000,
         "max_recall_tokens must be an integer from 64 to 4000",
+    )
+
+
+def _runtime_constant(name: str) -> Any:
+    """Read one literal runtime constant without importing plugin side effects."""
+    runtime = PLUGIN / "scripts" / "obsidian_memory.py"
+    try:
+        module = ast.parse(runtime.read_text(encoding="utf-8"), filename=str(runtime))
+    except (OSError, SyntaxError) as exc:
+        raise ValidationError(f"cannot inspect runtime constants: {exc}") from exc
+    for statement in module.body:
+        if not isinstance(statement, ast.Assign):
+            continue
+        if any(isinstance(target, ast.Name) and target.id == name for target in statement.targets):
+            try:
+                return ast.literal_eval(statement.value)
+            except ValueError as exc:
+                raise ValidationError(f"runtime constant {name} must be literal") from exc
+    raise ValidationError(f"runtime constant {name} is missing")
+
+
+def validate_global_record_schema() -> None:
+    """Keep the checked-in global schema vocabulary aligned with the runtime."""
+    for name, expected in (
+        ("GLOBAL_CATEGORIES", GLOBAL_CATEGORIES),
+        ("GLOBAL_EVIDENCE_TYPES", GLOBAL_EVIDENCE_TYPES),
+        ("GLOBAL_SENSITIVITIES", GLOBAL_SENSITIVITIES),
+    ):
+        require(
+            _runtime_constant(name) == expected,
+            f"runtime {name} does not match the governed global schema",
+        )
+    require(
+        _runtime_constant("MAX_GLOBAL_STATEMENT_CHARS") == 600,
+        "runtime MAX_GLOBAL_STATEMENT_CHARS must be 600",
     )
 
 
@@ -914,6 +970,7 @@ def main() -> int:
         ("plugin manifests", validate_manifests),
         ("hook contract", validate_hooks),
         ("configuration example", validate_config_example),
+        ("global record schema", validate_global_record_schema),
         ("memory governance and evals", validate_memory_policy),
         ("documentation links", validate_documentation_links),
     ]

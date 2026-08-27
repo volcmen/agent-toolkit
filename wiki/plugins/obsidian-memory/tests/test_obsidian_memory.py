@@ -50,6 +50,38 @@ class ObsidianMemoryTests(unittest.TestCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
         return path
 
+    def write_global_record(
+        self,
+        vault: Path,
+        relative: str = "wiki/global/records/project-registry/agent-toolkit.md",
+        **overrides: str,
+    ) -> Path:
+        values = {
+            "id": "global.project_registry.agent_toolkit",
+            "memory_class": "fact",
+            "scope": "global",
+            "owner": "david",
+            "category": "project_registry",
+            "statement": "Agent Toolkit is David's cross-agent plugin workspace.",
+            "status": "verified",
+            "evidence_type": "environment_verified",
+            "confidence": "high",
+            "stability": "review_periodically",
+            "sensitivity": "internal",
+            "observed": "2026-08-27",
+            "verified_by": "repository and installed-state checks",
+        }
+        values.update(overrides)
+        path = vault / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = ["---"]
+        lines.extend(f'{key}: "{value}"' for key, value in values.items())
+        lines.extend(
+            ["source:", '  - "repository README at cd73ba2"', "---", "# Agent Toolkit", ""]
+        )
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return path
+
     def init_git_vault(self, vault: Path) -> None:
         subprocess.run(["git", "init", "-q", str(vault)], check=True)
         subprocess.run(
@@ -211,6 +243,251 @@ Prior: old unrelated outcome.
                 config, _ = MODULE.load_config()
             self.assertFalse(config["_global_memory_root_from_defaults"])
             self.assertFalse((vault / config["global_memory_root"]).exists())
+
+    def test_global_record_contract_accepts_one_valid_atomic_record(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            self.write_global_record(vault)
+            config_path = self.write_config(root, vault, global_memory_root="wiki/global")
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        global_codes = [
+            item["code"] for item in report["findings"] if item["code"].startswith("global-")
+        ]
+        self.assertEqual(global_codes, [])
+
+    def test_global_record_contract_reports_each_invalid_field_without_values(self) -> None:
+        cases = {
+            "id": ("not-global", "global-invalid-id"),
+            "scope": ("project", "global-invalid-scope"),
+            "owner": ("someone", "global-invalid-owner"),
+            "category": ("project_state", "global-invalid-category"),
+            "statement": ("", "global-missing-statement"),
+            "evidence_type": ("model_summary", "global-invalid-evidence-type"),
+            "stability": ("forever", "global-invalid-stability"),
+            "sensitivity": ("secretish", "global-invalid-sensitivity"),
+        }
+        for field, (value, expected_code) in cases.items():
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                vault = self.make_vault(root)
+                self.write_global_record(vault, **{field: value})
+                config_path = self.write_config(
+                    root, vault, global_memory_root="wiki/global"
+                )
+                with mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ):
+                    config, _ = MODULE.load_config()
+                    report = MODULE.audit_vault(config)
+                matches = [
+                    item for item in report["findings"] if item["code"] == expected_code
+                ]
+                self.assertEqual(len(matches), 1)
+                if value:
+                    self.assertNotIn(
+                        value, "\n".join(item["detail"] for item in matches)
+                    )
+
+    def test_global_record_contract_reports_duplicate_ids_on_each_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            first = self.write_global_record(vault)
+            second = self.write_global_record(
+                vault, "wiki/global/records/project-registry/second-toolkit.md"
+            )
+            config_path = self.write_config(root, vault, global_memory_root="wiki/global")
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        duplicate_paths = {
+            item["path"]
+            for item in report["findings"]
+            if item["code"] == "global-duplicate-id"
+        }
+        self.assertEqual(
+            duplicate_paths,
+            {
+                first.relative_to(vault).as_posix(),
+                second.relative_to(vault).as_posix(),
+            },
+        )
+
+    def test_global_record_contract_rejects_misplaced_global_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            misplaced = self.write_global_record(vault, "wiki/misplaced.md")
+            config_path = self.write_config(root, vault, global_memory_root="wiki/global")
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        self.assertIn(
+            (misplaced.relative_to(vault).as_posix(), "global-misplaced-record"),
+            {(item["path"], item["code"]) for item in report["findings"]},
+        )
+
+    def test_global_record_contract_exempts_the_routing_readme(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            self.write_global_record(vault, "wiki/global/README.md")
+            config_path = self.write_config(root, vault, global_memory_root="wiki/global")
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        self.assertEqual(
+            [item["code"] for item in report["findings"] if item["code"].startswith("global-")],
+            [],
+        )
+
+    def test_global_record_contract_rejects_missing_or_invalid_record_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            record = self.write_global_record(vault, id="project.registry.agent_toolkit")
+            config_path = self.write_config(root, vault, global_memory_root="wiki/global")
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        self.assertIn(
+            (record.relative_to(vault).as_posix(), "global-invalid-id"),
+            {(item["path"], item["code"]) for item in report["findings"]},
+        )
+
+    def test_global_record_contract_requires_category_to_match_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            self.write_global_record(
+                vault,
+                id="global.preference.agent_toolkit",
+                category="project_registry",
+            )
+            config_path = self.write_config(root, vault, global_memory_root="wiki/global")
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        self.assertEqual(
+            [
+                item["code"]
+                for item in report["findings"]
+                if item["code"] == "global-invalid-category"
+            ],
+            ["global-invalid-category"],
+        )
+
+    def test_global_record_contract_rejects_unconfirmed_current_evidence(self) -> None:
+        for evidence_type in ("assistant_recommended", "inferred"):
+            for status in ("verified", "accepted", "active"):
+                with self.subTest(evidence_type=evidence_type, status=status), tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    vault = self.make_vault(root)
+                    self.write_global_record(
+                        vault, evidence_type=evidence_type, status=status
+                    )
+                    config_path = self.write_config(
+                        root, vault, global_memory_root="wiki/global"
+                    )
+                    with mock.patch.dict(
+                        os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                    ):
+                        config, _ = MODULE.load_config()
+                        report = MODULE.audit_vault(config)
+                    matches = [
+                        item
+                        for item in report["findings"]
+                        if item["code"] == "global-unconfirmed-current"
+                    ]
+                    self.assertEqual(len(matches), 1)
+                    self.assertNotIn(evidence_type, json.dumps(matches))
+                    self.assertNotIn(status, json.dumps(matches))
+
+    def test_global_record_contract_requires_valid_until_for_time_sensitive_records(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            self.write_global_record(vault, stability="time_sensitive")
+            config_path = self.write_config(root, vault, global_memory_root="wiki/global")
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        self.assertEqual(
+            [item["code"] for item in report["findings"] if item["code"] == "global-missing-valid-until"],
+            ["global-missing-valid-until"],
+        )
+
+    def test_global_record_contract_bounds_statement_length(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            statement = "x" * 601
+            self.write_global_record(vault, statement=statement)
+            config_path = self.write_config(root, vault, global_memory_root="wiki/global")
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        matches = [
+            item for item in report["findings"] if item["code"] == "global-statement-too-long"
+        ]
+        self.assertEqual(len(matches), 1)
+        self.assertNotIn(statement, json.dumps(matches))
+
+    def test_global_record_contract_reports_only_explicit_missing_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            default_config = self.write_config(root, vault)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(default_config)}
+            ):
+                config, _ = MODULE.load_config()
+                default_report = MODULE.audit_vault(config)
+
+            explicit_config = self.write_config(
+                root, vault, global_memory_root="wiki/global"
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(explicit_config)}
+            ):
+                config, _ = MODULE.load_config()
+                explicit_report = MODULE.audit_vault(config)
+
+        self.assertNotIn(
+            "global-missing-root", [item["code"] for item in default_report["findings"]]
+        )
+        self.assertIn(
+            "global-missing-root", [item["code"] for item in explicit_report["findings"]]
+        )
+
+    def test_global_record_contract_rejects_and_does_not_traverse_symlinked_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            outside = root / "private-global"
+            outside.mkdir()
+            (outside / "PRIVATE.md").write_text("PRIVATE BODY", encoding="utf-8")
+            (vault / "wiki" / "global").symlink_to(outside, target_is_directory=True)
+            config_path = self.write_config(root, vault, global_memory_root="wiki/global")
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        self.assertIn(
+            "global-symlink-root", [item["code"] for item in report["findings"]]
+        )
+        self.assertNotIn("PRIVATE", json.dumps(report))
 
     def test_invalid_qmd_scope_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -4648,6 +4925,7 @@ Prior: old unrelated outcome.
                 "PRIVATE NOTE BODY\n",
                 encoding="utf-8",
             )
+            (vault / "daily" / "global").mkdir()
             config_path = self.write_config(
                 root,
                 vault,
