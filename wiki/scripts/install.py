@@ -215,6 +215,7 @@ def configure(vault: Path, auto_commit: bool, replace: bool) -> None:
         "commit_message_prefix": "wiki: agent memory",
         "recall_provider": "auto",
         "recall_roots": ["wiki", "projects", "daily"],
+        "global_memory_root": "wiki/global",
         "native_max_files": 2000,
         "native_max_file_chars": 80000,
         "qmd_enabled": False,

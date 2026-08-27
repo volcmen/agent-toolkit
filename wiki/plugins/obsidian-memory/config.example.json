@@ -20,6 +20,7 @@
     "projects",
     "daily"
   ],
+  "global_memory_root": "wiki/global",
   "native_max_files": 2000,
   "native_max_file_chars": 80000,
   "qmd_enabled": false,

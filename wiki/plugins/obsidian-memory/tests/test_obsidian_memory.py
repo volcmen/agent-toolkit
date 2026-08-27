@@ -181,6 +181,37 @@ Prior: old unrelated outcome.
                     with self.assertRaises(MODULE.ConfigurationError):
                         MODULE.load_config()
 
+    def test_global_memory_root_defaults_inside_recall_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            self.assertEqual(config["global_memory_root"], "wiki/global")
+            self.assertTrue(config["_global_memory_root_from_defaults"])
+
+    def test_explicit_global_memory_root_must_be_safe_and_recalled(self) -> None:
+        cases = ("../global", ".private/global", "inbox/global", "outside/global")
+        for value in cases:
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                vault = self.make_vault(root)
+                config_path = self.write_config(root, vault, global_memory_root=value)
+                with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                    with self.assertRaises(MODULE.ConfigurationError):
+                        MODULE.load_config()
+
+    def test_explicit_missing_global_memory_root_is_remembered_for_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault, global_memory_root="wiki/global")
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            self.assertFalse(config["_global_memory_root_from_defaults"])
+            self.assertFalse((vault / config["global_memory_root"]).exists())
+
     def test_invalid_qmd_scope_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -3837,6 +3868,7 @@ Prior: old unrelated outcome.
                 vault,
                 recall_provider="native",
                 recall_roots=["projects"],
+                global_memory_root="projects/global",
             )
             fixture = root / "suite.json"
 
@@ -4617,7 +4649,10 @@ Prior: old unrelated outcome.
                 encoding="utf-8",
             )
             config_path = self.write_config(
-                root, vault, recall_roots=["daily"]
+                root,
+                vault,
+                recall_roots=["daily"],
+                global_memory_root="daily/global",
             )
             env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
 

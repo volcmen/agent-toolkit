@@ -40,6 +40,7 @@ DEFAULTS: dict[str, Any] = {
     "commit_message_prefix": "wiki: agent memory",
     "recall_provider": "auto",
     "recall_roots": ["wiki", "projects", "daily"],
+    "global_memory_root": "wiki/global",
     "native_max_files": 2000,
     "native_max_file_chars": 80_000,
     "qmd_enabled": False,
@@ -154,6 +155,12 @@ def safe_recall_parts(parts: tuple[str, ...]) -> bool:
     return not has_private_vault_segment(parts) and parts[0].casefold() != "inbox"
 
 
+def relative_path_is_within(path: str, root: str) -> bool:
+    path_parts = PurePosixPath(path).parts
+    root_parts = PurePosixPath(root).parts
+    return path_parts[: len(root_parts)] == root_parts
+
+
 def config_path() -> Path:
     override = os.environ.get(CONFIG_ENV)
     return Path(override).expanduser() if override else DEFAULT_CONFIG_PATH
@@ -229,6 +236,34 @@ def load_config() -> tuple[dict[str, Any], Path]:
         if normalized not in normalized_recall_roots:
             normalized_recall_roots.append(normalized)
     config["recall_roots"] = normalized_recall_roots
+    raw_global_root = config.get("global_memory_root")
+    if (
+        not isinstance(raw_global_root, str)
+        or not raw_global_root.strip()
+        or len(raw_global_root) > MAX_PROJECTED_CONFIG_PATH_CHARS
+    ):
+        raise ConfigurationError(
+            f"{path} field 'global_memory_root' must be a safe vault-relative path"
+        )
+    global_relative = PurePosixPath(raw_global_root)
+    if (
+        global_relative.is_absolute()
+        or not global_relative.parts
+        or ".." in global_relative.parts
+        or not safe_recall_parts(global_relative.parts)
+    ):
+        raise ConfigurationError(
+            f"{path} field 'global_memory_root' must be a safe vault-relative path"
+        )
+    global_root = global_relative.as_posix()
+    if not any(
+        relative_path_is_within(global_root, root) for root in normalized_recall_roots
+    ):
+        raise ConfigurationError(
+            f"{path} field 'global_memory_root' must be contained by recall_roots"
+        )
+    config["global_memory_root"] = global_root
+    config["_global_memory_root_from_defaults"] = "global_memory_root" not in raw
     qmd_enabled = config.get("qmd_enabled")
     if not isinstance(qmd_enabled, bool):
         raise ConfigurationError(f"{path} field 'qmd_enabled' must be a boolean")
@@ -2276,7 +2311,7 @@ def normalize_recall_scope(scope: str | None) -> str | None:
 
 
 def path_in_scope(path: str, scope: str | None) -> bool:
-    return scope is None or path == scope or path.startswith(f"{scope}/")
+    return scope is None or relative_path_is_within(path, scope)
 
 
 def provider_recall_roots(config: dict[str, Any], provider: str) -> list[str]:
@@ -2293,7 +2328,7 @@ def provider_recall_roots(config: dict[str, Any], provider: str) -> list[str]:
 
 
 def path_within_roots(path: str, roots: list[str]) -> bool:
-    return any(path == root or path.startswith(f"{root}/") for root in roots)
+    return any(relative_path_is_within(path, root) for root in roots)
 
 
 def resolve_recall_item(

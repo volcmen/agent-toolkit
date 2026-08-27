@@ -73,6 +73,12 @@ def safe_indexed_path(root: Any) -> bool:
     return not any(part.startswith(".") for part in folded) and folded[0] != "inbox"
 
 
+def relative_path_is_within(path: str, root: str) -> bool:
+    path_parts = PurePosixPath(path).parts
+    root_parts = PurePosixPath(root).parts
+    return path_parts[: len(root_parts)] == root_parts
+
+
 def safe_collection_name(value: Any) -> bool:
     return (
         isinstance(value, str)
@@ -228,6 +234,15 @@ def validate_config_example() -> None:
         and len(recall_roots) <= MAX_PROJECTED_CONFIG_ENTRIES
         and all(safe_indexed_path(root) for root in recall_roots),
         "recall_roots must contain safe indexed vault paths",
+    )
+    global_memory_root = config.get("global_memory_root")
+    require(
+        safe_indexed_path(global_memory_root)
+        and any(
+            relative_path_is_within(global_memory_root, root)
+            for root in recall_roots
+        ),
+        "global_memory_root must be a safe indexed path contained by recall_roots",
     )
     require(
         isinstance(config.get("native_max_files"), int)
