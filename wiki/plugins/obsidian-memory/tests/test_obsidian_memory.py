@@ -560,6 +560,160 @@ Prior: old unrelated outcome.
             ["global-missing-valid-until"],
         )
 
+    def test_global_schema_independently_enforces_every_controlled_field_shape(
+        self,
+    ) -> None:
+        """Catches ignored generic classes bypassing exact global vocabularies."""
+        base: dict[str, object] = {
+            "id": "global.project_registry.agent_toolkit",
+            "memory_class": "fact",
+            "scope": "global",
+            "owner": "david",
+            "category": "project_registry",
+            "statement": "Agent Toolkit is the cross-agent workspace.",
+            "status": "verified",
+            "evidence_type": "environment_verified",
+            "source": ["repository"],
+            "verified_by": "repository checks",
+            "confidence": "high",
+            "stability": "review_periodically",
+            "sensitivity": "internal",
+            "observed": "2026-08-27",
+        }
+        fields = (
+            ("id", "global.project_registry.agent_toolkit", "LEAKME-ID", "global-invalid-id", "global-invalid-id"),
+            ("memory_class", "fact", "LEAKME-CLASS", "global-invalid-memory-class", "global-missing-memory-class"),
+            ("scope", "global", "LEAKME-SCOPE", "global-invalid-scope", "global-invalid-scope"),
+            ("owner", "david", "LEAKME-OWNER", "global-invalid-owner", "global-invalid-owner"),
+            ("category", "project_registry", "LEAKME-CATEGORY", "global-invalid-category", "global-invalid-category"),
+            ("status", "verified", "LEAKME-STATUS", "global-invalid-status", "global-missing-status"),
+            ("evidence_type", "environment_verified", "LEAKME-EVIDENCE", "global-invalid-evidence-type", "global-invalid-evidence-type"),
+            ("confidence", "high", "LEAKME-CONFIDENCE", "global-invalid-confidence", "global-missing-confidence"),
+            ("stability", "review_periodically", "LEAKME-STABILITY", "global-invalid-stability", "global-invalid-stability"),
+            ("sensitivity", "internal", "LEAKME-SENSITIVITY", "global-invalid-sensitivity", "global-invalid-sensitivity"),
+            ("observed", "2026-08-27", "LEAKME-OBSERVED", "global-invalid-observed", "global-missing-observed"),
+        )
+        for field, valid, invalid, invalid_code, missing_code in fields:
+            variants = (
+                ("invalid", invalid, invalid_code),
+                ("padded", f"{valid} ", invalid_code),
+                ("list", [valid], invalid_code),
+                ("missing", None, missing_code),
+            )
+            for shape, value, expected_code in variants:
+                with self.subTest(field=field, shape=shape):
+                    metadata = dict(base)
+                    if value is None:
+                        metadata.pop(field)
+                    else:
+                        metadata[field] = value
+                    findings = MODULE.global_record_findings(
+                        "wiki/global/records/project-registry/test.md", metadata
+                    )
+                    self.assertIn(expected_code, [item.code for item in findings])
+                    self.assertNotIn(
+                        "LEAKME-",
+                        json.dumps([item.as_dict() for item in findings]),
+                    )
+
+    def test_global_schema_rejects_ignored_classes_and_invalid_generic_fields(
+        self,
+    ) -> None:
+        """Catches task/episode early returns suppressing specialized findings."""
+        for memory_class in ("task", "episode"):
+            with self.subTest(memory_class=memory_class):
+                findings = MODULE.global_record_findings(
+                    "wiki/global/records/project-registry/ignored.md",
+                    {
+                        "id": "global.project_registry.ignored",
+                        "memory_class": memory_class,
+                        "scope": "global",
+                        "owner": "david",
+                        "category": "project_registry",
+                        "statement": "Ignored class must not bypass the schema.",
+                        "status": "LEAKME-STATUS",
+                        "evidence_type": "environment_verified",
+                        "source": ["repository"],
+                        "confidence": "LEAKME-CONFIDENCE",
+                        "stability": "durable",
+                        "sensitivity": "internal",
+                        "observed": "LEAKME-DATE",
+                    },
+                )
+                self.assertTrue(
+                    {
+                        "global-invalid-memory-class",
+                        "global-invalid-status",
+                        "global-invalid-confidence",
+                        "global-invalid-observed",
+                    }.issubset({item.code for item in findings})
+                )
+                self.assertNotIn(
+                    "LEAKME-",
+                    json.dumps([item.as_dict() for item in findings]),
+                )
+
+    def test_global_schema_enforces_dates_order_and_evidence_status_matrix(self) -> None:
+        """Catches invalid validity windows and unconfirmed current evidence."""
+        base: dict[str, object] = {
+            "id": "global.project_registry.matrix",
+            "memory_class": "decision",
+            "scope": "global",
+            "owner": "david",
+            "category": "project_registry",
+            "statement": "Matrix case.",
+            "status": "active",
+            "evidence_type": "user_confirmed",
+            "source": ["user"],
+            "confidence": "medium",
+            "stability": "durable",
+            "sensitivity": "public",
+            "observed": "2026-08-27",
+            "valid_from": "2026-08-27",
+            "valid_until": "2026-09-01",
+        }
+        date_cases = (
+            ("valid_from", "LEAKME-FROM", "global-invalid-valid-from"),
+            ("valid_from", "2026-08-27 ", "global-invalid-valid-from"),
+            ("valid_from", ["2026-08-27"], "global-invalid-valid-from"),
+            ("valid_until", "LEAKME-UNTIL", "global-invalid-valid-until"),
+            ("valid_until", "2026-09-01 ", "global-invalid-valid-until"),
+            ("valid_until", ["2026-09-01"], "global-invalid-valid-until"),
+        )
+        for field, value, expected in date_cases:
+            with self.subTest(field=field, value=value):
+                metadata = dict(base)
+                metadata[field] = value
+                findings = MODULE.global_record_findings(
+                    "wiki/global/records/project-registry/matrix.md", metadata
+                )
+                self.assertIn(expected, [item.code for item in findings])
+        reversed_dates = dict(base, valid_until="2026-08-26")
+        self.assertIn(
+            "global-invalid-validity-order",
+            [
+                item.code
+                for item in MODULE.global_record_findings(
+                    "wiki/global/records/project-registry/matrix.md",
+                    reversed_dates,
+                )
+            ],
+        )
+        for evidence_type in ("assistant_recommended", "inferred"):
+            for status in MODULE.CURRENT_STATUSES:
+                with self.subTest(evidence_type=evidence_type, status=status):
+                    metadata = dict(base, evidence_type=evidence_type, status=status)
+                    self.assertIn(
+                        "global-unconfirmed-current",
+                        [
+                            item.code
+                            for item in MODULE.global_record_findings(
+                                "wiki/global/records/project-registry/matrix.md",
+                                metadata,
+                            )
+                        ],
+                    )
+
     def test_global_record_contract_bounds_statement_length(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

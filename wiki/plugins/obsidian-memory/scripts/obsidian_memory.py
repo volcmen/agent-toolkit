@@ -1561,12 +1561,19 @@ def global_record_findings(
     if identifier is None or GLOBAL_ID_RE.fullmatch(identifier) is None:
         record("global-invalid-id", "id", "record ID must use the global category namespace")
 
-    memory_class = scalar("memory_class")
-    if memory_class is None:
+    raw_memory_class = metadata.get("memory_class")
+    memory_class = raw_memory_class if isinstance(raw_memory_class, str) else None
+    if not _audit_value_present(raw_memory_class):
         record(
             "global-missing-memory-class",
             "memory_class",
             "record memory class is required",
+        )
+    elif memory_class not in _AUDIT_ACTION_CLASSES:
+        record(
+            "global-invalid-memory-class",
+            "memory_class",
+            "record memory class must be fact, decision, or heuristic",
         )
 
     scope = scalar("scope")
@@ -1599,9 +1606,16 @@ def global_record_findings(
             "record statement exceeds the bounded global record limit",
         )
 
-    status = scalar("status")
-    if status is None:
+    raw_status = metadata.get("status")
+    status = raw_status if isinstance(raw_status, str) else None
+    if not _audit_value_present(raw_status):
         record("global-missing-status", "status", "record status is required")
+    elif status not in _AUDIT_STATUSES:
+        record(
+            "global-invalid-status",
+            "status",
+            "record status must be a recognized governance state",
+        )
 
     evidence_type = scalar("evidence_type")
     if evidence_type not in GLOBAL_EVIDENCE_TYPES:
@@ -1617,11 +1631,30 @@ def global_record_findings(
             "assistant-originated evidence cannot be current",
         )
 
-    if not _audit_value_present(metadata.get("source")):
+    source_present = _audit_value_present(metadata.get("source"))
+    verified = _audit_value_present(metadata.get("verified_by"))
+    if not source_present:
         record("global-missing-source", "source", "record source provenance is required")
+    if status in CURRENT_STATUSES and (
+        (memory_class in {"fact", "heuristic"} and not verified)
+        or (memory_class == "decision" and not (source_present or verified))
+    ):
+        record(
+            "global-missing-verification",
+            "verified_by",
+            "current record requires verification provenance",
+        )
 
-    if scalar("confidence") is None:
+    raw_confidence = metadata.get("confidence")
+    confidence = raw_confidence if isinstance(raw_confidence, str) else None
+    if not _audit_value_present(raw_confidence):
         record("global-missing-confidence", "confidence", "record confidence is required")
+    elif confidence not in _AUDIT_CONFIDENCE:
+        record(
+            "global-invalid-confidence",
+            "confidence",
+            "record confidence must be low, medium, or high",
+        )
 
     stability = scalar("stability")
     if stability not in GLOBAL_STABILITIES:
@@ -1645,8 +1678,39 @@ def global_record_findings(
             "record sensitivity must be recognized",
         )
 
-    if scalar("observed") is None:
+    raw_observed = metadata.get("observed")
+    observed = _exact_iso_date(raw_observed)
+    if not _audit_value_present(raw_observed):
         record("global-missing-observed", "observed", "record observed date is required")
+    elif observed is None:
+        record(
+            "global-invalid-observed",
+            "observed",
+            "record observed date must be an exact ISO date",
+        )
+
+    parsed_dates: dict[str, dt.date] = {}
+    for field, code in (
+        ("valid_from", "global-invalid-valid-from"),
+        ("valid_until", "global-invalid-valid-until"),
+    ):
+        if field not in metadata:
+            continue
+        parsed = _exact_iso_date(metadata[field])
+        if parsed is None:
+            record(code, field, f"record {field} must be an exact ISO date")
+        else:
+            parsed_dates[field] = parsed
+    if (
+        "valid_from" in parsed_dates
+        and "valid_until" in parsed_dates
+        and parsed_dates["valid_until"] < parsed_dates["valid_from"]
+    ):
+        record(
+            "global-invalid-validity-order",
+            "valid_until",
+            "record valid_until must not be earlier than valid_from",
+        )
 
     return findings
 
