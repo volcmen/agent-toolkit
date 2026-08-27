@@ -416,9 +416,9 @@ def main() -> int:
         read_existing_config()
     else:
         configure(args.vault, args.auto_commit, args.replace_config)
-    replace_guidance = args.replace_guidance or args.reuse_config
-    link_policy(CLAUDE_POLICY, replace_guidance)
-    install_codex_policy(CODEX_POLICY, replace_guidance)
+    replace_claude_guidance = args.replace_guidance or args.reuse_config
+    link_policy(CLAUDE_POLICY, replace_claude_guidance)
+    install_codex_policy(CODEX_POLICY, args.replace_guidance)
     if not args.skip_upstream_skill_link:
         link_upstream_skills()
     if not args.keep_legacy_hooks:

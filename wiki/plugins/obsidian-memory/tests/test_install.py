@@ -176,6 +176,97 @@ class InstallTests(unittest.TestCase):
                     MODULE.main()
             self.assertEqual(codex_policy.read_text(encoding="utf-8"), original)
 
+    def test_reuse_config_rejects_unmanaged_codex_symlink_without_replacing_it(
+        self,
+    ) -> None:
+        """Catches automatic config reuse acquiring Codex replacement authority."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = root / "config.json"
+            policy = root / "policy.md"
+            claude_policy = root / "claude-rule.md"
+            codex_policy = root / "AGENTS.md"
+            unrelated = root / "unrelated-guidance.md"
+            config_bytes = b'{"vault": "/private/example", "custom": true}\n'
+            unrelated_bytes = b"KEEP THIS ACTIVE\n"
+            config.write_bytes(config_bytes)
+            policy.write_text("# Shared memory\n", encoding="utf-8")
+            claude_policy.symlink_to(policy)
+            unrelated.write_bytes(unrelated_bytes)
+            codex_policy.symlink_to(unrelated)
+            link_target = codex_policy.readlink()
+
+            with (
+                mock.patch.object(MODULE, "CONFIG", config),
+                mock.patch.object(MODULE, "POLICY", policy),
+                mock.patch.object(MODULE, "CLAUDE_POLICY", claude_policy),
+                mock.patch.object(MODULE, "CODEX_POLICY", codex_policy),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "install.py",
+                        "--reuse-config",
+                        "--skip-product-install",
+                        "--skip-upstream-skill-link",
+                        "--keep-legacy-hooks",
+                    ],
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "symlink not managed by obsidian-memory"
+                ):
+                    MODULE.main()
+
+            self.assertEqual(config.read_bytes(), config_bytes)
+            self.assertTrue(codex_policy.is_symlink())
+            self.assertEqual(codex_policy.readlink(), link_target)
+            self.assertEqual(unrelated.read_bytes(), unrelated_bytes)
+
+    def test_explicit_replace_guidance_retains_symlink_replacement_authority(
+        self,
+    ) -> None:
+        """Catches removal of the reviewed explicit replacement escape hatch."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = root / "config.json"
+            policy = root / "policy.md"
+            claude_policy = root / "claude-rule.md"
+            codex_policy = root / "AGENTS.md"
+            unrelated = root / "unrelated-guidance.md"
+            config.write_text('{"vault": "/private/example"}\n', encoding="utf-8")
+            policy.write_text("# Shared memory\n", encoding="utf-8")
+            claude_policy.symlink_to(policy)
+            unrelated.write_text("KEEP TARGET\n", encoding="utf-8")
+            codex_policy.symlink_to(unrelated)
+
+            with (
+                mock.patch.object(MODULE, "CONFIG", config),
+                mock.patch.object(MODULE, "POLICY", policy),
+                mock.patch.object(MODULE, "CLAUDE_POLICY", claude_policy),
+                mock.patch.object(MODULE, "CODEX_POLICY", codex_policy),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "install.py",
+                        "--reuse-config",
+                        "--replace-guidance",
+                        "--skip-product-install",
+                        "--skip-upstream-skill-link",
+                        "--keep-legacy-hooks",
+                    ],
+                ),
+            ):
+                self.assertEqual(MODULE.main(), 0)
+
+            self.assertFalse(codex_policy.is_symlink())
+            self.assertIn(
+                MODULE.CODEX_POLICY_START,
+                codex_policy.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(unrelated.read_text(encoding="utf-8"), "KEEP TARGET\n")
+
     def test_status_is_read_only_and_does_not_expose_vault_or_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
