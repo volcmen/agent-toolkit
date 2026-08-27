@@ -435,6 +435,52 @@ Prior: old unrelated outcome.
             [],
         )
 
+    def test_global_namespace_audit_rejects_every_non_record_markdown_sibling(
+        self,
+    ) -> None:
+        """Catches body-only biography or project state evading global audit."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            siblings = {
+                "wiki/global/biography.md": "GLOBAL-BIOGRAPHY-SENTINEL",
+                "wiki/global/profile.md": "GLOBAL-PROFILE-SENTINEL",
+                "wiki/global/project-state/alpha.md": "GLOBAL-PROJECT-SENTINEL",
+            }
+            for relative, body in siblings.items():
+                path = vault / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(body, encoding="utf-8")
+            readme = vault / "wiki" / "global" / "README.md"
+            readme.write_text("GLOBAL-ROUTER-SENTINEL\n", encoding="utf-8")
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                report = MODULE.audit_vault(config)
+
+        global_locations = [
+            (item["path"], item["code"], item.get("field"), item["detail"])
+            for item in report["findings"]
+            if item["code"] == "global-invalid-location"
+        ]
+        self.assertEqual(
+            global_locations,
+            [
+                (
+                    relative,
+                    "global-invalid-location",
+                    None,
+                    "global Markdown must be the routing README or a governed record",
+                )
+                for relative in sorted(siblings)
+            ],
+        )
+        encoded = json.dumps(report)
+        for secret in (*siblings.values(), "GLOBAL-ROUTER-SENTINEL"):
+            self.assertNotIn(secret, encoded)
+
     def test_global_record_contract_rejects_missing_or_invalid_record_id(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -1062,6 +1108,68 @@ Prior: old unrelated outcome.
             self.assertEqual(compact, [])
             self.assertNotIn("outside/hidden.md", serialized)
             self.assertNotIn("QMD-OUTSIDE-SENTINEL", serialized)
+
+    def test_global_namespace_recall_returns_only_governed_records(self) -> None:
+        """Catches global README, profile, and project-state siblings entering L1."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            valid = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/valid.md",
+                id="global.privacy.valid",
+                category="privacy",
+                sensitivity="public",
+            )
+            siblings = {
+                "wiki/global/README.md": "GLOBAL-README-RECALL-SENTINEL",
+                "wiki/global/profile.md": "GLOBAL-PROFILE-RECALL-SENTINEL",
+                "wiki/global/project-state/alpha.md": "GLOBAL-STATE-RECALL-SENTINEL",
+            }
+            for relative, body in siblings.items():
+                path = vault / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(body, encoding="utf-8")
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            valid_relative = valid.relative_to(vault).as_posix()
+            for provider in ("native", "qmd"):
+                rows = []
+                for relative, sentinel in (
+                    (valid_relative, "valid"),
+                    *siblings.items(),
+                ):
+                    row = {
+                        (
+                            "path" if provider == "native" else "file"
+                        ): (
+                            relative
+                            if provider == "native"
+                            else f"qmd://obsidian-wiki/{relative.removeprefix('wiki/')}"
+                        ),
+                        "snippet": sentinel,
+                    }
+                    rows.append(row)
+                with self.subTest(provider=provider):
+                    compact, _ = MODULE.compact_recall_results(
+                        config,
+                        rows,
+                        limit=10,
+                        max_tokens=900,
+                        include_stale=False,
+                        provider=provider,
+                    )
+                    serialized = json.dumps(compact)
+                    self.assertEqual(
+                        [item["path"] for item in compact], [valid_relative]
+                    )
+                    for relative, sentinel in siblings.items():
+                        self.assertNotIn(relative, serialized)
+                        self.assertNotIn(sentinel, serialized)
 
     def test_recall_payload_rejects_mocked_qmd_rows_outside_recall_roots(self) -> None:
         """Catches a provider double bypassing the final configured-root boundary."""

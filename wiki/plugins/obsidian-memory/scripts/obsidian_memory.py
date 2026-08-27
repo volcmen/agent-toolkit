@@ -1529,6 +1529,10 @@ def global_records_prefix(config: dict[str, Any]) -> str:
     return f"{config['global_memory_root'].rstrip('/')}/records"
 
 
+def is_global_memory_path(config: dict[str, Any], vault_relative: str) -> bool:
+    return relative_path_is_within(vault_relative, config["global_memory_root"])
+
+
 def is_global_record_path(config: dict[str, Any], vault_relative: str) -> bool:
     return relative_path_is_within(vault_relative, global_records_prefix(config))
 
@@ -1699,6 +1703,10 @@ def classify_recall_record(
     config: dict[str, Any], path: Path, vault_relative: str
 ) -> RecallRecordClassification:
     """Classify one resolved recall result without trusting provider metadata."""
+    if is_global_memory_path(config, vault_relative) and not is_global_record_path(
+        config, vault_relative
+    ):
+        return RecallRecordClassification(False, {}, None, False)
     if not is_global_record_path(config, vault_relative):
         metadata = parse_frontmatter(path)
         return RecallRecordClassification(
@@ -2233,7 +2241,19 @@ def audit_vault(config: dict[str, Any]) -> dict[str, Any]:
             identifier = metadata.get("id")
             if isinstance(identifier, str) and GLOBAL_ID_RE.fullmatch(identifier):
                 global_id_paths.setdefault(identifier, []).append(vault_relative)
-        elif not is_global_routing_readme(config, vault_relative):
+        elif is_global_routing_readme(config, vault_relative):
+            pass
+        elif is_global_memory_path(config, vault_relative):
+            record(
+                AuditFinding(
+                    "error",
+                    "global-invalid-location",
+                    vault_relative,
+                    None,
+                    "global Markdown must be the routing README or a governed record",
+                )
+            )
+        else:
             identifier = metadata.get("id")
             if isinstance(identifier, str) and identifier.startswith("global."):
                 record(
