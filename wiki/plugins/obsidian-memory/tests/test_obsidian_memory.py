@@ -808,6 +808,113 @@ Prior: old unrelated outcome.
                 "projects/acme/private",
             )
 
+    def test_sensitive_recall_rejects_an_ancestor_of_custom_roots_before_provider(
+        self,
+    ) -> None:
+        """Catches one ancestor scope widening recall across multiple custom roots."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_roots=["projects/acme", "projects/beta"],
+                global_memory_root="projects/acme/global",
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            with (
+                mock.patch.object(MODULE, "select_recall_provider") as select,
+                self.assertRaises(ValueError),
+            ):
+                MODULE.recall_payload(
+                    config,
+                    "private rule",
+                    "fast",
+                    3,
+                    provider="native",
+                    scope="projects",
+                    include_sensitive=True,
+                )
+            select.assert_not_called()
+            with self.assertRaises(ValueError):
+                MODULE.compact_recall_results(
+                    config,
+                    [],
+                    limit=3,
+                    max_tokens=900,
+                    include_stale=False,
+                    include_sensitive=True,
+                    scope="projects",
+                )
+
+    def test_sensitive_recall_accepts_one_strict_custom_root_descendant(self) -> None:
+        """Catches rejecting a narrow scope owned by exactly one custom root."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_roots=["projects/acme", "projects/beta"],
+                global_memory_root="projects/acme/global",
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            self.assertEqual(
+                MODULE.validate_sensitive_scope(config, "projects/acme/private"),
+                "projects/acme/private",
+            )
+
+    def test_sensitive_recall_rejects_overlapping_root_ambiguity_before_provider(
+        self,
+    ) -> None:
+        """Catches one scope being authorized through two overlapping roots."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_roots=["projects", "projects/acme"],
+                global_memory_root="projects/acme/global",
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            with (
+                mock.patch.object(MODULE, "select_recall_provider") as select,
+                self.assertRaises(ValueError),
+            ):
+                MODULE.recall_payload(
+                    config,
+                    "private rule",
+                    "fast",
+                    3,
+                    provider="native",
+                    scope="projects/acme/private",
+                    include_sensitive=True,
+                )
+            select.assert_not_called()
+            with self.assertRaises(ValueError):
+                MODULE.compact_recall_results(
+                    config,
+                    [],
+                    limit=3,
+                    max_tokens=900,
+                    include_stale=False,
+                    include_sensitive=True,
+                    scope="projects/acme/private",
+                )
+
     def test_explicit_sensitive_recall_returns_only_records_within_narrow_scope(
         self,
     ) -> None:

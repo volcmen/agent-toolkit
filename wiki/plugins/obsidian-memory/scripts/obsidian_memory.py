@@ -2555,6 +2555,13 @@ def validate_sensitive_scope(config: dict[str, Any], scope: str | None) -> str:
     normalized = normalize_recall_scope(scope)
     if normalized is None:
         raise ValueError("--include-sensitive requires an explicit narrow --scope")
+    authorized_roots = [
+        root
+        for root in config["recall_roots"]
+        if normalized != root and relative_path_is_within(normalized, root)
+    ]
+    if len(authorized_roots) != 1:
+        raise ValueError("--include-sensitive requires a scope below a broad recall root")
     broad = {
         *config["recall_roots"],
         config["global_memory_root"],
