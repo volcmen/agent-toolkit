@@ -993,6 +993,118 @@ Prior: old unrelated outcome.
                     ):
                         self.assertNotIn(forbidden, serialized)
 
+    def test_load_config_rejects_active_or_explicit_qmd_roots_outside_recall(
+        self,
+    ) -> None:
+        """Catches an audit-invalid QMD mapping becoming live provider authority."""
+        cases = (
+            {
+                "qmd_enabled": True,
+                "qmd_collections": ["outside"],
+                "qmd_collection_roots": {"outside": "outside"},
+            },
+            {
+                "qmd_enabled": False,
+                "qmd_collections": [],
+                "qmd_collection_roots": {"outside": "outside"},
+            },
+        )
+        for overrides in cases:
+            with self.subTest(overrides=overrides), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                vault = self.make_vault(root)
+                (vault / "outside").mkdir()
+                config_path = self.write_config(
+                    root,
+                    vault,
+                    recall_roots=["wiki"],
+                    **overrides,
+                )
+                with mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ):
+                    with self.assertRaisesRegex(
+                        MODULE.ConfigurationError,
+                        "qmd_collection_roots.*outside configured recall_roots",
+                    ):
+                        MODULE.load_config()
+
+    def test_qmd_compaction_rejects_resolved_paths_outside_recall_roots(self) -> None:
+        """Catches final compaction trusting an inconsistent provider mapping."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            outside = vault / "outside" / "hidden.md"
+            outside.parent.mkdir()
+            outside.write_text("QMD-OUTSIDE-SENTINEL\n", encoding="utf-8")
+            config_path = self.write_config(root, vault, recall_roots=["wiki"])
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+            config["qmd_collections"] = ["outside"]
+            config["qmd_collection_roots"] = {"outside": "outside"}
+            uri = "qmd://outside/hidden.md"
+
+            self.assertEqual(
+                MODULE.resolve_qmd_uri(config, uri),
+                (outside.resolve(), "outside/hidden.md"),
+            )
+            compact, _ = MODULE.compact_recall_results(
+                config,
+                [{"file": uri, "snippet": "QMD-OUTSIDE-SENTINEL"}],
+                limit=5,
+                max_tokens=900,
+                include_stale=False,
+                provider="qmd",
+            )
+            serialized = json.dumps(compact)
+            self.assertEqual(compact, [])
+            self.assertNotIn("outside/hidden.md", serialized)
+            self.assertNotIn("QMD-OUTSIDE-SENTINEL", serialized)
+
+    def test_recall_payload_rejects_mocked_qmd_rows_outside_recall_roots(self) -> None:
+        """Catches a provider double bypassing the final configured-root boundary."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            outside = vault / "outside" / "hidden.md"
+            outside.parent.mkdir()
+            outside.write_text("QMD-PAYLOAD-SENTINEL\n", encoding="utf-8")
+            config_path = self.write_config(root, vault, recall_roots=["wiki"])
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+            config["qmd_collections"] = ["outside"]
+            config["qmd_collection_roots"] = {"outside": "outside"}
+            with (
+                mock.patch.object(
+                    MODULE, "select_recall_provider", return_value=("qmd", "")
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "qmd_recall_candidates",
+                    return_value=[
+                        {
+                            "file": "qmd://outside/hidden.md",
+                            "snippet": "QMD-PAYLOAD-SENTINEL",
+                        }
+                    ],
+                ),
+            ):
+                payload = MODULE.recall_payload(
+                    config,
+                    "QMD-PAYLOAD-SENTINEL",
+                    "semantic",
+                    5,
+                    provider="qmd",
+                )
+            serialized = json.dumps(payload["results"])
+            self.assertEqual(payload["results"], [])
+            self.assertNotIn("outside/hidden.md", serialized)
+            self.assertNotIn("QMD-PAYLOAD-SENTINEL", serialized)
+
     def test_sensitive_recall_requires_an_explicit_narrow_scope_before_provider(self) -> None:
         """Catches provider execution before sensitive authorization is validated."""
         with tempfile.TemporaryDirectory() as temp:
@@ -6348,7 +6460,6 @@ Prior: old unrelated outcome.
             )
             collections = [
                 "safe",
-                "outside",
                 "missing",
                 "direct",
                 "parent",
@@ -6363,7 +6474,6 @@ Prior: old unrelated outcome.
                 qmd_collections=collections,
                 qmd_collection_roots={
                     "safe": "wiki",
-                    "outside": "projects",
                     "missing": "wiki/qmd-missing",
                     "direct": "wiki/qmd-direct",
                     "parent": "wiki/qmd-parent/nested",
@@ -6400,7 +6510,6 @@ Prior: old unrelated outcome.
         self.assertEqual(
             mapping_findings,
             [
-                ("qmd_collection_roots[outside]", "qmd-root-outside-recall"),
                 ("qmd_collection_roots[missing]", "qmd-root-missing"),
                 ("qmd_collection_roots[direct]", "qmd-root-symlink"),
                 ("qmd_collection_roots[parent]", "qmd-root-symlink"),
@@ -6511,10 +6620,10 @@ Prior: old unrelated outcome.
                 ):
                     self.assertNotIn(secret, encoded)
 
-    def test_audit_reports_outside_qmd_mapping_even_when_qmd_is_disabled(
+    def test_configuration_rejects_outside_qmd_mapping_even_when_qmd_is_disabled(
         self,
     ) -> None:
-        """Catches a dormant mapping that could later widen recall silently."""
+        """Catches a dormant mapping reaching audit as accepted configuration."""
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             vault = self.make_vault(root)
@@ -6529,16 +6638,11 @@ Prior: old unrelated outcome.
             with mock.patch.dict(
                 os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
             ):
-                config, _ = MODULE.load_config()
-                report = MODULE.audit_vault(config)
-
-        self.assertIn(
-            ("qmd_collection_roots[outside]", "qmd-root-outside-recall"),
-            [
-                (item.get("field"), item["code"])
-                for item in report["findings"]
-            ],
-        )
+                with self.assertRaisesRegex(
+                    MODULE.ConfigurationError,
+                    "qmd_collection_roots.*outside configured recall_roots",
+                ):
+                    MODULE.load_config()
 
     def test_audit_checks_default_commit_roots_only_when_auto_commit_is_active(
         self,

@@ -333,6 +333,19 @@ def load_config() -> tuple[dict[str, Any], Path]:
             f"{path} field 'qmd_collection_roots' is missing configured "
             f"collection(s): {', '.join(missing_roots)}"
         )
+    checked_collections: set[str] = set()
+    if qmd_enabled or not config["_qmd_collections_from_defaults"]:
+        checked_collections.update(qmd_collections)
+    if not config["_qmd_collection_roots_from_defaults"]:
+        checked_collections.update(normalized_roots)
+    if any(
+        not path_within_roots(normalized_roots[collection], normalized_recall_roots)
+        for collection in checked_collections
+    ):
+        raise ConfigurationError(
+            f"{path} field 'qmd_collection_roots' contains a mapping outside "
+            "configured recall_roots"
+        )
     config["qmd_collection_roots"] = normalized_roots
     qmd_top_k = config.get("qmd_top_k")
     if (
@@ -2917,6 +2930,8 @@ def compact_recall_results(
         if resolved is None:
             continue
         source_path, vault_relative = resolved
+        if not path_within_roots(vault_relative, config["recall_roots"]):
+            continue
         if not path_in_scope(vault_relative, scope):
             continue
         classification = classify_recall_record(
