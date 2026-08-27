@@ -312,53 +312,196 @@ class StatusParsing(unittest.TestCase):
 class MarketplaceReconnection(unittest.TestCase):
     """Force install must source local plugins from the executing checkout."""
 
-    def test_force_install_reconnects_drifted_marketplace_roots(self) -> None:
-        state = {
-            "codex_root": "/tmp/old-checkout",
-            "claude_root": "/tmp/old-checkout",
-        }
-        completed = mock.Mock(returncode=0, stdout="", stderr="")
+    OLD_ROOT = "/tmp/old-checkout"
+    CODEX_OTHER_ROOT = "/tmp/codex-curated"
+    CLAUDE_OTHER_ROOT = "/tmp/claude-official"
 
-        def codex_marketplaces() -> str:
-            return f"MARKETPLACE ROOT\nai-workspace {state['codex_root']}\n"
+    def exercise_install(self, *, force: bool):
+        state = {
+            "codex_root": self.OLD_ROOT,
+            "claude_root": self.OLD_ROOT,
+        }
+        codex_commands = []
+        claude_commands = []
+
+        def completed(stdout=""):
+            return mock.Mock(returncode=0, stdout=stdout, stderr="")
 
         def run(command, allow_failure=False, quiet=False):
+            if command[0] == "codex":
+                codex_commands.append(list(command))
+            elif command[0] == "claude":
+                claude_commands.append(list(command))
+
+            if command == ["codex", "plugin", "marketplace", "list"]:
+                rows = [
+                    "MARKETPLACE     ROOT",
+                    f"openai-curated  {self.CODEX_OTHER_ROOT}",
+                ]
+                if state["codex_root"]:
+                    rows.append(f"ai-workspace    {state['codex_root']}")
+                return completed("\n".join(rows) + "\n")
             if command[:4] == ["codex", "plugin", "marketplace", "remove"]:
                 state["codex_root"] = ""
             elif command[:4] == ["codex", "plugin", "marketplace", "add"]:
+                if state["codex_root"]:
+                    raise AssertionError("Codex marketplace add requires prior removal")
                 state["codex_root"] = command[4]
             elif command == ["claude", "plugin", "marketplace", "list", "--json"]:
-                completed.stdout = json.dumps(
-                    [
+                entries = [
+                    {
+                        "name": "claude-plugins-official",
+                        "source": "github",
+                        "installLocation": self.CLAUDE_OTHER_ROOT,
+                    }
+                ]
+                if state["claude_root"]:
+                    entries.append(
                         {
                             "name": "ai-workspace",
                             "source": "directory",
                             "installLocation": state["claude_root"],
                         }
-                    ]
-                )
-                return completed
+                    )
+                return completed(json.dumps(entries))
             elif command[:4] == ["claude", "plugin", "marketplace", "remove"]:
                 state["claude_root"] = ""
             elif command[:4] == ["claude", "plugin", "marketplace", "add"]:
+                if state["claude_root"]:
+                    raise AssertionError("Claude marketplace add requires prior removal")
                 state["claude_root"] = command[4]
-            completed.stdout = ""
-            return completed
+            return completed()
 
-        args = argparse.Namespace(scope="user", force=True)
+        args = argparse.Namespace(scope="user", force=force)
         with TemporaryDirectory() as tmp:
             with (
                 mock.patch.object(pl, "MEMORY_CONFIG", Path(tmp) / "missing.json"),
                 mock.patch.object(pl, "load_catalog", return_value=catalog()),
                 mock.patch.object(pl.shutil, "which", return_value="/usr/bin/tool"),
-                mock.patch.object(pl, "codex_marketplaces", side_effect=codex_marketplaces),
                 mock.patch.object(pl, "run", side_effect=run),
                 mock.patch.object(pl, "cmd_status", return_value=0),
             ):
                 self.assertEqual(pl.cmd_install(args), 0)
 
+        return state, codex_commands, claude_commands
+
+    def test_force_install_orders_codex_reconnection_before_plugin_refresh(self) -> None:
+        state, commands, _ = self.exercise_install(force=True)
+
         self.assertEqual(state["codex_root"], str(pl.ROOT))
+        self.assertEqual(
+            commands,
+            [
+                ["codex", "plugin", "marketplace", "list"],
+                ["codex", "plugin", "marketplace", "list"],
+                ["codex", "plugin", "marketplace", "remove", "ai-workspace"],
+                ["codex", "plugin", "marketplace", "add", str(pl.ROOT), "--json"],
+                ["codex", "plugin", "remove", "demo@ai-workspace"],
+                ["codex", "plugin", "add", "demo@ai-workspace", "--json"],
+            ],
+        )
+
+    def test_force_install_orders_claude_reconnection_before_plugin_refresh(self) -> None:
+        state, _, commands = self.exercise_install(force=True)
+
         self.assertEqual(state["claude_root"], str(pl.ROOT))
+        self.assertEqual(
+            commands,
+            [
+                ["claude", "plugin", "marketplace", "list", "--json"],
+                [
+                    "claude",
+                    "plugin",
+                    "marketplace",
+                    "remove",
+                    "ai-workspace",
+                    "--scope",
+                    "user",
+                ],
+                [
+                    "claude",
+                    "plugin",
+                    "marketplace",
+                    "add",
+                    str(pl.ROOT),
+                    "--scope",
+                    "user",
+                ],
+                [
+                    "claude",
+                    "plugin",
+                    "uninstall",
+                    "demo@ai-workspace",
+                    "--scope",
+                    "user",
+                    "--yes",
+                    "--keep-data",
+                ],
+                [
+                    "claude",
+                    "plugin",
+                    "install",
+                    "demo@ai-workspace",
+                    "--scope",
+                    "user",
+                ],
+                [
+                    "claude",
+                    "plugin",
+                    "update",
+                    "demo@ai-workspace",
+                    "--scope",
+                    "user",
+                ],
+                [
+                    "claude",
+                    "plugin",
+                    "enable",
+                    "demo@ai-workspace",
+                    "--scope",
+                    "user",
+                ],
+            ],
+        )
+
+    def test_non_force_install_preserves_stale_roots_and_update_flow(self) -> None:
+        state, codex_commands, claude_commands = self.exercise_install(force=False)
+
+        self.assertEqual(
+            state,
+            {"codex_root": self.OLD_ROOT, "claude_root": self.OLD_ROOT},
+        )
+        self.assertEqual(
+            codex_commands,
+            [
+                ["codex", "plugin", "marketplace", "list"],
+                ["codex", "plugin", "marketplace", "list"],
+                ["codex", "plugin", "add", "demo@ai-workspace", "--json"],
+            ],
+        )
+        self.assertEqual(
+            claude_commands,
+            [
+                ["claude", "plugin", "marketplace", "list", "--json"],
+                ["claude", "plugin", "marketplace", "update", "ai-workspace"],
+                [
+                    "claude",
+                    "plugin",
+                    "install",
+                    "demo@ai-workspace",
+                    "--scope",
+                    "user",
+                ],
+                [
+                    "claude",
+                    "plugin",
+                    "update",
+                    "demo@ai-workspace",
+                    "--scope",
+                    "user",
+                ],
+            ],
+        )
 
 
 class WorkspaceGuidanceParity(unittest.TestCase):
