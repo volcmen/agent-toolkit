@@ -1765,7 +1765,10 @@ def _strict_recall_frontmatter(
         if key in seen:
             return None
         seen.add(key)
-    return _parse_frontmatter_prefix(text)
+    metadata = _parse_frontmatter_prefix(text)
+    if "sensitivity" in seen and "sensitivity" not in metadata:
+        return None
+    return metadata
 
 
 def _strict_global_frontmatter(
@@ -2283,13 +2286,18 @@ def audit_vault(config: dict[str, Any]) -> dict[str, Any]:
             )
             continue
         if kind == "symlink-file":
+            global_alias = is_global_record_path(config, vault_relative)
             record(
                 AuditFinding(
                     "error",
-                    "symlink-file",
+                    "global-symlink-alias" if global_alias else "symlink-file",
                     vault_relative,
                     None,
-                    "Markdown symlink was not followed or read",
+                    (
+                        "global record alias was not followed or read"
+                        if global_alias
+                        else "Markdown symlink was not followed or read"
+                    ),
                 )
             )
             continue
@@ -2488,7 +2496,20 @@ def qmd_segment_key(segment: str, *, is_file: bool) -> str:
     return f"{cleaned}{extension}".casefold()
 
 
-def resolve_qmd_uri(config: dict[str, Any], uri: str) -> tuple[Path, str] | None:
+@dataclass(frozen=True)
+class RecallItemResolution:
+    """One provider path with its lexical authority origin preserved."""
+
+    path: Path
+    vault_relative: str
+    origin_relative: str
+    global_origin: bool
+    unsafe_alias: bool
+
+
+def resolve_qmd_uri_detailed(
+    config: dict[str, Any], uri: str
+) -> RecallItemResolution | None:
     match = re.fullmatch(r"qmd://([^/]+)/(.+)", uri)
     if not match:
         return None
@@ -2497,18 +2518,34 @@ def resolve_qmd_uri(config: dict[str, Any], uri: str) -> tuple[Path, str] | None
     if root_value is None:
         return None
     relative = PurePosixPath(raw_relative)
-    if relative.is_absolute() or ".." in relative.parts:
+    if (
+        relative.is_absolute()
+        or ".." in relative.parts
+        or not safe_recall_parts(relative.parts)
+    ):
         return None
     vault: Path = config["vault"]
-    root = (vault / PurePosixPath(root_value)).resolve()
-    candidate = (root / relative).resolve()
+    lexical_root = vault.joinpath(*PurePosixPath(root_value).parts)
     try:
-        candidate.relative_to(root)
+        root = lexical_root.resolve()
         root.relative_to(vault)
-    except ValueError:
+    except (OSError, RuntimeError, ValueError):
+        return None
+    if lexical_root.absolute() != root:
         return None
 
-    if not candidate.is_file():
+    origin_relative = PurePosixPath(root_value).joinpath(relative).as_posix()
+    global_origin = is_global_record_path(config, origin_relative)
+    lexical_candidate = root.joinpath(*relative.parts)
+    try:
+        candidate = lexical_candidate.resolve()
+        candidate.relative_to(root)
+        exact_file = lexical_candidate.is_file()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    unsafe_alias = exact_file and lexical_candidate.absolute() != candidate
+
+    if not exact_file:
         # QMD normalizes every path segment, so "Team Notes/my_file.md" is
         # indexed as "Team-Notes/my-file.md". Recover the source by walking
         # the tree and matching each segment under the same normalization.
@@ -2519,16 +2556,25 @@ def resolve_qmd_uri(config: dict[str, Any], uri: str) -> tuple[Path, str] | None
             if not current.is_dir():
                 return None
             key = qmd_segment_key(part, is_file=is_file)
-            matches = [
-                child
-                for child in current.iterdir()
-                if (child.is_file() if is_file else child.is_dir())
-                and qmd_segment_key(child.name, is_file=is_file) == key
-            ]
+            try:
+                matches = [
+                    child
+                    for child in current.iterdir()
+                    if not child.is_symlink()
+                    and (child.is_file() if is_file else child.is_dir())
+                    and qmd_segment_key(child.name, is_file=is_file) == key
+                ]
+            except OSError:
+                return None
             if len(matches) != 1:
                 return None
             current = matches[0]
-        candidate = current.resolve()
+        try:
+            candidate = current.resolve()
+        except (OSError, RuntimeError):
+            return None
+        if current.absolute() != candidate:
+            unsafe_alias = True
 
     try:
         candidate.relative_to(root)
@@ -2539,7 +2585,22 @@ def resolve_qmd_uri(config: dict[str, Any], uri: str) -> tuple[Path, str] | None
         return None
     if not safe_recall_parts(PurePosixPath(vault_relative).parts):
         return None
-    return candidate, vault_relative
+    if global_origin and not is_global_record_path(config, vault_relative):
+        unsafe_alias = True
+    return RecallItemResolution(
+        candidate,
+        vault_relative,
+        origin_relative,
+        global_origin,
+        unsafe_alias,
+    )
+
+
+def resolve_qmd_uri(config: dict[str, Any], uri: str) -> tuple[Path, str] | None:
+    resolved = resolve_qmd_uri_detailed(config, uri)
+    if resolved is None or resolved.unsafe_alias:
+        return None
+    return resolved.path, resolved.vault_relative
 
 
 @dataclass(frozen=True)
@@ -2798,13 +2859,23 @@ def path_within_roots(path: str, roots: list[str]) -> bool:
 
 def resolve_recall_item(
     config: dict[str, Any], item: dict[str, Any]
-) -> tuple[Path, str] | None:
+) -> RecallItemResolution | None:
     raw_path = item.get("path")
     if isinstance(raw_path, str):
-        return resolve_vault_reference(config, raw_path)
+        resolved = resolve_vault_reference(config, raw_path)
+        if resolved is None:
+            return None
+        path, vault_relative = resolved
+        return RecallItemResolution(
+            path,
+            vault_relative,
+            vault_relative,
+            is_global_record_path(config, vault_relative),
+            False,
+        )
     raw_uri = item.get("file")
     if isinstance(raw_uri, str):
-        return resolve_qmd_uri(config, raw_uri)
+        return resolve_qmd_uri_detailed(config, raw_uri)
     return None
 
 
@@ -2833,6 +2904,43 @@ def memory_state(metadata: dict[str, str], today: dt.date | None = None) -> str:
     return "unknown"
 
 
+def extend_rejected_supersession_paths(
+    config: dict[str, Any],
+    *,
+    source_path: Path,
+    source_relative: str,
+    allowed_roots: list[str],
+    rejected_paths: set[str],
+) -> None:
+    """Taint a rejected provider alias and its bounded successor lineage."""
+    current_path = source_path
+    current_relative = source_relative
+    seen: set[str] = set()
+    for _hop in range(MAX_SUPERSESSION_HOPS + 1):
+        rejected_paths.add(current_relative)
+        if current_relative in seen:
+            return
+        seen.add(current_relative)
+        classification = classify_recall_record(
+            config, current_path, current_relative
+        )
+        if not classification.allowed:
+            return
+        reference = classification.metadata.get("superseded_by", "")
+        if not reference:
+            return
+        resolved = resolve_vault_reference_detailed(
+            config,
+            reference,
+            source_path=current_path,
+            allowed_roots=allowed_roots,
+        )
+        if resolved.issue or resolved.path is None or resolved.vault_relative is None:
+            return
+        current_path = resolved.path
+        current_relative = resolved.vault_relative
+
+
 def follow_supersession_chain(
     config: dict[str, Any],
     *,
@@ -2842,12 +2950,15 @@ def follow_supersession_chain(
     allowed_roots: list[str],
     scope: str | None = None,
     include_sensitive: bool | None = None,
+    global_origin: bool = False,
 ) -> SupersessionResult:
     """Resolve a stale note's bounded successor chain inside recall boundaries."""
     seen = {source_relative}
     current_path = source_path
     current_metadata = metadata
-    governed_global_chain = is_global_record_path(config, source_relative)
+    governed_global_chain = global_origin or is_global_record_path(
+        config, source_relative
+    )
     for _hop in range(MAX_SUPERSESSION_HOPS):
         reference = current_metadata.get("superseded_by", "")
         if not reference:
@@ -2935,6 +3046,7 @@ def supersession_redirect(
     scope: str | None = None,
     include_sensitive: bool = False,
     filter_counts: dict[str, int] | None = None,
+    global_origin: bool = False,
 ) -> dict[str, Any] | None:
     replacement = follow_supersession_chain(
         config,
@@ -2944,6 +3056,7 @@ def supersession_redirect(
         allowed_roots=allowed_roots,
         scope=scope,
         include_sensitive=include_sensitive,
+        global_origin=global_origin,
     )
     if replacement.issue == "sensitive":
         if filter_counts is not None:
@@ -3001,6 +3114,8 @@ def compact_recall_results(
     filter_counts: dict[str, int] | None = None,
     scope: str | None = None,
     provider: str = "native",
+    blocked_paths: set[str] | None = None,
+    rejected_alias_paths: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Turn provider rows into governed, scoped, token-bounded L1 hits."""
     if include_sensitive:
@@ -3044,7 +3159,23 @@ def compact_recall_results(
         resolved = resolve_recall_item(config, item)
         if resolved is None:
             continue
-        source_path, vault_relative = resolved
+        source_path = resolved.path
+        vault_relative = resolved.vault_relative
+        if resolved.unsafe_alias or (
+            resolved.global_origin
+            and not is_global_record_path(config, vault_relative)
+        ):
+            if rejected_alias_paths is not None:
+                extend_rejected_supersession_paths(
+                    config,
+                    source_path=source_path,
+                    source_relative=vault_relative,
+                    allowed_roots=allowed_roots,
+                    rejected_paths=rejected_alias_paths,
+                )
+            continue
+        if blocked_paths is not None and vault_relative in blocked_paths:
+            continue
         if not path_within_roots(vault_relative, config["recall_roots"]):
             continue
         if not path_in_scope(vault_relative, scope):
@@ -3075,6 +3206,7 @@ def compact_recall_results(
                 scope,
                 include_sensitive,
                 filter_counts,
+                resolved.global_origin,
             )
             if redirect is not None and not append_within_budget(redirect):
                 break
@@ -3528,6 +3660,7 @@ def recall_payload(
         )
 
     filter_counts: dict[str, int] = {}
+    rejected_alias_paths: set[str] = set()
     try:
         compact, filtered_stale = compact_recall_results(
             config,
@@ -3539,6 +3672,7 @@ def recall_payload(
             filter_counts=filter_counts,
             scope=normalized_scope,
             provider=active_provider,
+            rejected_alias_paths=rejected_alias_paths,
         )
     except ValueError as exc:
         raise RecallProviderError(f"recall provider returned invalid results: {exc}") from exc
@@ -3557,6 +3691,7 @@ def recall_payload(
             filter_counts=native_filter_counts,
             scope=normalized_scope,
             provider="native",
+            blocked_paths=rejected_alias_paths,
         )
         if native_compact:
             active_provider = "native"

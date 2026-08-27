@@ -1437,6 +1437,7 @@ Prior: old unrelated outcome.
         malformed = {
             "padded": 'sensitivity: "private "',
             "list": "sensitivity:\n  - private",
+            "inline-list": "sensitivity: [private]",
             "duplicate": "sensitivity: private\nsensitivity: public",
             "incomplete": "sensitivity: private",
             "oversized": "sensitivity: private\npadding: " + ("x" * 12_100),
@@ -1521,6 +1522,180 @@ Prior: old unrelated outcome.
                 [target.relative_to(vault).as_posix()],
             )
             self.assertIn("EXACT-PRIVATE-SENTINEL", visible[0]["snippet"])
+
+    def test_qmd_global_alias_is_rejected_with_native_parity_and_safe_audit(
+        self,
+    ) -> None:
+        """Catches QMD canonicalization erasing a global-looking alias origin."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            routes = vault / "wiki" / "routes"
+            routes.mkdir()
+            aliases = vault / "wiki" / "global" / "records" / "privacy"
+            aliases.mkdir(parents=True)
+            cases = {
+                "public": "sensitivity: public",
+                "inline-private": "sensitivity: [private]",
+            }
+            qmd_rows: list[dict[str, str]] = []
+            native_rows: list[dict[str, str]] = []
+            forbidden: list[str] = []
+            for index, (shape, sensitivity) in enumerate(cases.items()):
+                source = routes / f"source-{index}.md"
+                middle = routes / f"middle-{index}.md"
+                target = routes / f"target-{index}.md"
+                alias = aliases / f"alias-{index}.md"
+                source.write_text(
+                    "---\nstatus: superseded\n"
+                    f"superseded_by: wiki/routes/{middle.name}\n---\n"
+                    f"ALIAS-ORIGIN-{shape}\n",
+                    encoding="utf-8",
+                )
+                middle.write_text(
+                    "---\nstatus: superseded\n"
+                    f"superseded_by: wiki/routes/{target.name}\n---\n",
+                    encoding="utf-8",
+                )
+                sentinel = f"GLOBAL-ALIAS-SECRET-{shape}"
+                target.write_text(
+                    "---\nstatus: accepted\n"
+                    f"{sensitivity}\n---\n{sentinel}\n",
+                    encoding="utf-8",
+                )
+                alias.symlink_to(Path("../../../routes") / source.name)
+                alias_relative = alias.relative_to(vault).as_posix()
+                qmd_rows.append(
+                    {
+                        "file": "qmd://obsidian-wiki/"
+                        + alias_relative.removeprefix("wiki/"),
+                        "snippet": f"ALIAS-ORIGIN-{shape}",
+                    }
+                )
+                native_rows.append(
+                    {"path": alias_relative, "snippet": f"ALIAS-ORIGIN-{shape}"}
+                )
+                forbidden.extend(
+                    (
+                        source.relative_to(vault).as_posix(),
+                        middle.relative_to(vault).as_posix(),
+                        target.relative_to(vault).as_posix(),
+                        sentinel,
+                    )
+                )
+
+            config_path = self.write_config(root, vault, qmd_enabled=True)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            for provider, rows in (("qmd", qmd_rows), ("native", native_rows)):
+                with self.subTest(provider=provider):
+                    compact, filtered = MODULE.compact_recall_results(
+                        config,
+                        rows,
+                        limit=5,
+                        max_tokens=900,
+                        include_stale=False,
+                        provider=provider,
+                    )
+                    encoded = json.dumps(compact)
+                    self.assertEqual(compact, [])
+                    self.assertEqual(filtered, 0)
+                    for value in forbidden:
+                        self.assertNotIn(value, encoded)
+
+            for row in qmd_rows:
+                self.assertIsNone(MODULE.resolve_qmd_uri(config, row["file"]))
+
+            report = MODULE.audit_vault(config)
+            alias_findings = [
+                finding
+                for finding in report["findings"]
+                if finding["code"] == "global-symlink-alias"
+            ]
+            self.assertEqual(len(alias_findings), len(cases))
+            encoded_findings = json.dumps(alias_findings)
+            for value in forbidden:
+                self.assertNotIn(value, encoded_findings)
+            self.assertNotIn("sensitivity", encoded_findings)
+            self.assertNotIn("[private]", encoded_findings)
+
+    def test_auto_fallback_remembers_a_rejected_global_alias_source(self) -> None:
+        """Catches native fallback reopening the canonical source of a QMD alias."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            routes = vault / "wiki" / "routes"
+            routes.mkdir()
+            source = routes / "auto-source.md"
+            target = routes / "auto-target.md"
+            safe = vault / "wiki" / "auto-safe.md"
+            source.write_text(
+                "---\nstatus: superseded\n"
+                "superseded_by: wiki/routes/auto-target.md\n---\n"
+                "AUTO GLOBAL ALIAS NEEDLE\n",
+                encoding="utf-8",
+            )
+            target.write_text(
+                "---\nstatus: accepted\nsensitivity: public\n---\n"
+                "AUTO-GLOBAL-ALIAS-SECRET\n",
+                encoding="utf-8",
+            )
+            safe.write_text(
+                "---\nstatus: accepted\n---\n"
+                "AUTO GLOBAL ALIAS NEEDLE safe evidence\n",
+                encoding="utf-8",
+            )
+            alias = vault / "wiki" / "global" / "records" / "privacy" / "auto.md"
+            alias.parent.mkdir(parents=True)
+            alias.symlink_to(Path("../../../routes/auto-source.md"))
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_provider="auto",
+                qmd_enabled=True,
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(
+                    MODULE, "select_recall_provider", return_value=("qmd", "")
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "qmd_recall_candidates",
+                    return_value=[
+                        {
+                            "file": "qmd://obsidian-wiki/global/records/privacy/auto.md",
+                            "snippet": "AUTO GLOBAL ALIAS NEEDLE",
+                        }
+                    ],
+                ),
+            ):
+                config, _ = MODULE.load_config()
+                payload = MODULE.recall_payload(
+                    config,
+                    "AUTO GLOBAL ALIAS NEEDLE",
+                    "semantic",
+                    5,
+                )
+
+            encoded = json.dumps(payload["results"])
+            self.assertEqual(payload["provider"], "native")
+            self.assertEqual(
+                [item["path"] for item in payload["results"]],
+                [safe.relative_to(vault).as_posix()],
+            )
+            for value in (
+                alias.relative_to(vault).as_posix(),
+                source.relative_to(vault).as_posix(),
+                target.relative_to(vault).as_posix(),
+                "AUTO-GLOBAL-ALIAS-SECRET",
+            ):
+                self.assertNotIn(value, encoded)
 
     def test_load_config_rejects_active_or_explicit_qmd_roots_outside_recall(
         self,
