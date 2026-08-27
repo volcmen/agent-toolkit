@@ -3520,6 +3520,22 @@ def filter_fast_candidates(
     return accepted, len(candidates) - len(accepted)
 
 
+def accumulate_qmd_rejections(
+    config: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    rejection_state: RecallRejectionState,
+) -> None:
+    """Collect bounded path rejection evidence without accepting provider rows."""
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        raw_uri = item.get("file")
+        if isinstance(raw_uri, str):
+            resolve_qmd_uri_detailed(
+                config, raw_uri, rejection_state=rejection_state
+            )
+
+
 def native_recall_candidates(
     config: dict[str, Any],
     query: str,
@@ -3712,6 +3728,7 @@ def recall_payload(
     requested_provider = provider or config["recall_provider"]
     warnings: list[str] = []
     diagnostics: dict[str, Any] = {}
+    rejection_state = RecallRejectionState(set())
     active_provider, selection_note = select_recall_provider(config, requested_provider)
     if selection_note:
         warnings.append(selection_note)
@@ -3733,11 +3750,16 @@ def recall_payload(
                 normalized_scope,
             )
             if effective_mode == "fast":
+                accumulate_qmd_rejections(config, raw_results, rejection_state)
                 raw_results, filtered_low_coverage = filter_fast_candidates(
                     raw_results, normalized
                 )
                 diagnostics["filtered_low_coverage"] = filtered_low_coverage
-                if requested_provider == "auto" and not raw_results:
+                if (
+                    requested_provider == "auto"
+                    and not raw_results
+                    and not rejection_state.suppress_native_fallback
+                ):
                     active_provider = "native"
                     warnings.append(
                         "QMD fast recall returned no sufficiently complete lexical "
@@ -3765,7 +3787,6 @@ def recall_payload(
         )
 
     filter_counts: dict[str, int] = {}
-    rejection_state = RecallRejectionState(set())
     try:
         compact, filtered_stale = compact_recall_results(
             config,
@@ -3777,6 +3798,11 @@ def recall_payload(
             filter_counts=filter_counts,
             scope=normalized_scope,
             provider=active_provider,
+            blocked_paths=(
+                rejection_state.paths
+                if active_provider == "native" and requested_provider == "auto"
+                else None
+            ),
             rejection_state=rejection_state,
         )
     except ValueError as exc:

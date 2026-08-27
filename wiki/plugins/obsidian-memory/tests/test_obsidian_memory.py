@@ -2107,6 +2107,74 @@ Prior: old unrelated outcome.
                     ):
                         self.assertNotIn(value, encoded)
 
+    def test_auto_fast_fallback_taints_a_low_coverage_exact_global_collision(
+        self,
+    ) -> None:
+        """Catches fast filtering discarding QMD collision evidence."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            exact = self.write_global_record(vault)
+            target = vault / "projects" / "alpha" / "fast-collision-source.md"
+            sentinel = "FAST-COLLISION-NATIVE-FALLBACK-SECRET"
+            target.write_text(
+                "---\nstatus: accepted\nsensitivity: public\n---\n"
+                f"FAST MODE COLLISION NEEDLE REOPENED {sentinel}\n",
+                encoding="utf-8",
+            )
+            exact.with_name("Agent_toolkit.md").symlink_to(
+                Path("../../../../projects/alpha/fast-collision-source.md")
+            )
+            uri = (
+                "qmd://obsidian-wiki/global/records/project-registry/"
+                "agent-toolkit.md"
+            )
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_provider="auto",
+                qmd_enabled=True,
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(
+                    MODULE, "select_recall_provider", return_value=("qmd", "")
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "qmd_recall_candidates",
+                    return_value=[
+                        {
+                            "file": uri,
+                            "title": "FAST",
+                            "line": 5,
+                            "score": 1.0,
+                            "snippet": "FAST",
+                        }
+                    ],
+                ),
+            ):
+                config, _ = MODULE.load_config()
+                payload = MODULE.recall_payload(
+                    config,
+                    "FAST MODE COLLISION NEEDLE REOPENED",
+                    "fast",
+                    5,
+                )
+
+            encoded = json.dumps(payload["results"])
+            self.assertEqual(payload["diagnostics"]["filtered_low_coverage"], 1)
+            self.assertEqual(payload["provider"], "native")
+            self.assertEqual(payload["results"], [])
+            for value in (
+                exact.relative_to(vault).as_posix(),
+                target.relative_to(vault).as_posix(),
+                sentinel,
+            ):
+                self.assertNotIn(value, encoded)
+
     def test_native_supersession_cannot_redirect_through_a_tainted_path(
         self,
     ) -> None:
