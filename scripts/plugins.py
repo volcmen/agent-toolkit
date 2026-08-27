@@ -452,23 +452,23 @@ def memory_guidance_status() -> dict[str, Any]:
         return {"configured": True, "ok": False, "error": "invalid-status"}
     configured = payload.get("configured")
     ok = payload.get("ok")
+    claude = payload.get("claude")
+    codex = payload.get("codex")
     valid_states = {
         "claude": {"missing", "stale", "current"},
         "codex": {"missing", "stale", "malformed", "current"},
     }
     status_matches_exit = result.returncode == (0 if ok is True else 1)
+    state_is_healthy = claude == "current" and codex == "current"
     if (
-        not isinstance(configured, bool)
+        configured is not True
         or not isinstance(ok, bool)
-        or (not configured and not ok)
-        or (
-            configured
-            and any(payload.get(agent) not in states for agent, states in valid_states.items())
-        )
+        or any(payload.get(agent) not in states for agent, states in valid_states.items())
+        or ok != state_is_healthy
         or not status_matches_exit
     ):
         return {"configured": True, "ok": False, "error": "invalid-status"}
-    return payload
+    return {"configured": True, "ok": ok, "claude": claude, "codex": codex}
 
 
 def cmd_install(args: argparse.Namespace) -> int:

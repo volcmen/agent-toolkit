@@ -399,6 +399,92 @@ class WorkspaceGuidanceParity(unittest.TestCase):
                 self.assertEqual(pl.cmd_status(self.args()), 1)
         self.assertIn("guidance: invalid status", output.getvalue())
 
+    def test_status_rejects_semantically_inconsistent_project_payloads(self) -> None:
+        cases = (
+            (
+                {
+                    "configured": True,
+                    "ok": True,
+                    "claude": "stale",
+                    "codex": "current",
+                },
+                0,
+            ),
+            (
+                {
+                    "configured": True,
+                    "ok": False,
+                    "claude": "current",
+                    "codex": "current",
+                },
+                1,
+            ),
+            (
+                {
+                    "configured": False,
+                    "ok": True,
+                    "claude": "not-configured",
+                    "codex": "not-configured",
+                },
+                0,
+            ),
+        )
+        with TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.json"
+            config.write_text('{"vault": "/private/vault"}\n', encoding="utf-8")
+            for payload, returncode in cases:
+                with self.subTest(payload=payload):
+                    with (
+                        mock.patch.object(pl, "MEMORY_CONFIG", config),
+                        mock.patch.object(
+                            pl,
+                            "run",
+                            return_value=mock.Mock(
+                                returncode=returncode,
+                                stdout=json.dumps(payload),
+                                stderr="",
+                            ),
+                        ),
+                    ):
+                        self.assertEqual(
+                            pl.memory_guidance_status(),
+                            {"configured": True, "ok": False, "error": "invalid-status"},
+                        )
+
+    def test_status_normalizes_valid_project_payload(self) -> None:
+        payload = {
+            "configured": True,
+            "ok": False,
+            "claude": "stale",
+            "codex": "current",
+            "vault": "/private/secret-vault",
+            "policy": "private policy body",
+        }
+        with TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config.json"
+            config.write_text('{"vault": "/private/vault"}\n', encoding="utf-8")
+            with (
+                mock.patch.object(pl, "MEMORY_CONFIG", config),
+                mock.patch.object(
+                    pl,
+                    "run",
+                    return_value=mock.Mock(
+                        returncode=1,
+                        stdout=json.dumps(payload),
+                        stderr="",
+                    ),
+                ),
+            ):
+                self.assertEqual(
+                    pl.memory_guidance_status(),
+                    {
+                        "configured": True,
+                        "ok": False,
+                        "claude": "stale",
+                        "codex": "current",
+                    },
+                )
+
 
 class WikiRelease(unittest.TestCase):
     """The wiki release flow must target the workspace marketplace, not wiki/."""

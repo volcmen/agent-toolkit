@@ -89,6 +89,26 @@ class InstallTests(unittest.TestCase):
                 codex_policy.write_text(MODULE.CODEX_POLICY_START, encoding="utf-8")
                 self.assertEqual(MODULE.guidance_status()["codex"], "malformed")
 
+    def test_guidance_status_reports_reversed_codex_markers_as_malformed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            policy = root / "policy.md"
+            codex_policy = root / "AGENTS.md"
+            config = root / "config.json"
+            policy.write_text("current\n", encoding="utf-8")
+            config.write_text(json.dumps({"vault": str(root / "vault")}), encoding="utf-8")
+            codex_policy.write_text(
+                f"{MODULE.CODEX_POLICY_END}\nunmanaged\n{MODULE.CODEX_POLICY_START}\n",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(MODULE, "POLICY", policy),
+                mock.patch.object(MODULE, "CLAUDE_POLICY", root / "missing-rule.md"),
+                mock.patch.object(MODULE, "CODEX_POLICY", codex_policy),
+                mock.patch.object(MODULE, "CONFIG", config),
+            ):
+                self.assertEqual(MODULE.guidance_status()["codex"], "malformed")
+
     def test_guidance_status_fails_closed_on_invalid_config_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             config = Path(temp) / "config.json"
@@ -126,6 +146,35 @@ class InstallTests(unittest.TestCase):
             ):
                 self.assertEqual(MODULE.main(), 0)
             self.assertEqual(config.read_text(encoding="utf-8"), original)
+
+    def test_reuse_config_rejects_reversed_codex_markers_without_rewriting(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = root / "config.json"
+            policy = root / "policy.md"
+            claude_policy = root / "claude-rule.md"
+            codex_policy = root / "AGENTS.md"
+            config.write_text(json.dumps({"vault": "/private/example"}) + "\n", encoding="utf-8")
+            policy.write_text("# Shared memory\n", encoding="utf-8")
+            claude_policy.symlink_to(policy)
+            original = f"personal\n{MODULE.CODEX_POLICY_END}\nbody\n{MODULE.CODEX_POLICY_START}\n"
+            codex_policy.write_text(original, encoding="utf-8")
+            with (
+                mock.patch.object(MODULE, "CONFIG", config),
+                mock.patch.object(MODULE, "POLICY", policy),
+                mock.patch.object(MODULE, "CLAUDE_POLICY", claude_policy),
+                mock.patch.object(MODULE, "CODEX_POLICY", codex_policy),
+                mock.patch.object(sys, "argv", [
+                    "install.py",
+                    "--reuse-config",
+                    "--skip-product-install",
+                    "--skip-upstream-skill-link",
+                    "--keep-legacy-hooks",
+                ]),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "malformed obsidian-memory markers"):
+                    MODULE.main()
+            self.assertEqual(codex_policy.read_text(encoding="utf-8"), original)
 
     def test_status_is_read_only_and_does_not_expose_vault_or_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

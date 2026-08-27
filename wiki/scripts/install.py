@@ -93,6 +93,14 @@ def codex_policy_block() -> str:
     return f"{CODEX_POLICY_START}\n{policy}\n{CODEX_POLICY_END}"
 
 
+def has_ordered_codex_policy_region(existing: str) -> bool:
+    return re.search(
+        rf"{re.escape(CODEX_POLICY_START)}.*?{re.escape(CODEX_POLICY_END)}",
+        existing,
+        flags=re.DOTALL,
+    ) is not None
+
+
 def install_codex_policy(destination: Path, replace: bool = False) -> None:
     """Add or refresh our bounded block without owning the user's AGENTS.md."""
     block = codex_policy_block()
@@ -115,7 +123,11 @@ def install_codex_policy(destination: Path, replace: bool = False) -> None:
     existing = destination.read_text(encoding="utf-8") if destination.is_file() else ""
     start_count = existing.count(CODEX_POLICY_START)
     end_count = existing.count(CODEX_POLICY_END)
-    if start_count != end_count or start_count > 1:
+    if (
+        start_count != end_count
+        or start_count > 1
+        or (start_count == 1 and not has_ordered_codex_policy_region(existing))
+    ):
         raise RuntimeError(f"{destination} contains malformed obsidian-memory markers")
     saved: Optional[Path] = None
     if start_count == 1:
@@ -275,7 +287,11 @@ def guidance_status() -> dict[str, Any]:
             existing = CODEX_POLICY.read_text(encoding="utf-8")
             start_count = existing.count(CODEX_POLICY_START)
             end_count = existing.count(CODEX_POLICY_END)
-            if start_count != end_count or start_count > 1:
+            if (
+                start_count != end_count
+                or start_count > 1
+                or (start_count == 1 and not has_ordered_codex_policy_region(existing))
+            ):
                 codex = "malformed"
             elif start_count == 1:
                 codex = "current" if codex_policy_block() in existing else "stale"
