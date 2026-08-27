@@ -2031,6 +2031,82 @@ Prior: old unrelated outcome.
                 self.assertNotIn(value, encoded_findings)
             self.assertNotIn("sensitivity", encoded_findings)
 
+    def test_exact_global_qmd_uri_rejects_a_normalized_alias_collision(
+        self,
+    ) -> None:
+        """Catches exact-file resolution accepting an alias provider body."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            exact = self.write_global_record(vault)
+            target = vault / "projects" / "alpha" / "exact-collision-source.md"
+            sentinel = "EXACT-COLLISION-ALIAS-SECRET"
+            title_sentinel = "EXACT-COLLISION-ALIAS-TITLE"
+            target.write_text(
+                "---\nstatus: accepted\nsensitivity: public\n---\n"
+                f"EXACT COLLISION ALIAS NEEDLE {sentinel}\n",
+                encoding="utf-8",
+            )
+            alias = exact.with_name("Agent_toolkit.md")
+            alias.symlink_to(
+                Path("../../../../projects/alpha/exact-collision-source.md")
+            )
+            uri = (
+                "qmd://obsidian-wiki/global/records/project-registry/"
+                "agent-toolkit.md"
+            )
+            qmd_row = {
+                "file": uri,
+                "title": title_sentinel,
+                "line": 5,
+                "score": 1.0,
+                "snippet": f"EXACT COLLISION ALIAS NEEDLE {sentinel}",
+            }
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_provider="auto",
+                qmd_enabled=True,
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(
+                    MODULE, "select_recall_provider", return_value=("qmd", "")
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "qmd_recall_candidates",
+                    return_value=[qmd_row],
+                ),
+            ):
+                config, _ = MODULE.load_config()
+                payloads = {
+                    provider: MODULE.recall_payload(
+                        config,
+                        "EXACT COLLISION ALIAS NEEDLE",
+                        "semantic",
+                        5,
+                        provider=provider,
+                    )
+                    for provider in ("qmd", "auto")
+                }
+
+            target_relative = target.relative_to(vault).as_posix()
+            exact_relative = exact.relative_to(vault).as_posix()
+            for provider, payload in payloads.items():
+                with self.subTest(provider=provider):
+                    encoded = json.dumps(payload["results"])
+                    self.assertEqual(payload["results"], [])
+                    for value in (
+                        exact_relative,
+                        target_relative,
+                        sentinel,
+                        title_sentinel,
+                    ):
+                        self.assertNotIn(value, encoded)
+
     def test_native_supersession_cannot_redirect_through_a_tainted_path(
         self,
     ) -> None:

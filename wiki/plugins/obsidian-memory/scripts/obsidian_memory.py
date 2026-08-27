@@ -2569,10 +2569,12 @@ def resolve_qmd_uri_detailed(
         exact_file and lexical_candidate.absolute() != candidate
     )
 
-    if not exact_file:
+    if global_origin or not exact_file:
         # QMD normalizes every path segment, so "Team Notes/my_file.md" is
         # indexed as "Team-Notes/my-file.md". Recover the source by walking
         # the tree and matching each segment under the same normalization.
+        # Governed exact files take the same walk so a normalized alias cannot
+        # lend its provider payload to the exact governed path.
         current = root
         parts = relative.parts
         for index, part in enumerate(parts):
