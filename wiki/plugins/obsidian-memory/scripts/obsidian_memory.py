@@ -76,6 +76,7 @@ RECALL_EVAL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}")
 MAX_AUDIT_FINDINGS = 200
 MAX_AUDIT_HUMAN_PATH_CHARS = 180
 MAX_GLOBAL_FRONTMATTER_CHARS = 12_000
+MAX_QMD_REJECTION_TARGETS = 64
 
 
 class ConfigurationError(RuntimeError):
@@ -2507,8 +2508,19 @@ class RecallItemResolution:
     unsafe_alias: bool
 
 
+@dataclass
+class RecallRejectionState:
+    """Bounded provider rejection evidence carried into automatic fallback."""
+
+    paths: set[str]
+    suppress_native_fallback: bool = False
+
+
 def resolve_qmd_uri_detailed(
-    config: dict[str, Any], uri: str
+    config: dict[str, Any],
+    uri: str,
+    *,
+    rejection_state: RecallRejectionState | None = None,
 ) -> RecallItemResolution | None:
     match = re.fullmatch(r"qmd://([^/]+)/(.+)", uri)
     if not match:
@@ -2574,7 +2586,25 @@ def resolve_qmd_uri_detailed(
                     if qmd_segment_key(child.name, is_file=is_file) != key:
                         continue
                     if child.is_symlink():
-                        if global_origin and is_file and child.is_file():
+                        if not global_origin:
+                            continue
+                        try:
+                            resolved_child = child.resolve()
+                            child_relative = resolved_child.relative_to(vault)
+                        except (OSError, RuntimeError, ValueError):
+                            continue
+                        if (
+                            not safe_recall_parts(child_relative.parts)
+                            or not path_within_roots(
+                                child_relative.as_posix(), config["recall_roots"]
+                            )
+                        ):
+                            continue
+                        if (
+                            resolved_child.is_file()
+                            if is_file
+                            else resolved_child.is_dir()
+                        ):
                             matches.append(child)
                         continue
                     if (child.is_file() if is_file else child.is_dir()):
@@ -2582,6 +2612,39 @@ def resolve_qmd_uri_detailed(
             except OSError:
                 return None
             if len(matches) != 1:
+                if global_origin and any(child.is_symlink() for child in matches):
+                    if not is_file or len(matches) > MAX_QMD_REJECTION_TARGETS:
+                        if rejection_state is not None:
+                            rejection_state.suppress_native_fallback = True
+                    elif rejection_state is not None:
+                        for child in matches:
+                            if not child.is_symlink():
+                                continue
+                            try:
+                                rejected_path = child.resolve()
+                                rejected_relative = rejected_path.relative_to(
+                                    vault
+                                ).as_posix()
+                            except (OSError, RuntimeError, ValueError):
+                                rejection_state.suppress_native_fallback = True
+                                break
+                            if (
+                                rejected_path.suffix.casefold() != ".md"
+                                or not safe_recall_parts(
+                                    PurePosixPath(rejected_relative).parts
+                                )
+                                or not path_within_roots(
+                                    rejected_relative, config["recall_roots"]
+                                )
+                            ):
+                                continue
+                            extend_rejected_supersession_paths(
+                                config,
+                                source_path=rejected_path,
+                                source_relative=rejected_relative,
+                                allowed_roots=config["recall_roots"],
+                                rejected_paths=rejection_state.paths,
+                            )
                 return None
             current = matches[0]
         try:
@@ -2882,7 +2945,10 @@ def path_within_roots(path: str, roots: list[str]) -> bool:
 
 
 def resolve_recall_item(
-    config: dict[str, Any], item: dict[str, Any]
+    config: dict[str, Any],
+    item: dict[str, Any],
+    *,
+    rejection_state: RecallRejectionState | None = None,
 ) -> RecallItemResolution | None:
     raw_path = item.get("path")
     if isinstance(raw_path, str):
@@ -2899,7 +2965,9 @@ def resolve_recall_item(
         )
     raw_uri = item.get("file")
     if isinstance(raw_uri, str):
-        return resolve_qmd_uri_detailed(config, raw_uri)
+        return resolve_qmd_uri_detailed(
+            config, raw_uri, rejection_state=rejection_state
+        )
     return None
 
 
@@ -3147,7 +3215,7 @@ def compact_recall_results(
     scope: str | None = None,
     provider: str = "native",
     blocked_paths: set[str] | None = None,
-    rejected_alias_paths: set[str] | None = None,
+    rejection_state: RecallRejectionState | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Turn provider rows into governed, scoped, token-bounded L1 hits."""
     if include_sensitive:
@@ -3188,7 +3256,9 @@ def compact_recall_results(
     for item in raw_results:
         if not isinstance(item, dict):
             continue
-        resolved = resolve_recall_item(config, item)
+        resolved = resolve_recall_item(
+            config, item, rejection_state=rejection_state
+        )
         if resolved is None:
             continue
         source_path = resolved.path
@@ -3197,13 +3267,13 @@ def compact_recall_results(
             resolved.global_origin
             and not is_global_record_path(config, vault_relative)
         ):
-            if rejected_alias_paths is not None:
+            if rejection_state is not None:
                 extend_rejected_supersession_paths(
                     config,
                     source_path=source_path,
                     source_relative=vault_relative,
                     allowed_roots=allowed_roots,
-                    rejected_paths=rejected_alias_paths,
+                    rejected_paths=rejection_state.paths,
                 )
             continue
         if blocked_paths is not None and vault_relative in blocked_paths:
@@ -3693,7 +3763,7 @@ def recall_payload(
         )
 
     filter_counts: dict[str, int] = {}
-    rejected_alias_paths: set[str] = set()
+    rejection_state = RecallRejectionState(set())
     try:
         compact, filtered_stale = compact_recall_results(
             config,
@@ -3705,11 +3775,16 @@ def recall_payload(
             filter_counts=filter_counts,
             scope=normalized_scope,
             provider=active_provider,
-            rejected_alias_paths=rejected_alias_paths,
+            rejection_state=rejection_state,
         )
     except ValueError as exc:
         raise RecallProviderError(f"recall provider returned invalid results: {exc}") from exc
-    if not compact and active_provider == "qmd" and requested_provider == "auto":
+    if (
+        not compact
+        and active_provider == "qmd"
+        and requested_provider == "auto"
+        and not rejection_state.suppress_native_fallback
+    ):
         native_results, native_diagnostics = native_recall_candidates(
             config, normalized, candidate_limit, normalized_scope
         )
@@ -3724,7 +3799,7 @@ def recall_payload(
             filter_counts=native_filter_counts,
             scope=normalized_scope,
             provider="native",
-            blocked_paths=rejected_alias_paths,
+            blocked_paths=rejection_state.paths,
         )
         if native_compact:
             active_provider = "native"

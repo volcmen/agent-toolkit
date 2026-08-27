@@ -1865,6 +1865,172 @@ Prior: old unrelated outcome.
             self.assertNotIn(sentinel, encoded_findings)
             self.assertNotIn("sensitivity", encoded_findings)
 
+    def test_auto_fallback_taints_a_normalized_global_symlink_directory(
+        self,
+    ) -> None:
+        """Catches normalized traversal dropping a symlink-directory taint."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            project = vault / "projects" / "alpha"
+            source = project / "directory-source.md"
+            terminal = project / "directory-terminal.md"
+            alternate = project / "directory-alternate.md"
+            sentinel = "NORMALIZED-SYMLINK-DIRECTORY-SECRET"
+            source.write_text(
+                "---\nstatus: superseded\n"
+                "superseded_by: projects/alpha/directory-terminal.md\n---\n"
+                "NORMALIZED DIRECTORY ALIAS NEEDLE source\n",
+                encoding="utf-8",
+            )
+            alternate.write_text(
+                "---\nstatus: superseded\n"
+                "superseded_by: projects/alpha/directory-terminal.md\n---\n"
+                "NORMALIZED DIRECTORY ALIAS NEEDLE alternate\n",
+                encoding="utf-8",
+            )
+            terminal.write_text(
+                "---\nstatus: accepted\nsensitivity: public\n---\n"
+                f"NORMALIZED DIRECTORY ALIAS NEEDLE {sentinel}\n",
+                encoding="utf-8",
+            )
+            alias = vault / "wiki" / "global" / "records" / "Project_routes"
+            alias.parent.mkdir(parents=True)
+            alias.symlink_to(Path("../../../projects/alpha"))
+            uri = (
+                "qmd://obsidian-wiki/global/records/project-routes/"
+                "directory-source.md"
+            )
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_provider="auto",
+                qmd_enabled=True,
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(
+                    MODULE, "select_recall_provider", return_value=("qmd", "")
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "qmd_recall_candidates",
+                    return_value=[
+                        {
+                            "file": uri,
+                            "snippet": "NORMALIZED DIRECTORY ALIAS NEEDLE",
+                        }
+                    ],
+                ),
+            ):
+                config, _ = MODULE.load_config()
+                payload = MODULE.recall_payload(
+                    config,
+                    "NORMALIZED DIRECTORY ALIAS NEEDLE",
+                    "semantic",
+                    5,
+                )
+                report = MODULE.audit_vault(config)
+
+            encoded_results = json.dumps(payload["results"])
+            encoded_findings = json.dumps(report["findings"])
+            self.assertEqual(payload["results"], [])
+            self.assertIsNone(MODULE.resolve_qmd_uri(config, uri))
+            for value in (
+                source.relative_to(vault).as_posix(),
+                terminal.relative_to(vault).as_posix(),
+                alternate.relative_to(vault).as_posix(),
+                sentinel,
+            ):
+                self.assertNotIn(value, encoded_results)
+                self.assertNotIn(value, encoded_findings)
+            self.assertNotIn("sensitivity", encoded_findings)
+
+    def test_auto_fallback_taints_every_ambiguous_normalized_global_alias(
+        self,
+    ) -> None:
+        """Catches ambiguous normalized aliases discarding every target."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            aliases = vault / "wiki" / "global" / "records" / "privacy"
+            aliases.mkdir(parents=True)
+            targets: list[Path] = []
+            sentinels: list[str] = []
+            for index, alias_name in enumerate(
+                ("Ambiguous_alias.md", "Ambiguous (alias).md")
+            ):
+                target = vault / "projects" / "alpha" / f"ambiguous-{index}.md"
+                sentinel = f"AMBIGUOUS-NORMALIZED-ALIAS-SECRET-{index}"
+                target.write_text(
+                    "---\nstatus: accepted\nsensitivity: public\n---\n"
+                    f"AMBIGUOUS NORMALIZED ALIAS NEEDLE {sentinel}\n",
+                    encoding="utf-8",
+                )
+                alias = aliases / alias_name
+                alias.symlink_to(
+                    Path("../../../../projects/alpha") / target.name
+                )
+                targets.append(target)
+                sentinels.append(sentinel)
+
+            uri = (
+                "qmd://obsidian-wiki/global/records/privacy/"
+                "ambiguous-alias.md"
+            )
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_provider="auto",
+                qmd_enabled=True,
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(
+                    MODULE, "select_recall_provider", return_value=("qmd", "")
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "qmd_recall_candidates",
+                    return_value=[
+                        {
+                            "file": uri,
+                            "snippet": "AMBIGUOUS NORMALIZED ALIAS NEEDLE",
+                        }
+                    ],
+                ),
+            ):
+                config, _ = MODULE.load_config()
+                payload = MODULE.recall_payload(
+                    config,
+                    "AMBIGUOUS NORMALIZED ALIAS NEEDLE",
+                    "semantic",
+                    5,
+                )
+                report = MODULE.audit_vault(config)
+
+            encoded_results = json.dumps(payload["results"])
+            self.assertEqual(payload["results"], [])
+            self.assertIsNone(MODULE.resolve_qmd_uri(config, uri))
+            alias_findings = [
+                finding
+                for finding in report["findings"]
+                if finding["code"] == "global-symlink-alias"
+            ]
+            self.assertEqual(len(alias_findings), 2)
+            encoded_findings = json.dumps(alias_findings)
+            for value in [
+                *(target.relative_to(vault).as_posix() for target in targets),
+                *sentinels,
+            ]:
+                self.assertNotIn(value, encoded_results)
+                self.assertNotIn(value, encoded_findings)
+            self.assertNotIn("sensitivity", encoded_findings)
+
     def test_native_supersession_cannot_redirect_through_a_tainted_path(
         self,
     ) -> None:
