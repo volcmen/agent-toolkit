@@ -1781,6 +1781,90 @@ Prior: old unrelated outcome.
             self.assertNotIn(sentinel, encoded_findings)
             self.assertNotIn("sensitivity", encoded_findings)
 
+    def test_auto_fallback_taints_a_normalized_global_alias_across_collections(
+        self,
+    ) -> None:
+        """Catches normalization recovery discarding a symlink rejection."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            target = vault / "projects" / "alpha" / "normalized-target.md"
+            sentinel = "NORMALIZED-CROSS-COLLECTION-ALIAS-SECRET"
+            target.write_text(
+                "---\nstatus: accepted\nsensitivity: public\n---\n"
+                f"NORMALIZED GLOBAL ALIAS NEEDLE {sentinel}\n",
+                encoding="utf-8",
+            )
+            alias = (
+                vault
+                / "wiki"
+                / "global"
+                / "records"
+                / "privacy"
+                / "Cross_collection (alias).md"
+            )
+            alias.parent.mkdir(parents=True)
+            alias.symlink_to(Path("../../../../projects/alpha/normalized-target.md"))
+            uri = "qmd://obsidian-wiki/global/records/privacy/cross-collection-alias.md"
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_provider="auto",
+                qmd_enabled=True,
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(
+                    MODULE, "select_recall_provider", return_value=("qmd", "")
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "qmd_recall_candidates",
+                    return_value=[
+                        {
+                            "file": uri,
+                            "snippet": "NORMALIZED GLOBAL ALIAS NEEDLE",
+                        }
+                    ],
+                ),
+            ):
+                config, _ = MODULE.load_config()
+                resolved = MODULE.resolve_qmd_uri_detailed(config, uri)
+                payload = MODULE.recall_payload(
+                    config,
+                    "NORMALIZED GLOBAL ALIAS NEEDLE",
+                    "semantic",
+                    5,
+                )
+                report = MODULE.audit_vault(config)
+
+            target_relative = "projects/alpha/normalized-target.md"
+            encoded_results = json.dumps(payload["results"])
+            self.assertEqual(payload["results"], [])
+            self.assertNotIn(target_relative, encoded_results)
+            self.assertNotIn(sentinel, encoded_results)
+            self.assertIsNotNone(resolved)
+            assert resolved is not None
+            self.assertEqual(
+                resolved.origin_relative,
+                "wiki/global/records/privacy/cross-collection-alias.md",
+            )
+            self.assertEqual(resolved.vault_relative, target_relative)
+            self.assertTrue(resolved.global_origin)
+            self.assertTrue(resolved.unsafe_alias)
+            alias_findings = [
+                finding
+                for finding in report["findings"]
+                if finding["code"] == "global-symlink-alias"
+            ]
+            self.assertEqual(len(alias_findings), 1)
+            encoded_findings = json.dumps(alias_findings)
+            self.assertNotIn(target_relative, encoded_findings)
+            self.assertNotIn(sentinel, encoded_findings)
+            self.assertNotIn("sensitivity", encoded_findings)
+
     def test_native_supersession_cannot_redirect_through_a_tainted_path(
         self,
     ) -> None:

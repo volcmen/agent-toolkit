@@ -2569,13 +2569,16 @@ def resolve_qmd_uri_detailed(
                 return None
             key = qmd_segment_key(part, is_file=is_file)
             try:
-                matches = [
-                    child
-                    for child in current.iterdir()
-                    if not child.is_symlink()
-                    and (child.is_file() if is_file else child.is_dir())
-                    and qmd_segment_key(child.name, is_file=is_file) == key
-                ]
+                matches = []
+                for child in current.iterdir():
+                    if qmd_segment_key(child.name, is_file=is_file) != key:
+                        continue
+                    if child.is_symlink():
+                        if global_origin and is_file and child.is_file():
+                            matches.append(child)
+                        continue
+                    if (child.is_file() if is_file else child.is_dir()):
+                        matches.append(child)
             except OSError:
                 return None
             if len(matches) != 1:
@@ -2585,6 +2588,12 @@ def resolve_qmd_uri_detailed(
             candidate = current.resolve()
         except (OSError, RuntimeError):
             return None
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            if not global_origin:
+                return None
+            outside_collection = True
         if current.absolute() != candidate:
             unsafe_alias = True
 
