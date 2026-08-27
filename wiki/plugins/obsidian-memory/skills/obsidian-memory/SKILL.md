@@ -22,6 +22,11 @@ Use the vault configured in `~/.config/obsidian-memory/config.json`. Resolve `~`
 - Persist cross-project progress: update `daily/YYYY-MM-DD.md`.
 - Persist resume context: overwrite `wiki/hot.md`, keeping it concise and factual.
 
+For a global-memory audit, promotion, correction, cleanup, permanent
+cross-project preference, approval rule, privacy boundary, or project-registry
+pointer, use the `global-memory` skill. Do not route ordinary project state into
+the global namespace.
+
 Before a durable fact, preference, or decision write, search the likely target
 and classify the candidate as a duplicate, refinement, or contradiction. Ignore
 duplicates, merge refinements without losing provenance, and supersede

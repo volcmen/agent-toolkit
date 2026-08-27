@@ -3,6 +3,12 @@
 The configured Obsidian vault is durable memory shared by Claude Code and Codex. Its local configuration is `~/.config/obsidian-memory/config.json`.
 
 - Use the `obsidian-memory` skill when the user asks to remember, save, file, or recall information, or when work produces a durable decision, task, fact, design, or cross-session handoff.
+- Global memory is a small governed layer under the configured
+  `global_memory_root`. Use the `global-memory` skill for promotion, correction,
+  audit, or cleanup; keep ordinary project state project-local.
+- Global defaults never override system policy, the latest user instruction, or
+  explicit project-local authority. Private and restricted records require an
+  explicit narrow scoped recall and are never injected at startup.
 - Prefer the current repository and conversation for ordinary coding questions. Do not read the vault broadly without a concrete need.
 - Persist only information that will be useful beyond the current turn.
 - Never persist secrets, credentials, private keys, or raw sensitive transcripts.

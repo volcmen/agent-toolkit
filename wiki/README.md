@@ -86,6 +86,29 @@ when enabled and available, isolates query failures, and reports its fallback
 to native rather than making memory unavailable. No QMD server or model work
 runs in hooks.
 
+## Governed global memory
+
+The vault remains the one canonical Markdown/Git store. Its configured
+`global_memory_root` is a logical namespace for a small cross-project layer,
+not a second store. Use the installed
+[`global-memory` skill](plugins/obsidian-memory/skills/global-memory/SKILL.md)
+for a global audit, promotion, correction, or cleanup. The deterministic audit
+enforces path, schema, temporal, provenance, and sensitivity invariants; the
+semantic curator decides whether sourced knowledge is genuinely durable and
+cross-project.
+
+Sensitivity is enforced after provider discovery and before native or QMD hits
+reach the agent. The resolution order keeps system and safety policy first,
+then the latest explicit user instruction, explicit project-local authority and
+policy, approved global defaults, project-derived context, and agent inference.
+Project architecture and current session state remain project-local; a global
+project-registry entry is only a compact stable pointer.
+
+This feature adds no new controller, database, or automatic-learning dependency.
+Session startup receives a startup route only, with no global record bodies.
+Private and restricted records stay excluded unless the user requests a narrow,
+explicit sensitive recall.
+
 QMD 2.8.3 is a Bun-owned, local derived accelerator. Its caches and embeddings
 are disposable: Markdown and Git are the recovery authority. No vault content
 is mirrored to Hermes or another external memory provider. QMD HTTP/MCP,

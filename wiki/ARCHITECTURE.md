@@ -91,6 +91,30 @@ fails, recovery restores the recorded upgraded plugin and QMD 2.8.3 runtime
 before the saved database; a failed rebuilt database is quarantined only when
 it exists.
 
+## Governed global curation
+
+The existing vault remains the one canonical Markdown/Git store. The configured
+`global_memory_root` is a logical namespace inside it, not a second writable
+representation. The deterministic audit checks paths, flat schema, provenance,
+status, temporal bounds, and sensitivity without interpreting whether a
+proposition is globally useful. The `global-memory` semantic curator makes that
+evidence and scope judgment, produces reviewable operations, and may apply only
+explicit safe changes authorized by the user.
+
+Sensitivity enforcement occurs after provider discovery and before any L1
+content reaches an agent, identically for native and QMD recall. The resolution
+order is system and safety policy, latest explicit user instruction, explicit
+project-local authority and policy, approved global defaults, project-derived
+context, then agent inference. A project override stays local and does not
+silently rewrite the global default.
+
+This layer adds no new controller, database, or automatic-learning dependency.
+Lifecycle injection is a startup route only, with no global record bodies;
+private and restricted records require explicit narrowly scoped recall. The
+curator keeps ordinary architecture, implementation, and session state under
+the owning project, allowing only a compact stable project-registry pointer in
+the global namespace.
+
 ## Trust boundaries
 
 - The repository contains plugin code and schemas, never the local vault path.
@@ -144,6 +168,8 @@ it exists.
 - `plugins/obsidian-memory/skills/obsidian-memory/`: on-demand workflow and
   vault schema, memory governance, provider policy, QMD retrieval, and
   evaluation protocol.
+- `plugins/obsidian-memory/skills/global-memory/`: portable semantic curator,
+  promotion gate, exact global record contract, and nine-section audit report.
 - `plugins/obsidian-memory/evals/memory-evals.json`: framework-neutral
   behavioral regression cases for recall, conflict, action grounding,
   security, selectivity, forgetting, and experiential learning.
