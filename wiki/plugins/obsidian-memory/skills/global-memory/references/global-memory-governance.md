@@ -166,6 +166,10 @@ reference, and `observed` is an exact ISO date. A `time_sensitive` record needs
 they are never `verified`, `accepted`, or `active` without new evidence and the
 corresponding evidence-type correction.
 
+Global-record supersession is namespace-preserving. Every successor after a
+chain enters the configured global `records/**` tree must remain in that tree;
+cross-namespace successors fail closed and audit as a fixed, value-free error.
+
 ## Sensitivity handling
 
 No secrets, credentials, private keys, raw correspondence, hidden reasoning,

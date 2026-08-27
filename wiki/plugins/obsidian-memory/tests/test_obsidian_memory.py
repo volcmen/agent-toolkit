@@ -1193,6 +1193,335 @@ Prior: old unrelated outcome.
                     ):
                         self.assertNotIn(forbidden, serialized)
 
+    def test_global_supersession_rejects_cross_namespace_for_every_metadata_shape(
+        self,
+    ) -> None:
+        """Catches native/QMD redirects leaving governed records under any metadata."""
+        shapes = {
+            "valid-public": 'sensitivity: "public"',
+            "padded": 'sensitivity: "private "',
+            "list": 'sensitivity:\n  - "private"',
+            "duplicate": 'sensitivity: "private"\nsensitivity: "public"',
+            "incomplete": 'sensitivity: "private"',
+            "oversized": 'sensitivity: "private"\npadding: "' + ("x" * 12_100) + '"',
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            sources: list[Path] = []
+            successors: list[Path] = []
+            sentinels: list[str] = []
+            for index, (shape, sensitivity) in enumerate(shapes.items()):
+                successor_relative = f"wiki/private-zone/target-{index}.md"
+                source = self.write_global_record(
+                    vault,
+                    f"wiki/global/records/privacy/source-{index}.md",
+                    id=f"global.privacy.source_{index}",
+                    category="privacy",
+                    status="superseded",
+                    superseded_by=successor_relative,
+                )
+                successor = vault / successor_relative
+                successor.parent.mkdir(parents=True, exist_ok=True)
+                sentinel = f"CROSS-NAMESPACE-SECRET-{shape}"
+                closing = "" if shape == "incomplete" else "---\n"
+                successor.write_text(
+                    "---\n"
+                    "memory_class: fact\n"
+                    "status: accepted\n"
+                    "source: user-confirmed fixture\n"
+                    "verified_by: test evidence\n"
+                    f"{sensitivity}\n"
+                    f"{closing}# Hidden\n{sentinel}\n",
+                    encoding="utf-8",
+                )
+                sources.append(source)
+                successors.append(successor)
+                sentinels.append(sentinel)
+
+            config_path = self.write_config(
+                root,
+                vault,
+                global_memory_root="wiki/global",
+                qmd_enabled=True,
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            for source, successor, sentinel in zip(sources, successors, sentinels):
+                source_relative = source.relative_to(vault).as_posix()
+                rows = {
+                    "native": {"path": source_relative, "snippet": "old"},
+                    "qmd": {
+                        "file": "qmd://obsidian-wiki/"
+                        + source_relative.removeprefix("wiki/"),
+                        "snippet": "old",
+                    },
+                }
+                for provider, row in rows.items():
+                    with self.subTest(source=source.name, provider=provider):
+                        compact, filtered = MODULE.compact_recall_results(
+                            config,
+                            [row],
+                            limit=5,
+                            max_tokens=900,
+                            include_stale=False,
+                            provider=provider,
+                        )
+                        encoded = json.dumps(compact)
+                        self.assertEqual(compact, [])
+                        self.assertEqual(filtered, 1)
+                        self.assertNotIn(
+                            successor.relative_to(vault).as_posix(), encoded
+                        )
+                        self.assertNotIn(sentinel, encoded)
+
+            report = MODULE.audit_vault(config)
+            cross_namespace = [
+                finding
+                for finding in report["findings"]
+                if finding["code"] == "supersession-cross-namespace"
+            ]
+            self.assertEqual(len(cross_namespace), len(shapes))
+            encoded_findings = json.dumps(cross_namespace)
+            for successor, sentinel in zip(successors, sentinels):
+                self.assertNotIn(successor.relative_to(vault).as_posix(), encoded_findings)
+                self.assertNotIn(sentinel, encoded_findings)
+            self.assertNotIn("sensitivity", encoded_findings)
+
+    def test_global_supersession_rechecks_cross_namespace_during_auto_fallback(
+        self,
+    ) -> None:
+        """Catches QMD rejection followed by a leaking native redirect."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            successor = vault / "wiki" / "private-zone" / "target.md"
+            successor.parent.mkdir(parents=True)
+            successor.write_text(
+                "---\nstatus: accepted\nsensitivity: \"private \"\n---\n"
+                "AUTO-CROSS-NAMESPACE-SECRET\n",
+                encoding="utf-8",
+            )
+            source = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/auto-source.md",
+                id="global.privacy.auto_source",
+                category="privacy",
+                status="superseded",
+                superseded_by="wiki/private-zone/target.md",
+            )
+            safe = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/auto-safe.md",
+                id="global.privacy.auto_safe",
+                category="privacy",
+            )
+            malformed_qmd = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/auto-qmd-malformed.md",
+                id="global.privacy.auto_qmd_malformed",
+                category="privacy",
+                sensitivity="private ",
+            )
+            source_relative = source.relative_to(vault).as_posix()
+            config_path = self.write_config(
+                root,
+                vault,
+                global_memory_root="wiki/global",
+                recall_provider="auto",
+                qmd_enabled=True,
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(
+                    MODULE, "select_recall_provider", return_value=("qmd", "")
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "qmd_recall_candidates",
+                    return_value=[
+                        {
+                            "file": "qmd://obsidian-wiki/global/records/privacy/auto-qmd-malformed.md",
+                            "snippet": "Agent Toolkit",
+                        }
+                    ],
+                ),
+            ):
+                config, _ = MODULE.load_config()
+                payload = MODULE.recall_payload(
+                    config,
+                    "Agent Toolkit",
+                    "semantic",
+                    5,
+                )
+
+            encoded = json.dumps(payload["results"])
+            self.assertEqual(payload["provider"], "native")
+            self.assertEqual(
+                [item["path"] for item in payload["results"]],
+                [safe.relative_to(vault).as_posix()],
+            )
+            self.assertNotIn(source_relative, encoded)
+            self.assertNotIn(malformed_qmd.relative_to(vault).as_posix(), encoded)
+            self.assertNotIn("wiki/private-zone/target.md", encoded)
+            self.assertNotIn("AUTO-CROSS-NAMESPACE-SECRET", encoded)
+
+    def test_global_supersession_rejects_non_global_intermediate_hop(self) -> None:
+        """Catches a valid governed intermediate record redirecting outside records."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            old = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/old-cross-hop.md",
+                id="global.privacy.old_cross_hop",
+                category="privacy",
+                status="superseded",
+                superseded_by="wiki/global/records/privacy/middle-cross-hop.md",
+            )
+            self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/middle-cross-hop.md",
+                id="global.privacy.middle_cross_hop",
+                category="privacy",
+                status="superseded",
+                superseded_by="wiki/private-zone/final.md",
+            )
+            final = vault / "wiki" / "private-zone" / "final.md"
+            final.parent.mkdir(parents=True)
+            final.write_text(
+                "---\nstatus: accepted\nsensitivity:\n  - private\n---\n"
+                "INTERMEDIATE-CROSS-NAMESPACE-SECRET\n",
+                encoding="utf-8",
+            )
+            config_path = self.write_config(root, vault, qmd_enabled=True)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            source_relative = old.relative_to(vault).as_posix()
+            for provider, row in (
+                ("native", {"path": source_relative, "snippet": "old"}),
+                (
+                    "qmd",
+                    {
+                        "file": "qmd://obsidian-wiki/"
+                        + source_relative.removeprefix("wiki/"),
+                        "snippet": "old",
+                    },
+                ),
+            ):
+                with self.subTest(provider=provider):
+                    compact, filtered = MODULE.compact_recall_results(
+                        config,
+                        [row],
+                        limit=5,
+                        max_tokens=900,
+                        include_stale=False,
+                        provider=provider,
+                    )
+                    encoded = json.dumps(compact)
+                    self.assertEqual(compact, [])
+                    self.assertEqual(filtered, 1)
+                    self.assertNotIn("wiki/private-zone/final.md", encoded)
+                    self.assertNotIn("INTERMEDIATE-CROSS-NAMESPACE-SECRET", encoded)
+
+    def test_non_global_successor_sensitivity_is_bounded_exact_and_gated(self) -> None:
+        """Catches the permissive generic successor parser dropping unsafe shapes."""
+        malformed = {
+            "padded": 'sensitivity: "private "',
+            "list": "sensitivity:\n  - private",
+            "duplicate": "sensitivity: private\nsensitivity: public",
+            "incomplete": "sensitivity: private",
+            "oversized": "sensitivity: private\npadding: " + ("x" * 12_100),
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            route = vault / "wiki" / "private-zone"
+            route.mkdir()
+            for index, (shape, sensitivity) in enumerate(malformed.items()):
+                source = route / f"old-{index}.md"
+                target = route / f"target-{index}.md"
+                source.write_text(
+                    "---\nstatus: superseded\n"
+                    f"superseded_by: wiki/private-zone/{target.name}\n---\n",
+                    encoding="utf-8",
+                )
+                closing = "" if shape == "incomplete" else "---\n"
+                sentinel = f"GENERIC-PRIVATE-SECRET-{shape}"
+                target.write_text(
+                    "---\nstatus: accepted\n"
+                    f"{sensitivity}\n{closing}{sentinel}\n",
+                    encoding="utf-8",
+                )
+                compact, filtered = MODULE.compact_recall_results(
+                    config,
+                    [{"path": source.relative_to(vault).as_posix(), "snippet": "old"}],
+                    limit=5,
+                    max_tokens=900,
+                    include_stale=False,
+                    provider="native",
+                )
+                with self.subTest(shape=shape):
+                    encoded = json.dumps(compact)
+                    self.assertEqual(compact, [])
+                    self.assertEqual(filtered, 1)
+                    self.assertNotIn(target.relative_to(vault).as_posix(), encoded)
+                    self.assertNotIn(sentinel, encoded)
+
+            source = route / "exact-old.md"
+            target = route / "exact-private.md"
+            source.write_text(
+                "---\nstatus: superseded\n"
+                "superseded_by: wiki/private-zone/exact-private.md\n---\n",
+                encoding="utf-8",
+            )
+            target.write_text(
+                "---\nstatus: accepted\nsensitivity: private\n---\n"
+                "EXACT-PRIVATE-SENTINEL\n",
+                encoding="utf-8",
+            )
+            row = {"path": source.relative_to(vault).as_posix(), "snippet": "old"}
+            counts: dict[str, int] = {}
+            hidden, _ = MODULE.compact_recall_results(
+                config,
+                [row],
+                limit=5,
+                max_tokens=900,
+                include_stale=False,
+                scope="wiki/private-zone",
+                filter_counts=counts,
+            )
+            visible, _ = MODULE.compact_recall_results(
+                config,
+                [row],
+                limit=5,
+                max_tokens=900,
+                include_stale=False,
+                include_sensitive=True,
+                scope="wiki/private-zone",
+            )
+            self.assertEqual(hidden, [])
+            self.assertEqual(counts, {"sensitive": 1})
+            self.assertEqual(
+                [item["path"] for item in visible],
+                [target.relative_to(vault).as_posix()],
+            )
+            self.assertIn("EXACT-PRIVATE-SENTINEL", visible[0]["snippet"])
+
     def test_load_config_rejects_active_or_explicit_qmd_roots_outside_recall(
         self,
     ) -> None:

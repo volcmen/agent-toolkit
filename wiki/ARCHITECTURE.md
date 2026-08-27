@@ -137,7 +137,9 @@ the global namespace.
   matched case-insensitively and re-applied after path resolution. Neither a
   case variant, a symlink, nor a `superseded_by` pointer at repository state
   such as `.git/config` can route private content into recall output. A scope is
-  an isolation boundary that supersession routing also respects.
+  an isolation boundary that supersession routing also respects. Once a
+  supersession chain enters governed global `records/**`, every later hop must
+  remain there; a cross-namespace successor fails closed.
 - Configured auto-commit paths are checked for dot-private segments before and
   after resolution. Direct, nested, case-variant, and symlink-routed private
   targets fail before staging. Automatic commits enumerate exact Markdown files

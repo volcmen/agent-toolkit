@@ -1259,11 +1259,8 @@ def read_frontmatter_prefix(path: Path, limit: int) -> str:
     return text.replace("\x00", "")
 
 
-def parse_frontmatter_document(
-    path: Path, limit: int = 12_000
-) -> dict[str, FrontmatterValue]:
-    """Read only bounded, inert scalar and list metadata from the first block."""
-    text = read_frontmatter_prefix(path, limit)
+def _parse_frontmatter_prefix(text: str) -> dict[str, FrontmatterValue]:
+    """Parse one already-bounded, inert frontmatter prefix."""
     if not text.startswith("---"):
         return {}
     lines = text.splitlines()
@@ -1312,6 +1309,13 @@ def parse_frontmatter_document(
             metadata[key] = value
     finish_list()
     return metadata
+
+
+def parse_frontmatter_document(
+    path: Path, limit: int = 12_000
+) -> dict[str, FrontmatterValue]:
+    """Read only bounded, inert scalar and list metadata from the first block."""
+    return _parse_frontmatter_prefix(read_frontmatter_prefix(path, limit))
 
 
 def parse_frontmatter(path: Path, limit: int = 12_000) -> dict[str, str]:
@@ -1380,6 +1384,7 @@ _AUDIT_SUPERSESSION_CODES = {
     "non-markdown": "supersession-non-markdown",
     "future": "supersession-future",
     "expired": "supersession-expired",
+    "cross-namespace": "supersession-cross-namespace",
 }
 
 
@@ -1725,10 +1730,10 @@ class RecallRecordClassification:
     global_record: bool
 
 
-def _strict_global_frontmatter(
-    path: Path,
+def _strict_recall_frontmatter(
+    path: Path, *, required: bool
 ) -> dict[str, FrontmatterValue] | None:
-    """Return one complete bounded frontmatter block with no duplicate keys."""
+    """Return one coherent bounded frontmatter block with no duplicate keys."""
     try:
         if not path.is_file():
             return None
@@ -1736,11 +1741,12 @@ def _strict_global_frontmatter(
             text = handle.read(MAX_GLOBAL_FRONTMATTER_CHARS + 1)
     except OSError:
         return None
+    text = text.replace("\x00", "")
     if not text.startswith("---"):
-        return None
-    lines = text.replace("\x00", "").splitlines()
+        return None if required else {}
+    lines = text.splitlines()
     if not lines or lines[0] != "---":
-        return None
+        return None if required else {}
     closing_index = next(
         (index for index, line in enumerate(lines[1:], start=1) if line == "---"),
         None,
@@ -1759,7 +1765,14 @@ def _strict_global_frontmatter(
         if key in seen:
             return None
         seen.add(key)
-    metadata = parse_frontmatter_document(path, MAX_GLOBAL_FRONTMATTER_CHARS)
+    return _parse_frontmatter_prefix(text)
+
+
+def _strict_global_frontmatter(
+    path: Path,
+) -> dict[str, FrontmatterValue] | None:
+    """Return one complete bounded global frontmatter document."""
+    metadata = _strict_recall_frontmatter(path, required=True)
     return metadata or None
 
 
@@ -1772,11 +1785,22 @@ def classify_recall_record(
     ):
         return RecallRecordClassification(False, {}, None, False)
     if not is_global_record_path(config, vault_relative):
-        metadata = parse_frontmatter(path)
+        document = _strict_recall_frontmatter(path, required=False)
+        if document is None:
+            return RecallRecordClassification(False, {}, None, False)
+        sensitivity = document.get("sensitivity")
+        if "sensitivity" in document and (
+            not isinstance(sensitivity, str)
+            or sensitivity not in GLOBAL_SENSITIVITIES
+        ):
+            return RecallRecordClassification(False, {}, None, False)
+        metadata = {
+            key: value for key, value in document.items() if isinstance(value, str)
+        }
         return RecallRecordClassification(
             True,
             metadata,
-            metadata.get("sensitivity"),
+            sensitivity if isinstance(sensitivity, str) else None,
             False,
         )
 
@@ -2823,6 +2847,7 @@ def follow_supersession_chain(
     seen = {source_relative}
     current_path = source_path
     current_metadata = metadata
+    governed_global_chain = is_global_record_path(config, source_relative)
     for _hop in range(MAX_SUPERSESSION_HOPS):
         reference = current_metadata.get("superseded_by", "")
         if not reference:
@@ -2847,11 +2872,17 @@ def follow_supersession_chain(
             return SupersessionResult(None, None, {}, "", "cycle")
         seen.add(resolved.vault_relative)
         current_path = resolved.path
+        successor_is_global = is_global_record_path(
+            config, resolved.vault_relative
+        )
+        if governed_global_chain and not successor_is_global:
+            return SupersessionResult(None, None, {}, "", "cross-namespace")
         classification = classify_recall_record(
             config, current_path, resolved.vault_relative
         )
         if not classification.allowed:
             return SupersessionResult(None, None, {}, "", "invalid-global-record")
+        governed_global_chain = governed_global_chain or successor_is_global
         if (
             include_sensitive is not None
             and classification.sensitivity in {"private", "restricted"}
