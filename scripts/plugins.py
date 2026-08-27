@@ -364,14 +364,43 @@ def codex_marketplaces() -> str:
     return codex_output(["codex", "plugin", "marketplace", "list"])
 
 
-def claude_marketplace_names() -> set[str]:
+def codex_marketplace_roots(listing: str) -> dict[str, str]:
+    roots: dict[str, str] = {}
+    for line in listing.splitlines():
+        columns = line.strip().split(maxsplit=1)
+        if len(columns) == 2 and columns[0] != "MARKETPLACE":
+            roots[columns[0]] = columns[1]
+    return roots
+
+
+def claude_marketplace_roots() -> dict[str, str]:
     if shutil.which("claude") is None:
-        return set()
+        return {}
     raw = run(["claude", "plugin", "marketplace", "list", "--json"], allow_failure=True, quiet=True).stdout
     try:
-        return {entry["name"] for entry in json.loads(raw)}
-    except (json.JSONDecodeError, KeyError, TypeError):
-        return set()
+        entries = json.loads(raw)
+        return {
+            entry["name"]: entry["installLocation"]
+            for entry in entries
+            if isinstance(entry, dict)
+            and isinstance(entry.get("name"), str)
+            and isinstance(entry.get("installLocation"), str)
+        }
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def claude_marketplace_names() -> set[str]:
+    return set(claude_marketplace_roots())
+
+
+def marketplace_root_is_current(value: str | None) -> bool:
+    if not value:
+        return False
+    try:
+        return Path(value).expanduser().resolve() == ROOT
+    except OSError:
+        return False
 
 
 def migrate_codex_hook_trust(old_id: str, new_id: str) -> bool:
@@ -513,7 +542,15 @@ def cmd_install(args: argparse.Namespace) -> int:
     if shutil.which("codex") is None:
         print("codex not on PATH — skipping Codex")
     else:
-        if name not in codex_marketplaces():
+        codex_roots = codex_marketplace_roots(codex_marketplaces())
+        if (
+            getattr(args, "force", False)
+            and name in codex_roots
+            and not marketplace_root_is_current(codex_roots[name])
+        ):
+            run(["codex", "plugin", "marketplace", "remove", name], allow_failure=True)
+            codex_roots.pop(name)
+        if name not in codex_roots:
             run(["codex", "plugin", "marketplace", "add", str(ROOT), "--json"])
         for entry in catalog["plugins"]:
             pid = plugin_id(catalog, entry)
@@ -524,7 +561,18 @@ def cmd_install(args: argparse.Namespace) -> int:
     if shutil.which("claude") is None:
         print("claude not on PATH — skipping Claude Code")
     else:
-        if name not in claude_marketplace_names():
+        claude_roots = claude_marketplace_roots()
+        if (
+            getattr(args, "force", False)
+            and name in claude_roots
+            and not marketplace_root_is_current(claude_roots[name])
+        ):
+            run(
+                ["claude", "plugin", "marketplace", "remove", name, "--scope", args.scope],
+                allow_failure=True,
+            )
+            claude_roots.pop(name)
+        if name not in claude_roots:
             run(["claude", "plugin", "marketplace", "add", str(ROOT), "--scope", args.scope])
         else:
             # This marketplace is a local directory, so a version bump in this repo is only

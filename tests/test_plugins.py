@@ -309,6 +309,58 @@ class StatusParsing(unittest.TestCase):
         self.assertNotIn('and "installed" in codex_list', source)
 
 
+class MarketplaceReconnection(unittest.TestCase):
+    """Force install must source local plugins from the executing checkout."""
+
+    def test_force_install_reconnects_drifted_marketplace_roots(self) -> None:
+        state = {
+            "codex_root": "/tmp/old-checkout",
+            "claude_root": "/tmp/old-checkout",
+        }
+        completed = mock.Mock(returncode=0, stdout="", stderr="")
+
+        def codex_marketplaces() -> str:
+            return f"MARKETPLACE ROOT\nai-workspace {state['codex_root']}\n"
+
+        def run(command, allow_failure=False, quiet=False):
+            if command[:4] == ["codex", "plugin", "marketplace", "remove"]:
+                state["codex_root"] = ""
+            elif command[:4] == ["codex", "plugin", "marketplace", "add"]:
+                state["codex_root"] = command[4]
+            elif command == ["claude", "plugin", "marketplace", "list", "--json"]:
+                completed.stdout = json.dumps(
+                    [
+                        {
+                            "name": "ai-workspace",
+                            "source": "directory",
+                            "installLocation": state["claude_root"],
+                        }
+                    ]
+                )
+                return completed
+            elif command[:4] == ["claude", "plugin", "marketplace", "remove"]:
+                state["claude_root"] = ""
+            elif command[:4] == ["claude", "plugin", "marketplace", "add"]:
+                state["claude_root"] = command[4]
+            completed.stdout = ""
+            return completed
+
+        args = argparse.Namespace(scope="user", force=True)
+        with TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(pl, "MEMORY_CONFIG", Path(tmp) / "missing.json"),
+                mock.patch.object(pl, "load_catalog", return_value=catalog()),
+                mock.patch.object(pl.shutil, "which", return_value="/usr/bin/tool"),
+                mock.patch.object(pl, "codex_marketplaces", side_effect=codex_marketplaces),
+                mock.patch.object(pl, "run", side_effect=run),
+                mock.patch.object(pl, "cmd_status", return_value=0),
+            ):
+                self.assertEqual(pl.cmd_install(args), 0)
+
+        self.assertEqual(state["codex_root"], str(pl.ROOT))
+        self.assertEqual(state["claude_root"], str(pl.ROOT))
+
+
 class WorkspaceGuidanceParity(unittest.TestCase):
     def args(self) -> argparse.Namespace:
         return argparse.Namespace(scope="user", force=False)
