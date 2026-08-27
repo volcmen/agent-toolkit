@@ -282,7 +282,10 @@ class StatusParsing(unittest.TestCase):
 
     LISTING = (
         "Marketplace `ai-workspace`\n"
-        "obsidian-memory@ai-workspace  installed, enabled  0.1.0  /path/one\n"
+        "/bounded/marketplace.json\n\n"
+        f"{'PLUGIN':<36}{'STATUS':<20}{'VERSION':<10}PATH\n"
+        f"{'obsidian-memory@ai-workspace':<36}{'installed, enabled':<20}"
+        f"{'0.1.0':<10}/bounded/plugin\n"
     )
 
     def state_for(self, pid: str, listing: str) -> str:
@@ -303,10 +306,11 @@ class StatusParsing(unittest.TestCase):
         self.assertEqual(self.state_for("agent-board@ai-workspace", self.LISTING), "-")
 
     def test_the_real_status_command_agrees(self) -> None:
-        """Guards the copy of this logic inside cmd_status."""
-        source = (ROOT / "scripts" / "plugins.py").read_text(encoding="utf-8")
-        self.assertIn('codex_state = "-"', source)
-        self.assertNotIn('and "installed" in codex_list', source)
+        """Guards the production parser against whole-output substring matches."""
+        states = pl.codex_plugin_states(self.LISTING, "ai-workspace")
+        self.assertTrue(states["obsidian-memory@ai-workspace"]["installed"])
+        self.assertTrue(states["obsidian-memory@ai-workspace"]["enabled"])
+        self.assertNotIn("agent-board@ai-workspace", states)
 
 
 class MarketplaceReconnection(unittest.TestCase):
@@ -395,6 +399,7 @@ class MarketplaceReconnection(unittest.TestCase):
                 ["codex", "plugin", "marketplace", "list"],
                 ["codex", "plugin", "marketplace", "list"],
                 ["codex", "plugin", "marketplace", "remove", "ai-workspace"],
+                ["codex", "plugin", "marketplace", "list"],
                 ["codex", "plugin", "marketplace", "add", str(pl.ROOT), "--json"],
                 ["codex", "plugin", "remove", "demo@ai-workspace"],
                 ["codex", "plugin", "add", "demo@ai-workspace", "--json"],
@@ -418,6 +423,7 @@ class MarketplaceReconnection(unittest.TestCase):
                     "--scope",
                     "user",
                 ],
+                ["claude", "plugin", "marketplace", "list", "--json"],
                 [
                     "claude",
                     "plugin",
@@ -504,6 +510,250 @@ class MarketplaceReconnection(unittest.TestCase):
         )
 
 
+class WorkspaceProductPostcondition(unittest.TestCase):
+    """Status is the fresh two-product authority after every install attempt."""
+
+    def exercise(self, *, install: bool = False, failure: str | None = None, **overrides):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            workspace = root / "workspace"
+            source = workspace / "project" / "plugins" / "demo"
+            codex_live = root / "codex-live" / "demo"
+            claude_live = root / "claude-live" / "demo"
+            home = root / "home"
+            for directory in (source, codex_live, claude_live):
+                directory.mkdir(parents=True)
+            source.joinpath("plugin.txt").write_text("SOURCE-BYTES\n", encoding="utf-8")
+            codex_live.joinpath("plugin.txt").write_text("SOURCE-BYTES\n", encoding="utf-8")
+            claude_live.joinpath("plugin.txt").write_text("SOURCE-BYTES\n", encoding="utf-8")
+            state = {
+                "codex_cli": True,
+                "claude_cli": True,
+                "codex_root": str(workspace),
+                "claude_root": str(workspace),
+                "codex_installed": True,
+                "claude_installed": True,
+                "codex_enabled": True,
+                "claude_enabled": True,
+                "codex_live": str(codex_live),
+                "claude_live": str(claude_live),
+                **overrides,
+            }
+            if not state.pop("codex_bytes", True):
+                codex_live.joinpath("plugin.txt").write_text(
+                    "PRIVATE-CODEX-LIVE-BODY\n", encoding="utf-8"
+                )
+            if not state.pop("claude_bytes", True):
+                claude_live.joinpath("plugin.txt").write_text(
+                    "PRIVATE-CLAUDE-LIVE-BODY\n", encoding="utf-8"
+                )
+
+            def completed(stdout="", returncode=0):
+                return mock.Mock(returncode=returncode, stdout=stdout, stderr="")
+
+            def codex_marketplaces() -> str:
+                rows = ["MARKETPLACE     ROOT", "openai-curated  /bounded/curated"]
+                if state["codex_root"]:
+                    rows.append(f"ai-workspace    {state['codex_root']}")
+                return "\n".join(rows) + "\n"
+
+            def codex_plugins() -> str:
+                lines = [
+                    "Marketplace `ai-workspace`",
+                    f"{workspace}/.agents/plugins/marketplace.json",
+                    "",
+                    f"{'PLUGIN':<28}{'STATUS':<20}{'VERSION':<10}PATH",
+                ]
+                if state["codex_installed"]:
+                    status = (
+                        "installed, enabled"
+                        if state["codex_enabled"]
+                        else "installed"
+                    )
+                    lines.append(
+                        f"{'demo@ai-workspace':<28}{status:<20}{'1.0.0':<10}"
+                        f"{state['codex_live']}"
+                    )
+                return "\n".join(lines) + "\n"
+
+            def claude_marketplaces() -> str:
+                entries = []
+                if state["claude_root"]:
+                    entries.append(
+                        {
+                            "name": "ai-workspace",
+                            "source": "directory",
+                            "path": state["claude_root"],
+                            "installLocation": state["claude_root"],
+                        }
+                    )
+                return json.dumps(entries)
+
+            def claude_plugins() -> str:
+                entries = []
+                if state["claude_installed"]:
+                    entries.append(
+                        {
+                            "id": "demo@ai-workspace",
+                            "version": "1.0.0",
+                            "scope": "user",
+                            "enabled": state["claude_enabled"],
+                            "installPath": state["claude_live"],
+                            "installedAt": "2026-08-27T00:00:00.000Z",
+                            "lastUpdated": "2026-08-27T00:00:00.000Z",
+                        }
+                    )
+                return json.dumps(entries)
+
+            def write_legacy_claude_state() -> None:
+                plugin_root = home / ".claude" / "plugins"
+                plugin_root.mkdir(parents=True, exist_ok=True)
+                records = {}
+                if state["claude_installed"]:
+                    records["demo@ai-workspace"] = [
+                        {
+                            "scope": "user",
+                            "version": "1.0.0",
+                            "installPath": state["claude_live"],
+                        }
+                    ]
+                (plugin_root / "installed_plugins.json").write_text(
+                    json.dumps({"plugins": records}), encoding="utf-8"
+                )
+                (home / ".claude" / "settings.json").write_text(
+                    json.dumps(
+                        {
+                            "enabledPlugins": {
+                                "demo@ai-workspace": state["claude_enabled"]
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            def run(command, allow_failure=False, quiet=False):
+                _ = allow_failure, quiet
+                if command == ["codex", "plugin", "marketplace", "list"]:
+                    return completed(codex_marketplaces())
+                if command == ["codex", "plugin", "list"]:
+                    return completed(codex_plugins())
+                if command == ["claude", "plugin", "marketplace", "list", "--json"]:
+                    return completed(claude_marketplaces())
+                if command == ["claude", "plugin", "list", "--json"]:
+                    return completed(claude_plugins())
+
+                operation = None
+                if command[:4] == ["codex", "plugin", "marketplace", "remove"]:
+                    operation = "remove"
+                    if failure != operation:
+                        state["codex_root"] = ""
+                elif command[:4] == ["codex", "plugin", "marketplace", "add"]:
+                    if state["codex_root"]:
+                        return completed(returncode=1)
+                    state["codex_root"] = command[4]
+                elif command[:3] == ["codex", "plugin", "remove"]:
+                    state["codex_installed"] = False
+                    state["codex_enabled"] = False
+                elif command[:3] == ["codex", "plugin", "add"]:
+                    operation = "add"
+                    if failure != operation:
+                        state["codex_installed"] = True
+                        state["codex_enabled"] = True
+                elif command[:4] == ["claude", "plugin", "marketplace", "remove"]:
+                    state["claude_root"] = ""
+                elif command[:4] == ["claude", "plugin", "marketplace", "add"]:
+                    state["claude_root"] = command[4]
+                elif command[:3] == ["claude", "plugin", "uninstall"]:
+                    state["claude_installed"] = False
+                    state["claude_enabled"] = False
+                elif command[:3] == ["claude", "plugin", "install"]:
+                    operation = "install"
+                    if failure != operation:
+                        state["claude_installed"] = True
+                        state["claude_enabled"] = True
+                elif command[:3] == ["claude", "plugin", "enable"]:
+                    if state["claude_installed"]:
+                        state["claude_enabled"] = True
+                write_legacy_claude_state()
+                return completed(returncode=1 if operation == failure else 0)
+
+            write_legacy_claude_state()
+
+            def which(name):
+                return f"/usr/bin/{name}" if state.get(f"{name}_cli") else None
+
+            output = io.StringIO()
+            args = argparse.Namespace(scope="user", force=True if install else False)
+            with (
+                mock.patch.object(pl, "ROOT", workspace),
+                mock.patch.object(pl, "MEMORY_CONFIG", root / "missing-config.json"),
+                mock.patch.object(pl, "load_catalog", return_value=catalog()),
+                mock.patch.object(pl.shutil, "which", side_effect=which),
+                mock.patch.object(pl, "run", side_effect=run),
+                mock.patch.object(Path, "home", return_value=home),
+                mock.patch.object(
+                    pl,
+                    "memory_guidance_status",
+                    return_value={"configured": False, "ok": True},
+                ),
+                redirect_stdout(output),
+            ):
+                rc = pl.cmd_install(args) if install else pl.cmd_status(args)
+            return rc, output.getvalue(), workspace, codex_live, claude_live
+
+    def test_status_requires_complete_current_byte_equal_state_for_both_products(
+        self,
+    ) -> None:
+        healthy_rc, healthy_output, workspace, codex_live, claude_live = self.exercise()
+        self.assertEqual(healthy_rc, 0)
+        cases = (
+            ("codex CLI", {"codex_cli": False}),
+            ("claude CLI", {"claude_cli": False}),
+            ("codex marketplace", {"codex_root": ""}),
+            ("claude marketplace", {"claude_root": ""}),
+            ("codex stale root", {"codex_root": "/bounded/old"}),
+            ("claude stale root", {"claude_root": "/bounded/old"}),
+            ("codex plugin", {"codex_installed": False}),
+            ("claude plugin", {"claude_installed": False}),
+            ("codex disabled", {"codex_enabled": False}),
+            ("claude disabled", {"claude_enabled": False}),
+            ("codex bytes", {"codex_bytes": False}),
+            ("claude bytes", {"claude_bytes": False}),
+        )
+        outputs = [healthy_output]
+        for label, overrides in cases:
+            with self.subTest(label=label):
+                rc, output, *_ = self.exercise(**overrides)
+                self.assertEqual(rc, 1)
+                outputs.append(output)
+        encoded = "".join(outputs)
+        for secret in (
+            str(workspace),
+            str(codex_live),
+            str(claude_live),
+            "PRIVATE-CODEX-LIVE-BODY",
+            "PRIVATE-CLAUDE-LIVE-BODY",
+        ):
+            self.assertNotIn(secret, encoded)
+
+    def test_force_install_uses_real_final_status_after_tolerated_failures(self) -> None:
+        cases = (
+            ("remove", {"codex_root": "/bounded/old"}),
+            ("add", {}),
+            ("install", {}),
+        )
+        for failure, overrides in cases:
+            with self.subTest(failure=failure):
+                rc, output, workspace, codex_live, claude_live = self.exercise(
+                    install=True,
+                    failure=failure,
+                    **overrides,
+                )
+                self.assertEqual(rc, 1)
+                for secret in (str(workspace), str(codex_live), str(claude_live)):
+                    self.assertNotIn(secret, output)
+
+
 class WorkspaceGuidanceParity(unittest.TestCase):
     def args(self) -> argparse.Namespace:
         return argparse.Namespace(scope="user", force=False)
@@ -566,7 +816,9 @@ class WorkspaceGuidanceParity(unittest.TestCase):
         self.assertIn("Claude stale", output.getvalue())
         self.assertIn("Codex malformed", output.getvalue())
 
-    def test_status_reports_not_configured_without_failing(self) -> None:
+    def test_status_reports_not_configured_but_fails_when_required_clis_are_missing(
+        self,
+    ) -> None:
         output = io.StringIO()
         with TemporaryDirectory() as tmp:
             with (
@@ -575,8 +827,9 @@ class WorkspaceGuidanceParity(unittest.TestCase):
                 mock.patch.object(pl.shutil, "which", return_value=None),
                 redirect_stdout(output),
             ):
-                self.assertEqual(pl.cmd_status(self.args()), 0)
+                self.assertEqual(pl.cmd_status(self.args()), 1)
         self.assertIn("guidance: not configured", output.getvalue())
+        self.assertEqual(output.getvalue().count("CLI MISSING"), 4)
 
     def test_status_fails_closed_on_malformed_project_status_json(self) -> None:
         output = io.StringIO()

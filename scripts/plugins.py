@@ -27,6 +27,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -377,6 +378,10 @@ def claude_marketplace_roots() -> dict[str, str]:
     if shutil.which("claude") is None:
         return {}
     raw = run(["claude", "plugin", "marketplace", "list", "--json"], allow_failure=True, quiet=True).stdout
+    return claude_marketplace_roots_from_json(raw)
+
+
+def claude_marketplace_roots_from_json(raw: str) -> dict[str, str]:
     try:
         entries = json.loads(raw)
         return {
@@ -399,7 +404,7 @@ def marketplace_root_is_current(value: str | None) -> bool:
         return False
     try:
         return Path(value).expanduser().resolve() == ROOT
-    except OSError:
+    except (OSError, RuntimeError):
         return False
 
 
@@ -549,9 +554,12 @@ def cmd_install(args: argparse.Namespace) -> int:
             and not marketplace_root_is_current(codex_roots[name])
         ):
             run(["codex", "plugin", "marketplace", "remove", name], allow_failure=True)
-            codex_roots.pop(name)
+            codex_roots = codex_marketplace_roots(codex_marketplaces())
         if name not in codex_roots:
-            run(["codex", "plugin", "marketplace", "add", str(ROOT), "--json"])
+            run(
+                ["codex", "plugin", "marketplace", "add", str(ROOT), "--json"],
+                allow_failure=True,
+            )
         for entry in catalog["plugins"]:
             pid = plugin_id(catalog, entry)
             if getattr(args, "force", False):
@@ -571,9 +579,12 @@ def cmd_install(args: argparse.Namespace) -> int:
                 ["claude", "plugin", "marketplace", "remove", name, "--scope", args.scope],
                 allow_failure=True,
             )
-            claude_roots.pop(name)
+            claude_roots = claude_marketplace_roots()
         if name not in claude_roots:
-            run(["claude", "plugin", "marketplace", "add", str(ROOT), "--scope", args.scope])
+            run(
+                ["claude", "plugin", "marketplace", "add", str(ROOT), "--scope", args.scope],
+                allow_failure=True,
+            )
         else:
             # This marketplace is a local directory, so a version bump in this repo is only
             # visible to Claude Code after the marketplace is re-read.
@@ -692,64 +703,173 @@ def claude_installed_versions() -> dict[str, str]:
     return live
 
 
+def codex_plugin_states(listing: str, marketplace: str) -> dict[str, dict[str, Any]]:
+    """Parse one complete Codex marketplace table without exposing its paths."""
+    active = False
+    columns: tuple[int, int, int] | None = None
+    states: dict[str, dict[str, Any]] = {}
+    for line in listing.splitlines():
+        section = re.fullmatch(r"Marketplace `([^`]+)`", line.strip())
+        if section:
+            active = section.group(1) == marketplace
+            columns = None
+            continue
+        if not active:
+            continue
+        if line.lstrip().startswith("PLUGIN") and all(
+            label in line for label in ("STATUS", "VERSION", "PATH")
+        ):
+            columns = (line.index("STATUS"), line.index("VERSION"), line.index("PATH"))
+            continue
+        if columns is None or not line.strip():
+            continue
+        status_start, version_start, path_start = columns
+        plugin_id_value = line[:status_start].strip()
+        if not plugin_id_value:
+            continue
+        status = line[status_start:version_start].strip()
+        states[plugin_id_value] = {
+            "installed": status.startswith("installed"),
+            "enabled": status == "installed, enabled",
+            "version": line[version_start:path_start].strip(),
+            "path": line[path_start:].strip(),
+        }
+    return states
+
+
+def claude_plugin_states(raw: str) -> dict[str, dict[str, Any]]:
+    """Parse Claude's bounded JSON plugin projection."""
+    try:
+        entries = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    if not isinstance(entries, list):
+        return {}
+    states: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str):
+            continue
+        states[entry["id"]] = {
+            "installed": True,
+            "enabled": entry.get("enabled") is True,
+            "version": entry.get("version") if isinstance(entry.get("version"), str) else "",
+            "path": entry.get("installPath") if isinstance(entry.get("installPath"), str) else "",
+        }
+    return states
+
+
+def plugin_live_state(
+    *,
+    available: bool,
+    marketplace_current: bool,
+    state: dict[str, Any] | None,
+    source: Path,
+) -> str:
+    """Return one bounded product/plugin postcondition label."""
+    if not available:
+        return "CLI MISSING"
+    if not marketplace_current:
+        return "MARKETPLACE"
+    if not state or state.get("installed") is not True:
+        return "MISSING"
+    if state.get("enabled") is not True:
+        return "DISABLED"
+    live_path = state.get("path")
+    source_digest = tree_digest(source)
+    if (
+        not isinstance(live_path, str)
+        or not live_path
+        or not source_digest
+        or tree_digest(Path(live_path)) != source_digest
+    ):
+        return "STALE"
+    return "ok"
+
+
 def cmd_status(args: argparse.Namespace) -> int:
+    _ = args
     catalog = load_catalog()
     name = marketplace_name(catalog)
-    print(f"\nmarketplace: {name}   root: {ROOT}")
+    print(f"\nmarketplace: {name}")
 
-    codex_list = ""
-    if shutil.which("codex"):
-        codex_list = codex_output(["codex", "plugin", "list"])
-        registered = name in codex_marketplaces()
-        print(f"codex:  marketplace {'registered' if registered else 'MISSING'}")
-    else:
-        print("codex:  not on PATH")
+    codex_available = shutil.which("codex") is not None
+    codex_marketplace_ok = False
+    codex_states: dict[str, dict[str, Any]] = {}
+    if codex_available:
+        marketplace_result = run(
+            ["codex", "plugin", "marketplace", "list"],
+            allow_failure=True,
+            quiet=True,
+        )
+        plugin_result = run(
+            ["codex", "plugin", "list"], allow_failure=True, quiet=True
+        )
+        marketplace_listing = marketplace_result.stdout + marketplace_result.stderr
+        plugin_listing = plugin_result.stdout + plugin_result.stderr
+        codex_marketplace_ok = (
+            marketplace_result.returncode == 0
+            and marketplace_root_is_current(
+                codex_marketplace_roots(marketplace_listing).get(name)
+            )
+        )
+        if plugin_result.returncode == 0:
+            codex_states = codex_plugin_states(plugin_listing, name)
 
-    claude_registered = name in claude_marketplace_names()
-    claude_enabled: dict[str, Any] = {}
-    settings = Path.home() / ".claude" / "settings.json"
-    if settings.is_file():
-        try:
-            claude_enabled = json.loads(settings.read_text(encoding="utf-8")).get("enabledPlugins", {})
-        except json.JSONDecodeError:
-            claude_enabled = {}
-    if shutil.which("claude"):
-        print(f"claude: marketplace {'registered' if claude_registered else 'MISSING'}")
-    else:
-        print("claude: not on PATH")
+    claude_available = shutil.which("claude") is not None
+    claude_marketplace_ok = False
+    claude_states: dict[str, dict[str, Any]] = {}
+    if claude_available:
+        marketplace_result = run(
+            ["claude", "plugin", "marketplace", "list", "--json"],
+            allow_failure=True,
+            quiet=True,
+        )
+        plugin_result = run(
+            ["claude", "plugin", "list", "--json"],
+            allow_failure=True,
+            quiet=True,
+        )
+        claude_marketplace_ok = (
+            marketplace_result.returncode == 0
+            and marketplace_root_is_current(
+                claude_marketplace_roots_from_json(marketplace_result.stdout).get(name)
+            )
+        )
+        if plugin_result.returncode == 0:
+            claude_states = claude_plugin_states(plugin_result.stdout)
 
-    live_versions = claude_installed_versions()
-    live_paths = claude_install_paths()
-    print(f"\n{'plugin':<20} {'repo':<10} {'live':<10} {'content':<8} codex        claude")
-    stale: list[str] = []
+    def marketplace_label(available: bool, current: bool) -> str:
+        if not available:
+            return "CLI MISSING"
+        return "current" if current else "MISSING OR STALE"
+
+    print(f"codex:  marketplace {marketplace_label(codex_available, codex_marketplace_ok)}")
+    print(f"claude: marketplace {marketplace_label(claude_available, claude_marketplace_ok)}")
+    print(f"\n{'plugin':<20} {'repo':<10} {'codex':<12} claude")
+    unhealthy = not (
+        codex_available
+        and claude_available
+        and codex_marketplace_ok
+        and claude_marketplace_ok
+    )
     for entry in catalog["plugins"]:
         pid = plugin_id(catalog, entry)
-        # Only a line that starts with this plugin id is evidence about it; a
-        # whole-output substring test would report a missing plugin as installed
-        # whenever any other plugin was.
-        codex_state = "-"
-        for line in codex_list.splitlines():
-            if line.startswith(pid):
-                codex_state = "installed" if "installed" in line else "not installed"
-                if "enabled" in line:
-                    codex_state += ", enabled"
-        claude_state = "enabled" if claude_enabled.get(pid) else ("installed" if claude_registered else "-")
         repo_version = plugin_version(entry)
-        live_version = live_versions.get(pid, "-")
-        # Content is the authority. Versions are pinned for local development, so a matching
-        # version proves nothing; only the bytes in the live cache copy do. A missing copy is
-        # as much a failure as a differing one — both mean this repo's code is not live.
-        content = "-"
-        if shutil.which("claude") and claude_registered:
-            live_dir = live_paths.get(pid, "")
-            if not live_dir or tree_digest(Path(live_dir)) != tree_digest(plugin_dir(entry)):
-                content = "STALE"
-                stale.append(entry["name"])
-            else:
-                content = "ok"
+        codex_state = plugin_live_state(
+            available=codex_available,
+            marketplace_current=codex_marketplace_ok,
+            state=codex_states.get(pid),
+            source=plugin_dir(entry),
+        )
+        claude_state = plugin_live_state(
+            available=claude_available,
+            marketplace_current=claude_marketplace_ok,
+            state=claude_states.get(pid),
+            source=plugin_dir(entry),
+        )
+        unhealthy = unhealthy or codex_state != "ok" or claude_state != "ok"
         print(
-            f"{entry['name']:<20} {repo_version:<10} {live_version:<10} {content:<8} "
-            f"{codex_state:<12} {claude_state}"
+            f"{entry['name']:<20} {repo_version:<10} {codex_state:<12} {claude_state}"
         )
 
     guidance = memory_guidance_status()
@@ -760,10 +880,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     else:
         print(f"guidance: Claude {guidance['claude']}; Codex {guidance['codex']}")
 
-    if stale:
-        print(f"\n! {', '.join(stale)}: Claude Code's live copy differs from this checkout.")
-        print("  run: python3 scripts/plugins.py install --force   (then start a new thread)")
-    return 1 if stale or not guidance["ok"] else 0
+    return 1 if unhealthy or not guidance["ok"] else 0
 
 
 def main() -> int:
