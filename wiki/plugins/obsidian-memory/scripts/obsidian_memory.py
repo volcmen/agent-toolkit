@@ -2539,11 +2539,23 @@ def resolve_qmd_uri_detailed(
     lexical_candidate = root.joinpath(*relative.parts)
     try:
         candidate = lexical_candidate.resolve()
-        candidate.relative_to(root)
         exact_file = lexical_candidate.is_file()
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError):
         return None
-    unsafe_alias = exact_file and lexical_candidate.absolute() != candidate
+    try:
+        candidate.relative_to(vault)
+    except ValueError:
+        return None
+    try:
+        candidate.relative_to(root)
+        outside_collection = False
+    except ValueError:
+        if not global_origin:
+            return None
+        outside_collection = True
+    unsafe_alias = outside_collection or (
+        exact_file and lexical_candidate.absolute() != candidate
+    )
 
     if not exact_file:
         # QMD normalizes every path segment, so "Team Notes/my_file.md" is
@@ -2577,13 +2589,16 @@ def resolve_qmd_uri_detailed(
             unsafe_alias = True
 
     try:
-        candidate.relative_to(root)
         vault_relative = candidate.relative_to(vault).as_posix()
     except ValueError:
         return None
     if candidate.suffix.casefold() != ".md":
         return None
     if not safe_recall_parts(PurePosixPath(vault_relative).parts):
+        return None
+    if outside_collection and not path_within_roots(
+        vault_relative, config["recall_roots"]
+    ):
         return None
     if global_origin and not is_global_record_path(config, vault_relative):
         unsafe_alias = True
@@ -2951,6 +2966,7 @@ def follow_supersession_chain(
     scope: str | None = None,
     include_sensitive: bool | None = None,
     global_origin: bool = False,
+    blocked_paths: set[str] | None = None,
 ) -> SupersessionResult:
     """Resolve a stale note's bounded successor chain inside recall boundaries."""
     seen = {source_relative}
@@ -2977,6 +2993,11 @@ def follow_supersession_chain(
                 "",
                 resolved.issue or "missing",
             )
+        if (
+            blocked_paths is not None
+            and resolved.vault_relative in blocked_paths
+        ):
+            return SupersessionResult(None, None, {}, "", "blocked")
         if not path_in_scope(resolved.vault_relative, scope):
             return SupersessionResult(None, None, {}, "", "out-of-scope")
         if resolved.vault_relative in seen:
@@ -3047,6 +3068,7 @@ def supersession_redirect(
     include_sensitive: bool = False,
     filter_counts: dict[str, int] | None = None,
     global_origin: bool = False,
+    blocked_paths: set[str] | None = None,
 ) -> dict[str, Any] | None:
     replacement = follow_supersession_chain(
         config,
@@ -3057,6 +3079,7 @@ def supersession_redirect(
         scope=scope,
         include_sensitive=include_sensitive,
         global_origin=global_origin,
+        blocked_paths=blocked_paths,
     )
     if replacement.issue == "sensitive":
         if filter_counts is not None:
@@ -3203,10 +3226,11 @@ def compact_recall_results(
                 path_value,
                 snippet_limit,
                 allowed_roots,
-                scope,
-                include_sensitive,
-                filter_counts,
-                resolved.global_origin,
+                scope=scope,
+                include_sensitive=include_sensitive,
+                filter_counts=filter_counts,
+                global_origin=resolved.global_origin,
+                blocked_paths=blocked_paths,
             )
             if redirect is not None and not append_within_budget(redirect):
                 break

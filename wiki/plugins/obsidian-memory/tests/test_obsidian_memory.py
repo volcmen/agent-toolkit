@@ -1697,6 +1697,179 @@ Prior: old unrelated outcome.
             ):
                 self.assertNotIn(value, encoded)
 
+    def test_auto_fallback_taints_a_global_alias_target_in_another_collection(
+        self,
+    ) -> None:
+        """Catches collection containment discarding a rejected global origin."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            target = vault / "projects" / "alpha" / "cross-collection.md"
+            sentinel = "CROSS-COLLECTION-GLOBAL-ALIAS-SECRET"
+            target.write_text(
+                "---\nstatus: accepted\nsensitivity: public\n---\n"
+                f"CROSS COLLECTION GLOBAL ALIAS NEEDLE {sentinel}\n",
+                encoding="utf-8",
+            )
+            alias = (
+                vault
+                / "wiki"
+                / "global"
+                / "records"
+                / "privacy"
+                / "cross-collection.md"
+            )
+            alias.parent.mkdir(parents=True)
+            alias.symlink_to(Path("../../../../projects/alpha/cross-collection.md"))
+            uri = "qmd://obsidian-wiki/global/records/privacy/cross-collection.md"
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_provider="auto",
+                qmd_enabled=True,
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(
+                    MODULE, "select_recall_provider", return_value=("qmd", "")
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "qmd_recall_candidates",
+                    return_value=[
+                        {
+                            "file": uri,
+                            "snippet": "CROSS COLLECTION GLOBAL ALIAS NEEDLE",
+                        }
+                    ],
+                ),
+            ):
+                config, _ = MODULE.load_config()
+                resolved = MODULE.resolve_qmd_uri_detailed(config, uri)
+                payload = MODULE.recall_payload(
+                    config,
+                    "CROSS COLLECTION GLOBAL ALIAS NEEDLE",
+                    "semantic",
+                    5,
+                )
+                report = MODULE.audit_vault(config)
+
+            target_relative = target.relative_to(vault).as_posix()
+            encoded_results = json.dumps(payload["results"])
+            self.assertEqual(payload["results"], [])
+            self.assertNotIn(target_relative, encoded_results)
+            self.assertNotIn(sentinel, encoded_results)
+            self.assertIsNotNone(resolved)
+            assert resolved is not None
+            self.assertEqual(
+                resolved.origin_relative,
+                alias.relative_to(vault).as_posix(),
+            )
+            self.assertEqual(resolved.vault_relative, target_relative)
+            self.assertTrue(resolved.global_origin)
+            self.assertTrue(resolved.unsafe_alias)
+            alias_findings = [
+                finding
+                for finding in report["findings"]
+                if finding["code"] == "global-symlink-alias"
+            ]
+            self.assertEqual(len(alias_findings), 1)
+            encoded_findings = json.dumps(alias_findings)
+            self.assertNotIn(target_relative, encoded_findings)
+            self.assertNotIn(sentinel, encoded_findings)
+            self.assertNotIn("sensitivity", encoded_findings)
+
+    def test_native_supersession_cannot_redirect_through_a_tainted_path(
+        self,
+    ) -> None:
+        """Catches candidate-only blocking that misses successor hops."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            routes = vault / "wiki" / "routes"
+            routes.mkdir()
+            alternate = routes / "alternate-old.md"
+            middle = routes / "alternate-middle.md"
+            target = routes / "blocked-terminal.md"
+            alternate.write_text(
+                "---\nstatus: superseded\n"
+                "superseded_by: wiki/routes/alternate-middle.md\n---\n"
+                "TAINTED REDIRECT NEEDLE alternate route\n",
+                encoding="utf-8",
+            )
+            middle.write_text(
+                "---\nstatus: superseded\n"
+                "superseded_by: wiki/routes/blocked-terminal.md\n---\n",
+                encoding="utf-8",
+            )
+            sentinel = "TAINTED-REDIRECT-TERMINAL-SECRET"
+            target.write_text(
+                "---\nstatus: accepted\nsensitivity: public\n---\n"
+                f"TAINTED REDIRECT NEEDLE {sentinel}\n",
+                encoding="utf-8",
+            )
+            alias = vault / "wiki" / "global" / "records" / "privacy" / "blocked.md"
+            alias.parent.mkdir(parents=True)
+            alias.symlink_to(Path("../../../routes/blocked-terminal.md"))
+            uri = "qmd://obsidian-wiki/global/records/privacy/blocked.md"
+            config_path = self.write_config(
+                root,
+                vault,
+                recall_provider="auto",
+                qmd_enabled=True,
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(
+                    MODULE, "select_recall_provider", return_value=("qmd", "")
+                ),
+                mock.patch.object(
+                    MODULE,
+                    "qmd_recall_candidates",
+                    return_value=[
+                        {
+                            "file": uri,
+                            "snippet": "TAINTED REDIRECT NEEDLE",
+                        }
+                    ],
+                ),
+            ):
+                config, _ = MODULE.load_config()
+                payload = MODULE.recall_payload(
+                    config,
+                    "TAINTED REDIRECT NEEDLE",
+                    "semantic",
+                    5,
+                )
+                direct_results = []
+                alternate_row = {
+                    "path": alternate.relative_to(vault).as_posix(),
+                    "snippet": "TAINTED REDIRECT NEEDLE alternate route",
+                }
+                for blocked in (middle, target):
+                    compact, _filtered = MODULE.compact_recall_results(
+                        config,
+                        [alternate_row],
+                        limit=5,
+                        max_tokens=900,
+                        include_stale=False,
+                        provider="native",
+                        blocked_paths={blocked.relative_to(vault).as_posix()},
+                    )
+                    direct_results.append(compact)
+
+            target_relative = target.relative_to(vault).as_posix()
+            encoded_payload = json.dumps(payload["results"])
+            self.assertEqual(payload["results"], [])
+            self.assertEqual(direct_results, [[], []])
+            self.assertNotIn(target_relative, encoded_payload)
+            self.assertNotIn(sentinel, encoded_payload)
+            self.assertNotIn("sensitivity", encoded_payload)
+
     def test_load_config_rejects_active_or_explicit_qmd_roots_outside_recall(
         self,
     ) -> None:
