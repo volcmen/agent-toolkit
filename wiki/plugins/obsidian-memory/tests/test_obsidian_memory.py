@@ -697,6 +697,293 @@ Prior: old unrelated outcome.
             self.assertEqual(exit_status, 0)
             self.assertEqual(json.loads(cli_stdout.getvalue()), payload)
 
+    def test_compaction_excludes_sensitive_results_for_every_provider(self) -> None:
+        """Catches native/QMD drift at the final shared recall boundary."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            public = self.write_global_record(
+                vault,
+                "wiki/global/records/project-registry/public.md",
+                id="global.project_registry.public",
+                sensitivity="public",
+            )
+            internal = self.write_global_record(
+                vault,
+                "wiki/global/records/project-registry/internal.md",
+                id="global.project_registry.internal",
+                sensitivity="internal",
+            )
+            private = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/private.md",
+                id="global.privacy.private",
+                category="privacy",
+                sensitivity="private",
+            )
+            restricted = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/restricted.md",
+                id="global.privacy.restricted",
+                category="privacy",
+                sensitivity="restricted",
+            )
+            config_path = self.write_config(
+                root, vault, global_memory_root="wiki/global"
+            )
+            rows = [
+                {"path": str(path.relative_to(vault)), "snippet": path.stem}
+                for path in (public, internal, private, restricted)
+            ]
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+            for provider in ("native", "qmd"):
+                with self.subTest(provider=provider):
+                    counts: dict[str, int] = {}
+                    compact, _ = MODULE.compact_recall_results(
+                        config,
+                        rows,
+                        limit=5,
+                        max_tokens=900,
+                        include_stale=False,
+                        provider=provider,
+                        filter_counts=counts,
+                    )
+                    self.assertEqual(
+                        [item["path"] for item in compact],
+                        [
+                            str(public.relative_to(vault)),
+                            str(internal.relative_to(vault)),
+                        ],
+                    )
+                    self.assertEqual(counts, {"sensitive": 2})
+
+    def test_sensitive_recall_requires_an_explicit_narrow_scope_before_provider(self) -> None:
+        """Catches provider execution before sensitive authorization is validated."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(
+                root, vault, global_memory_root="wiki/global"
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+
+            for scope in (
+                None,
+                "wiki",
+                "projects",
+                "daily",
+                "wiki/global",
+                "wiki/global/records",
+            ):
+                with (
+                    self.subTest(scope=scope),
+                    mock.patch.object(MODULE, "select_recall_provider") as select,
+                    self.assertRaises(ValueError),
+                ):
+                    MODULE.recall_payload(
+                        config,
+                        "private rule",
+                        "fast",
+                        3,
+                        provider="native",
+                        scope=scope,
+                        include_sensitive=True,
+                    )
+                select.assert_not_called()
+
+            self.assertEqual(
+                MODULE.validate_sensitive_scope(
+                    config, "wiki/global/records/privacy"
+                ),
+                "wiki/global/records/privacy",
+            )
+            self.assertEqual(
+                MODULE.validate_sensitive_scope(config, "projects/acme/private"),
+                "projects/acme/private",
+            )
+
+    def test_explicit_sensitive_recall_returns_only_records_within_narrow_scope(
+        self,
+    ) -> None:
+        """Catches a missing opt-in path or an opt-in that escapes its scope."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            private = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/private.md",
+                id="global.privacy.private",
+                category="privacy",
+                sensitivity="private",
+            )
+            restricted = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/deeper/restricted.md",
+                id="global.privacy.restricted",
+                category="privacy",
+                sensitivity="restricted",
+            )
+            outside = self.write_global_record(
+                vault,
+                "wiki/global/records/project-registry/private.md",
+                id="global.project_registry.private",
+                sensitivity="private",
+            )
+            config_path = self.write_config(
+                root, vault, global_memory_root="wiki/global"
+            )
+            rows = [
+                {"path": str(path.relative_to(vault)), "snippet": path.stem}
+                for path in (private, restricted, outside)
+            ]
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+            compact, _ = MODULE.compact_recall_results(
+                config,
+                rows,
+                limit=5,
+                max_tokens=900,
+                include_stale=False,
+                include_sensitive=True,
+                scope="wiki/global/records/privacy",
+            )
+            self.assertEqual(
+                [item["path"] for item in compact],
+                [str(private.relative_to(vault)), str(restricted.relative_to(vault))],
+            )
+
+    def test_supersession_redirect_does_not_leak_a_sensitive_successor(self) -> None:
+        """Catches sensitive successor title/body entering a redirected L1 hit."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            old = vault / "wiki" / "global" / "records" / "privacy" / "old.md"
+            old.parent.mkdir(parents=True, exist_ok=True)
+            old.write_text(
+                "---\nstatus: superseded\n"
+                "superseded_by: wiki/global/records/privacy/private.md\n---\n"
+                "# Old public route\n",
+                encoding="utf-8",
+            )
+            self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/private.md",
+                id="global.privacy.private",
+                category="privacy",
+                sensitivity="private",
+                statement="SENSITIVE SUCCESSOR BODY",
+            )
+            config_path = self.write_config(
+                root, vault, global_memory_root="wiki/global"
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+            counts: dict[str, int] = {}
+            compact, filtered_stale = MODULE.compact_recall_results(
+                config,
+                [{"path": str(old.relative_to(vault)), "snippet": "old"}],
+                limit=5,
+                max_tokens=900,
+                include_stale=False,
+                scope="wiki/global/records/privacy",
+                filter_counts=counts,
+            )
+            self.assertEqual(compact, [])
+            self.assertEqual(filtered_stale, 1)
+            self.assertEqual(counts, {"sensitive": 1})
+
+    def test_auto_fallback_reports_only_returned_provider_sensitive_count(self) -> None:
+        """Catches summing discarded QMD filters into native fallback metrics."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            public = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/public.md",
+                id="global.privacy.public",
+                category="privacy",
+                sensitivity="public",
+            )
+            private = self.write_global_record(
+                vault,
+                "wiki/global/records/privacy/private.md",
+                id="global.privacy.private",
+                category="privacy",
+                sensitivity="private",
+            )
+            config_path = self.write_config(
+                root,
+                vault,
+                global_memory_root="wiki/global",
+                recall_provider="auto",
+                qmd_enabled=True,
+            )
+            with (
+                mock.patch.dict(
+                    os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+                ),
+                mock.patch.object(MODULE.shutil, "which", return_value="/opt/bin/qmd"),
+                mock.patch.object(
+                    MODULE,
+                    "qmd_recall_candidates",
+                    return_value=[
+                        {
+                            "path": str(private.relative_to(vault)),
+                            "snippet": "Agent Toolkit",
+                        }
+                    ],
+                ),
+            ):
+                config, _ = MODULE.load_config()
+                payload = MODULE.recall_payload(
+                    config,
+                    "Agent Toolkit",
+                    "semantic",
+                    5,
+                    scope="wiki/global/records/privacy",
+                )
+            self.assertEqual(payload["provider"], "native")
+            self.assertEqual(
+                [item["path"] for item in payload["results"]],
+                [str(public.relative_to(vault))],
+            )
+            self.assertEqual(payload["filtered_sensitive"], 1)
+
+    def test_qmd_recall_compatibility_defaults_sensitive_access_to_false(self) -> None:
+        """Catches legacy QMD entry points silently opting into private recall."""
+        with mock.patch.object(MODULE, "recall", return_value=0) as recall:
+            self.assertEqual(MODULE.qmd_recall("query", "fast", 3), 0)
+        recall.assert_called_once_with(
+            "query",
+            "fast",
+            3,
+            None,
+            False,
+            provider="qmd",
+            include_sensitive=False,
+        )
+
+    def test_recall_help_exposes_explicit_sensitive_flag(self) -> None:
+        """Catches a protected runtime path that operators cannot request."""
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "recall", "--help"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--include-sensitive", result.stdout)
+
     def test_recall_cli_maps_exception_classes_to_documented_exit_statuses(self) -> None:
         """Catches exception-class exit drift and unintended traceback output."""
         failures = (
@@ -3676,6 +3963,42 @@ Prior: old unrelated outcome.
                             str(raised.exception), "case 1 field 'id' is invalid"
                         )
 
+    def test_recall_eval_fixture_rejects_non_boolean_sensitive_access(self) -> None:
+        """Catches truthy strings widening sensitive evaluation recall."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault)
+            fixture = root / "invalid-sensitive.json"
+            fixture.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "cases": [
+                            {
+                                "id": "invalid-sensitive",
+                                "query": "private rule",
+                                "mode": "fast",
+                                "provider": "native",
+                                "scope": "projects/alpha/private",
+                                "include_sensitive": "false",
+                                "expected_paths": [],
+                                "any_of_paths": [],
+                                "forbidden_paths": [],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            ):
+                config, _ = MODULE.load_config()
+                with self.assertRaises(MODULE.EvaluationError) as raised:
+                    MODULE.load_recall_eval_suite(fixture, config)
+            self.assertIn("include_sensitive", str(raised.exception))
+
     def test_recall_eval_fixture_rejects_every_malformed_schema_boundary(
         self,
     ) -> None:
@@ -3734,6 +4057,7 @@ Prior: old unrelated outcome.
                 ("tokens-high", {"schema_version": 1, "cases": [case_with(max_tokens=4001)]}),
                 ("tokens-bool", {"schema_version": 1, "cases": [case_with(max_tokens=False)]}),
                 ("allow-degraded", {"schema_version": 1, "cases": [case_with(allow_degraded="false")]}),
+                ("include-sensitive", {"schema_version": 1, "cases": [case_with(include_sensitive="false")]}),
                 ("paths-type", {"schema_version": 1, "cases": [case_with(expected_paths="projects/alpha/current.md")]}),
                 ("path-item-type", {"schema_version": 1, "cases": [case_with(expected_paths=[7])]}),
                 ("path-empty", {"schema_version": 1, "cases": [case_with(expected_paths=[""])]}),
@@ -3816,6 +4140,7 @@ Prior: old unrelated outcome.
                                 "mode": "hybrid",
                                 "provider": "auto",
                                 "scope": "projects/alpha",
+                                "include_sensitive": True,
                                 "top": 3,
                                 "max_tokens": 900,
                                 "expected_paths": ["projects/alpha/current.md"],
@@ -3860,6 +4185,7 @@ Prior: old unrelated outcome.
                         "results_estimated_tokens": 42,
                         "result_token_limit": 900,
                         "filtered_stale": 2,
+                        "filtered_sensitive": 3,
                     },
                     {
                         "provider": "native",
@@ -3871,6 +4197,7 @@ Prior: old unrelated outcome.
                         "results_estimated_tokens": 901,
                         "result_token_limit": 900,
                         "filtered_stale": 0,
+                        "filtered_sensitive": 1,
                     },
                 ]
             )
@@ -3906,13 +4233,18 @@ Prior: old unrelated outcome.
             )
             self.assertEqual(
                 calls[0][6],
-                {"provider": "auto", "scope": "projects/alpha"},
+                {
+                    "provider": "auto",
+                    "scope": "projects/alpha",
+                    "include_sensitive": True,
+                },
             )
             self.assertEqual(report["summary"]["passed"], 1)
             self.assertEqual(report["summary"]["failed"], 1)
             self.assertEqual(report["summary"]["median_elapsed_ms"], 16.0)
             self.assertEqual(report["summary"]["median_result_tokens"], 471.5)
             self.assertEqual(report["cases"][0]["paths"], ["projects/alpha/current.md"])
+            self.assertEqual(report["cases"][0]["filtered_sensitive"], 3)
             self.assertEqual(
                 report["cases"][1]["reasons"],
                 [
@@ -3970,6 +4302,7 @@ Prior: old unrelated outcome.
                 "results_estimated_tokens": 0,
                 "result_token_limit": 900,
                 "filtered_stale": 0,
+                "filtered_sensitive": 0,
             }
             with mock.patch.dict(
                 os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}
@@ -4043,6 +4376,7 @@ Prior: old unrelated outcome.
                         "results_estimated_tokens": 0,
                         "result_token_limit": 900,
                         "filtered_stale": 0,
+                        "filtered_sensitive": 0,
                     }
                     report = MODULE.evaluate_recall_cases(
                         config,
@@ -4105,6 +4439,7 @@ Prior: old unrelated outcome.
                         "results_estimated_tokens": 0,
                         "result_token_limit": 900,
                         "filtered_stale": 0,
+                        "filtered_sensitive": 0,
                     }
                     report = MODULE.evaluate_recall_cases(
                         config,
@@ -4168,6 +4503,7 @@ Prior: old unrelated outcome.
                         "results_estimated_tokens": 0,
                         "result_token_limit": 900,
                         "filtered_stale": 0,
+                        "filtered_sensitive": 0,
                     }
                 return {
                     "provider": "native",
@@ -4185,6 +4521,7 @@ Prior: old unrelated outcome.
                     "results_estimated_tokens": 1,
                     "result_token_limit": 900,
                     "filtered_stale": 0,
+                    "filtered_sensitive": 0,
                 }
 
             with mock.patch.dict(
@@ -4400,7 +4737,10 @@ Prior: old unrelated outcome.
             ):
                 config, _ = MODULE.load_config()
                 cases = MODULE.load_recall_eval_suite(example, config)
-        self.assertEqual([case.id for case in cases], ["scoped-current-decision"])
+        self.assertEqual(
+            [case.id for case in cases],
+            ["scoped-current-decision", "ordinary-global-record"],
+        )
         self.assertNotIn(str(Path.home()), example.read_text(encoding="utf-8"))
 
     def test_hook_checker_rejects_chained_posix_and_windows_commands(self) -> None:

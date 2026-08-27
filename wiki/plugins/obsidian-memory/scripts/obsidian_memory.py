@@ -98,6 +98,7 @@ class RecallEvalCase:
     any_of_paths: tuple[str, ...]
     forbidden_paths: tuple[str, ...]
     allow_degraded: bool
+    include_sensitive: bool = False
 
 
 @dataclass(frozen=True)
@@ -2550,6 +2551,24 @@ def normalize_recall_scope(scope: str | None) -> str | None:
     return relative.as_posix()
 
 
+def validate_sensitive_scope(config: dict[str, Any], scope: str | None) -> str:
+    normalized = normalize_recall_scope(scope)
+    if normalized is None:
+        raise ValueError("--include-sensitive requires an explicit narrow --scope")
+    broad = {
+        *config["recall_roots"],
+        config["global_memory_root"],
+        f"{config['global_memory_root'].rstrip('/')}/records",
+    }
+    if normalized in broad:
+        raise ValueError("--include-sensitive requires a scope below a broad recall root")
+    return normalized
+
+
+def metadata_is_sensitive(metadata: dict[str, str]) -> bool:
+    return metadata.get("sensitivity") in {"private", "restricted"}
+
+
 def path_in_scope(path: str, scope: str | None) -> bool:
     return scope is None or relative_path_is_within(path, scope)
 
@@ -2689,6 +2708,8 @@ def supersession_redirect(
     snippet_limit: int,
     allowed_roots: list[str],
     scope: str | None = None,
+    include_sensitive: bool = False,
+    filter_counts: dict[str, int] | None = None,
 ) -> dict[str, Any] | None:
     replacement = follow_supersession_chain(
         config,
@@ -2704,6 +2725,10 @@ def supersession_redirect(
     vault_relative = replacement.vault_relative
     replacement_metadata = replacement.metadata
     replacement_state = replacement.state
+    if metadata_is_sensitive(replacement_metadata) and not include_sensitive:
+        if filter_counts is not None:
+            filter_counts["sensitive"] = filter_counts.get("sensitive", 0) + 1
+        return None
     hit: dict[str, Any] = {
         "path": vault_relative,
         "reason": f"supersedes {stale_path}",
@@ -2742,10 +2767,14 @@ def compact_recall_results(
     limit: int,
     max_tokens: int,
     include_stale: bool,
+    include_sensitive: bool = False,
+    filter_counts: dict[str, int] | None = None,
     scope: str | None = None,
     provider: str = "native",
 ) -> tuple[list[dict[str, Any]], int]:
     """Turn provider rows into governed, scoped, token-bounded L1 hits."""
+    if include_sensitive:
+        scope = validate_sensitive_scope(config, scope)
     if not isinstance(raw_results, list):
         raise ValueError("recall provider output must be a JSON array")
     snippet_limit = int_setting(config, "recall_snippet_chars", 80, 800)
@@ -2790,6 +2819,10 @@ def compact_recall_results(
         if not path_in_scope(vault_relative, scope):
             continue
         metadata = parse_frontmatter(source_path)
+        if metadata_is_sensitive(metadata) and not include_sensitive:
+            if filter_counts is not None:
+                filter_counts["sensitive"] = filter_counts.get("sensitive", 0) + 1
+            continue
         path_value = vault_relative
         state = memory_state(metadata)
         if state in HIDDEN_STATES and not include_stale:
@@ -2801,6 +2834,8 @@ def compact_recall_results(
                 snippet_limit,
                 allowed_roots,
                 scope,
+                include_sensitive,
+                filter_counts,
             )
             if redirect is not None and not append_within_budget(redirect):
                 break
@@ -3174,8 +3209,13 @@ def recall_payload(
     *,
     provider: str | None = None,
     scope: str | None = None,
+    include_sensitive: bool = False,
 ) -> dict[str, Any]:
-    normalized_scope = normalize_recall_scope(scope)
+    normalized_scope = (
+        validate_sensitive_scope(config, scope)
+        if include_sensitive
+        else normalize_recall_scope(scope)
+    )
     normalized = " ".join(query.split())
     if not normalized:
         raise ValueError("recall query cannot be empty")
@@ -3248,6 +3288,7 @@ def recall_payload(
             config, normalized, candidate_limit, normalized_scope
         )
 
+    filter_counts: dict[str, int] = {}
     try:
         compact, filtered_stale = compact_recall_results(
             config,
@@ -3255,6 +3296,8 @@ def recall_payload(
             limit=limit,
             max_tokens=output_tokens,
             include_stale=include_stale,
+            include_sensitive=include_sensitive,
+            filter_counts=filter_counts,
             scope=normalized_scope,
             provider=active_provider,
         )
@@ -3264,12 +3307,15 @@ def recall_payload(
         native_results, native_diagnostics = native_recall_candidates(
             config, normalized, candidate_limit, normalized_scope
         )
+        native_filter_counts: dict[str, int] = {}
         native_compact, native_filtered_stale = compact_recall_results(
             config,
             native_results,
             limit=limit,
             max_tokens=output_tokens,
             include_stale=include_stale,
+            include_sensitive=include_sensitive,
+            filter_counts=native_filter_counts,
             scope=normalized_scope,
             provider="native",
         )
@@ -3278,6 +3324,7 @@ def recall_payload(
             effective_mode = "fast"
             compact = native_compact
             filtered_stale = native_filtered_stale
+            filter_counts = native_filter_counts
             warnings.append(
                 "QMD returned no governed in-scope results; native recall found "
                 "lexical evidence"
@@ -3296,6 +3343,7 @@ def recall_payload(
         ),
         "result_token_limit": output_tokens,
         "filtered_stale": filtered_stale,
+        "filtered_sensitive": filter_counts.get("sensitive", 0),
     }
     if normalized_scope:
         payload["scope"] = normalized_scope
@@ -3318,6 +3366,7 @@ _RECALL_EVAL_CASE_KEYS = {
     "any_of_paths",
     "forbidden_paths",
     "allow_degraded",
+    "include_sensitive",
 }
 _RECALL_EVAL_REQUIRED_CASE_KEYS = {
     "id",
@@ -3507,6 +3556,9 @@ def load_recall_eval_suite(
         allow_degraded = raw_case.get("allow_degraded", False)
         if not isinstance(allow_degraded, bool):
             raise _evaluation_field_error(case_label, "allow_degraded")
+        include_sensitive = raw_case.get("include_sensitive", False)
+        if not isinstance(include_sensitive, bool):
+            raise _evaluation_field_error(case_label, "include_sensitive")
 
         cases.append(
             RecallEvalCase(
@@ -3539,6 +3591,7 @@ def load_recall_eval_suite(
                     scope=scope,
                 ),
                 allow_degraded=allow_degraded,
+                include_sensitive=include_sensitive,
             )
         )
     return cases
@@ -3546,7 +3599,7 @@ def load_recall_eval_suite(
 
 def _evaluation_payload_fields(
     config: dict[str, Any], case: RecallEvalCase, payload: Any
-) -> tuple[str, str, bool, int, int, list[str]] | None:
+) -> tuple[str, str, bool, int, int, int, list[str]] | None:
     if not isinstance(payload, dict):
         return None
     provider = payload.get("provider")
@@ -3555,6 +3608,7 @@ def _evaluation_payload_fields(
     result_tokens = payload.get("results_estimated_tokens")
     result_token_limit = payload.get("result_token_limit")
     filtered_stale = payload.get("filtered_stale")
+    filtered_sensitive = payload.get("filtered_sensitive")
     results = payload.get("results")
     coherent_transition = False
     if case.provider == "native":
@@ -3586,6 +3640,8 @@ def _evaluation_payload_fields(
         or result_token_limit < 0
         or type(filtered_stale) is not int
         or filtered_stale < 0
+        or type(filtered_sensitive) is not int
+        or filtered_sensitive < 0
         or not isinstance(results, list)
         or len(results) > MAX_RECALL_EVAL_PATHS
     ):
@@ -3604,7 +3660,15 @@ def _evaluation_payload_fields(
         if path is None or path in paths:
             return None
         paths.append(path)
-    return provider, mode, degraded, result_tokens, filtered_stale, paths
+    return (
+        provider,
+        mode,
+        degraded,
+        result_tokens,
+        filtered_stale,
+        filtered_sensitive,
+        paths,
+    )
 
 
 def evaluate_recall_cases(
@@ -3632,6 +3696,7 @@ def evaluate_recall_cases(
                 False,
                 provider=case.provider,
                 scope=case.scope,
+                include_sensitive=case.include_sensitive,
             )
         except Exception:
             runtime_error = True
@@ -3645,10 +3710,19 @@ def evaluate_recall_cases(
             degraded = False
             result_tokens = 0
             filtered_stale = 0
+            filtered_sensitive = 0
             paths: list[str] = []
             reasons.append("recall-error")
         else:
-            provider, mode, degraded, result_tokens, filtered_stale, paths = fields
+            (
+                provider,
+                mode,
+                degraded,
+                result_tokens,
+                filtered_stale,
+                filtered_sensitive,
+                paths,
+            ) = fields
             returned = set(paths)
             if any(path not in returned for path in case.expected_paths):
                 reasons.append("missing-expected")
@@ -3681,6 +3755,7 @@ def evaluate_recall_cases(
                 "elapsed_ms": elapsed_ms,
                 "result_tokens": result_tokens,
                 "filtered_stale": filtered_stale,
+                "filtered_sensitive": filtered_sensitive,
                 "paths": paths,
             }
         )
@@ -3739,6 +3814,7 @@ def recall(
     *,
     provider: str | None = None,
     scope: str | None = None,
+    include_sensitive: bool = False,
 ) -> int:
     try:
         config, _ = load_config()
@@ -3751,6 +3827,7 @@ def recall(
             include_stale,
             provider=provider,
             scope=scope,
+            include_sensitive=include_sensitive,
         )
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -3768,6 +3845,8 @@ def qmd_recall(
     top: int | None,
     max_tokens: int | None = None,
     include_stale: bool = False,
+    *,
+    include_sensitive: bool = False,
 ) -> int:
     """Retain the original strict-QMD entry point for compatibility."""
     return recall(
@@ -3777,6 +3856,7 @@ def qmd_recall(
         max_tokens,
         include_stale,
         provider="qmd",
+        include_sensitive=include_sensitive,
     )
 
 
@@ -3936,6 +4016,11 @@ def parse_args() -> argparse.Namespace:
             "rejected notes"
         ),
     )
+    recall_parser.add_argument(
+        "--include-sensitive",
+        action="store_true",
+        help="Include private or restricted records only within an explicit narrow scope",
+    )
     evaluate_parser = subparsers.add_parser(
         "evaluate",
         help="Run a read-only local recall-contract evaluation",
@@ -3981,6 +4066,7 @@ def main() -> int:
             args.include_stale,
             provider=args.provider,
             scope=args.scope,
+            include_sensitive=args.include_sensitive,
         )
     if args.command == "evaluate":
         return evaluate_recall(args.fixture, args.as_json)

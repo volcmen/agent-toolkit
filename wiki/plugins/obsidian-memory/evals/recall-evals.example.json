@@ -13,6 +13,19 @@
       "any_of_paths": [],
       "forbidden_paths": ["projects/example/decisions/old.md"],
       "allow_degraded": false
+    },
+    {
+      "id": "ordinary-global-record",
+      "query": "project registry",
+      "mode": "fast",
+      "provider": "native",
+      "scope": "wiki/global/records/project-registry",
+      "top": 3,
+      "max_tokens": 900,
+      "expected_paths": ["wiki/global/records/project-registry/example.md"],
+      "any_of_paths": [],
+      "forbidden_paths": [],
+      "allow_degraded": false
     }
   ]
 }

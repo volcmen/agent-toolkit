@@ -101,6 +101,8 @@ Memory is progressively disclosed:
    bounded by `max_recall_tokens`. Superseded hits follow a bounded,
    cycle-checked chain to their first non-hidden successor; stale, expired, and
    not-yet-valid notes stay hidden unless `--include-stale` is explicit.
+   Private and restricted records are excluded unless sensitive recall is
+   explicitly authorized with a narrow scope.
 3. **L2 — source notes:** agents open only relevant Markdown files and verify
    provenance before acting.
 
@@ -119,10 +121,17 @@ The default provider works without setup. Restrict a query to a known project
 when possible:
 
 ```bash
-python3 plugins/obsidian-memory/scripts/obsidian_memory.py recall \
-  "current database decision" --scope projects/acme --mode fast \
-  --max-tokens 600
+python3 plugins/obsidian-memory/scripts/obsidian_memory.py recall "project registry" --scope wiki/global/records/project-registry
+python3 plugins/obsidian-memory/scripts/obsidian_memory.py recall "private rule" --scope wiki/global/records/privacy --include-sensitive
 ```
+
+The second form is the only sensitive path: `--include-sensitive` must be
+combined with a scope below a broad recall root. The roots `wiki`, `projects`,
+and `daily`, the configured global-memory root, and its `records` directory are
+rejected as too broad. Native and QMD results pass through the same final
+filter, so QMD ranking cannot override sensitivity policy. If `auto` falls back
+from QMD to native, `filtered_sensitive` describes only the returned native
+result set rather than summing discarded provider attempts.
 
 Inspect the canonical store, provider selection, capabilities, and health:
 
@@ -142,11 +151,13 @@ python3 plugins/obsidian-memory/scripts/obsidian_memory.py audit --json
 `evaluate` returns 0 when every case passes, 1 when a valid suite has failed
 cases, and 2 when the fixture or configuration is invalid. Its report contains
 case IDs, requested and effective provider/mode, degradation, elapsed time,
-result-token and stale-filter counts, and vault-relative result paths. It never
-emits fixture queries, note bodies or snippets, tracebacks, or resolved fixture
-and vault paths. Operator-authored IDs must match
+result-token, stale-filter, and sensitive-filter counts, and vault-relative
+result paths. It never emits fixture queries, note bodies or snippets,
+tracebacks, or resolved fixture and vault paths. Operator-authored IDs must match
 `[A-Za-z0-9][A-Za-z0-9._-]{0,119}` and are emitted verbatim, so use only
-non-sensitive opaque labels. Omitted `allow_degraded` defaults to `false`.
+non-sensitive opaque labels. Omitted `allow_degraded` and `include_sensitive`
+both default to `false`; sensitive evaluator cases require the same narrow
+scope as interactive recall.
 
 `audit` returns 0 when no errors are present, 1 when findings include errors,
 and 2 when configuration prevents the audit. Its bounded findings use fixed

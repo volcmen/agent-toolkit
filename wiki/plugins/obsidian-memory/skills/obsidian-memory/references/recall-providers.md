@@ -60,10 +60,10 @@ python3 "<plugin-root>/scripts/obsidian_memory.py" doctor --json
 
 The retrieval-contract evaluator records the requested and effective provider
 and mode for every case, plus the degradation flag, elapsed milliseconds,
-result-token estimate, stale-filter count, fixed failure reasons, and returned
-vault-relative paths. It never reports fixture queries, note bodies, snippets,
-provider tracebacks, or absolute paths. This makes an `auto` fallback to native
-visible without exposing the recalled content.
+result-token estimate, stale- and sensitive-filter counts, fixed failure
+reasons, and returned vault-relative paths. It never reports fixture queries,
+note bodies, snippets, provider tracebacks, or absolute paths. This makes an
+`auto` fallback to native visible without exposing the recalled content.
 
 Run the manual evaluator through the portable skill command described in the
 [evaluation reference](evaluation.md). A degraded case fails unless its fixture
@@ -76,8 +76,8 @@ scope, fallback, or token-budget behavior.
 Use `--scope` when the project or knowledge area is known:
 
 ```bash
-python3 "<plugin-root>/scripts/obsidian_memory.py" recall \
-  "current deployment decision" --scope projects/acme --mode fast
+python3 plugins/obsidian-memory/scripts/obsidian_memory.py recall "project registry" --scope wiki/global/records/project-registry
+python3 plugins/obsidian-memory/scripts/obsidian_memory.py recall "private rule" --scope wiki/global/records/privacy --include-sensitive
 ```
 
 Scopes are safe vault-relative path prefixes. The native provider narrows its
@@ -85,6 +85,13 @@ scan before reading files. QMD selects only collections whose configured roots
 intersect the scope and uses a bounded deeper candidate pool before every
 provider enforces the exact path prefix again while building L1 results. Scope
 is an isolation and selectivity control, not an authority signal.
+
+Private and restricted records are excluded by default. The second form above
+is the only sensitive recall path: an explicit `--include-sensitive` flag plus
+a scope below a broad recall root. The broad `wiki`, `projects`, and `daily`
+roots, the configured global-memory root, and its `records` directory are not
+narrow enough. QMD ranking cannot override this final shared result filter;
+native, QMD, and native fallback all enforce the same rule.
 
 A scope binds supersession routing too: when a stale hit points to a successor
 outside the scope, the successor is withheld rather than leaked, and the hit
@@ -104,6 +111,10 @@ re-enters results. An unparsable `valid_from`/`valid_until` does not hide the
 note — it surfaces as `memory.validity_warning` so a typo stays visible. The
 `filtered_stale` count reports every governance-hidden hit across all three
 states, not only superseded ones.
+
+The `filtered_sensitive` count belongs to the provider result set that is
+returned. When `auto` replaces empty governed QMD output with native evidence,
+discarded QMD attempts are not added to the native fallback count.
 
 When a single hit cannot fit `max_tokens`, recall returns its path with
 `"truncated": true` instead of an empty result set. Raise `--max-tokens` to see
