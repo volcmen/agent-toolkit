@@ -279,6 +279,7 @@ PROJECT_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ("wiki", [sys.executable, "scripts/check.py"]),
     ("agent-board", ["bun", "run", "check"]),
     ("codex-pair", ["bash", "scripts/check.sh"]),
+    ("chatgpt-consult", ["bun", "run", "check"]),
     ("shared-agents", [sys.executable, "scripts/manage.py", "check"]),
 )
 
@@ -717,9 +718,15 @@ def codex_plugin_states(listing: str, marketplace: str) -> dict[str, dict[str, A
         if not active:
             continue
         if line.lstrip().startswith("PLUGIN") and all(
-            label in line for label in ("STATUS", "VERSION", "PATH")
+            label in line for label in ("STATUS", "VERSION")
         ):
-            columns = (line.index("STATUS"), line.index("VERSION"), line.index("PATH"))
+            source_label = next(
+                (label for label in ("SOURCE", "PATH") if label in line),
+                None,
+            )
+            if source_label is None:
+                continue
+            columns = (line.index("STATUS"), line.index("VERSION"), line.index(source_label))
             continue
         if columns is None or not line.strip():
             continue

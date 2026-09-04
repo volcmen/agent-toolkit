@@ -128,6 +128,12 @@ def check(deep: bool) -> None:
 
     run(["qmd", "--version"])
     run(["ios", "version"])
+    agent_browser_version = run(["agent-browser", "--version"]).stdout.strip()
+    if agent_browser_version != "agent-browser 0.35.1":
+        raise ToolingError(
+            "agent-browser: expected version output "
+            f"'agent-browser 0.35.1', found {agent_browser_version!r}"
+        )
     if deep:
         run(["qmd", "status"], timeout=60)
     print(

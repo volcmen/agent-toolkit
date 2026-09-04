@@ -11,6 +11,8 @@ their own projects and use their product-native installation workflows.
   role souls, local-first triage, capacity-safe dispatch, and a web dashboard.
 - [`codex-pair`](codex-pair/): independent Codex judgment, product shaping,
   technical leadership, and review from inside Claude Code.
+- [`chatgpt-consult`](chatgpt-consult/): bounded consultations through ChatGPT
+  web, with local project context, structured results, and explicit publishing.
 - [`shared-agents`](shared-agents/): standalone Claude Code controller and
   specialist-agent sources, including automatic Alan Wake routing for requested
   human-facing prose. It is not a workspace plugin.
@@ -34,12 +36,14 @@ codex plugin marketplace add "$PWD" --json
 codex plugin add obsidian-memory@ai-workspace --json
 codex plugin add agent-board@ai-workspace --json
 codex plugin add codex-pair@ai-workspace --json
+codex plugin add chatgpt-consult@ai-workspace --json
 
 # Claude Code
 claude plugin marketplace add "$PWD" --scope user
 claude plugin install obsidian-memory@ai-workspace --scope user
 claude plugin install agent-board@ai-workspace --scope user
 claude plugin install codex-pair@ai-workspace --scope user
+claude plugin install chatgpt-consult@ai-workspace --scope user
 ```
 
 The workspace helper performs the same registration and installation
@@ -77,6 +81,9 @@ plugins.json                            ← edit catalog metadata here
 │   ├── .claude-plugin/plugin.json      ← generated
 │   └── .codex-plugin/plugin.json       ← generated
 ├── codex-pair/plugins/codex-pair/
+│   ├── .claude-plugin/plugin.json      ← generated
+│   └── .codex-plugin/plugin.json       ← generated
+├── chatgpt-consult/plugins/chatgpt-consult/
 │   ├── .claude-plugin/plugin.json      ← generated
 │   └── .codex-plugin/plugin.json       ← generated
 └── shared-agents/                      ← standalone Claude agent project
@@ -135,6 +142,7 @@ validation commands above.
 ├── scripts/
 ├── agent-board/
 ├── bun-global-tools/
+├── chatgpt-consult/
 ├── codex-pair/
 └── wiki/
 ```

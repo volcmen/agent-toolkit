@@ -17,6 +17,11 @@
       "binaries": ["qmd"]
     },
     {
+      "name": "agent-browser",
+      "version": "0.35.1",
+      "binaries": ["agent-browser"]
+    },
+    {
       "name": "go-ios",
       "version": "1.2.0",
       "binaries": ["ios"],

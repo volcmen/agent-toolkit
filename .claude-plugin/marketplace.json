@@ -54,6 +54,22 @@
         "product-management"
       ],
       "license": "MIT"
+    },
+    {
+      "name": "chatgpt-consult",
+      "source": "./chatgpt-consult/plugins/chatgpt-consult",
+      "description": "Bounded project consultations through ChatGPT web, with local MCP context, structured results, and explicit publishing.",
+      "version": "1.0.0",
+      "displayName": "ChatGPT Consult",
+      "category": "Productivity",
+      "keywords": [
+        "chatgpt",
+        "consultation",
+        "mcp",
+        "second-opinion",
+        "project-context"
+      ],
+      "license": "MIT"
     }
   ]
 }

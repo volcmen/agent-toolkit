@@ -288,6 +288,26 @@ class StatusParsing(unittest.TestCase):
         f"{'0.1.0':<10}/bounded/plugin\n"
     )
 
+    SOURCE_LISTING = (
+        "Marketplace `ai-workspace`\n"
+        "/bounded/marketplace.json\n\n"
+        f"{'PLUGIN':<36}{'STATUS':<20}{'VERSION':<10}SOURCE\n"
+        f"{'obsidian-memory@ai-workspace':<36}{'installed, enabled':<20}"
+        f"{'0.1.0':<10}/bounded/plugin\n"
+    )
+
+    def test_reads_a_source_column_as_well_as_path(self) -> None:
+        states = pl.codex_plugin_states(self.SOURCE_LISTING, "ai-workspace")
+        self.assertEqual(
+            states.get("obsidian-memory@ai-workspace"),
+            {
+                "installed": True,
+                "enabled": True,
+                "version": "0.1.0",
+                "path": "/bounded/plugin",
+            },
+        )
+
     def state_for(self, pid: str, listing: str) -> str:
         state = "-"
         for line in listing.splitlines():
@@ -957,6 +977,12 @@ class WikiRelease(unittest.TestCase):
 
 
 class LiveCatalog(unittest.TestCase):
+    def test_chatgpt_consult_is_catalogued_and_runs_its_package_gate(self) -> None:
+        live = pl.load_catalog()
+        entry = next(item for item in live["plugins"] if item["name"] == "chatgpt-consult")
+        self.assertEqual(entry["source"], "./chatgpt-consult/plugins/chatgpt-consult")
+        self.assertIn(("chatgpt-consult", ["bun", "run", "check"]), pl.PROJECT_CHECKS)
+
     def test_every_catalogued_plugin_exists_and_validates(self) -> None:
         live = pl.load_catalog()
         self.assertGreaterEqual(len(live["plugins"]), 2)

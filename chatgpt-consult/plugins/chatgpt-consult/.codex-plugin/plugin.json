@@ -1,0 +1,33 @@
+{
+  "name": "chatgpt-consult",
+  "version": "1.0.0",
+  "description": "Bounded project consultations through ChatGPT web, with local MCP context, structured results, and explicit publishing.",
+  "author": {
+    "name": "David David"
+  },
+  "license": "MIT",
+  "keywords": [
+    "chatgpt",
+    "consultation",
+    "mcp",
+    "second-opinion",
+    "project-context"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "ChatGPT Consult",
+    "shortDescription": "Consult ChatGPT web with bounded project context.",
+    "longDescription": "Creates project-scoped consultation requests, hands them to ChatGPT web through a safe MCP bridge, retrieves structured results, and publishes only when explicitly requested.",
+    "developerName": "David David",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Consult ChatGPT web about this decision using only the files I name.",
+      "Ask my ChatGPT Project to review this diff and report the result.",
+      "Continue the last ChatGPT consultation with this follow-up."
+    ]
+  }
+}

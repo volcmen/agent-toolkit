@@ -1,0 +1,16 @@
+{
+  "name": "chatgpt-consult",
+  "version": "1.0.0",
+  "description": "Bounded project consultations through ChatGPT web, with local MCP context, structured results, and explicit publishing.",
+  "author": {
+    "name": "David David"
+  },
+  "license": "MIT",
+  "keywords": [
+    "chatgpt",
+    "consultation",
+    "mcp",
+    "second-opinion",
+    "project-context"
+  ]
+}

@@ -1,0 +1,344 @@
+import { McpServer, type McpServerFactory } from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { z } from "zod/v4";
+import type { ConsultationService } from "../core/service";
+import { resolveRequestedProfile } from "../core/schema";
+import {
+  browserRecoveryInstruction,
+  compactText,
+  handlerValidatedInput,
+  parseToolInput,
+  runTool,
+  successResult,
+} from "./results";
+
+const INSTRUCTIONS = "Consultations are asynchronous: poll consult_status until completion or recovery. On needs_login run setup browser. Within needs_manual, only reason submission_uncertain, submission certainty uncertain, and workerActive true may poll consult_status. Every other recovery tuple uses manual handoff/import-result and must never be resubmitted. Use consult_show after completion; publication requires explicit user intent.";
+
+const ProfileSchema = z.enum(["lean", "research", "analysis", "connected"]);
+const StateSchema = z.enum(["pending", "claimed", "completed", "cancelled", "expired"]);
+const REQUEST_ID = /^[a-f0-9]{32}$/;
+const SAFE_IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{1,128}$/;
+const SAFE_PROJECT_PATH = /^(?!\s*$)(?!\/)(?![A-Za-z]:[\\/])(?!\\\\)(?!\.\.(?:[\\/]|$))(?!.*[\\/]\.\.(?:[\\/]|$))[^\0]+$/;
+const IdentifierSchema = z.string().length(32).regex(REQUEST_ID);
+const ProjectPathSchema = z.string().min(1).max(4_096).regex(SAFE_PROJECT_PATH);
+const GoalSchema = z.string().min(1).max(8_192).regex(/\S/);
+const ConnectorSchema = z.string().min(1).max(128).regex(/\S/);
+const BrowserStatusSchema = z.object({
+  phase: z.enum([
+    "queued", "preparing", "awaiting_browser", "awaiting_response",
+    "needs_login", "needs_manual", "completed", "cancelled", "expired",
+  ]),
+  reason: z.enum([
+    "login_required", "human_challenge", "browser_unavailable", "ui_changed",
+    "upload_failed", "timed_out", "invalid_response", "submission_uncertain",
+  ]).nullable(),
+  attempt: z.number().int().nonnegative(),
+  submissionCertainty: z.enum(["not_submitted", "submitted", "uncertain"]),
+  workerActive: z.boolean(),
+  conversationUrl: z.url().optional(),
+}).strict();
+
+const StartInputSchema = z.object({
+  goal: GoalSchema,
+  profile: ProfileSchema.optional(),
+  files: z.array(ProjectPathSchema).max(100).default([]),
+  smart: z.boolean().default(false),
+  attachments: z.array(ProjectPathSchema).max(100).default([]),
+  diff: z.enum(["working", "none"]).default("none"),
+  open: z.boolean().default(true),
+  allow_sensitive: z.boolean().default(false),
+  connectors: z.array(ConnectorSchema).max(100).default([]),
+  idempotency_key: z.string().min(1).max(128).regex(SAFE_IDEMPOTENCY_KEY).optional(),
+}).strict();
+
+const FollowupInputSchema = z.object({
+  parent_id: IdentifierSchema,
+  goal: GoalSchema,
+  profile: ProfileSchema.optional(),
+  files: z.array(ProjectPathSchema).max(100).default([]),
+  smart: z.boolean().default(false),
+  attachments: z.array(ProjectPathSchema).max(100).default([]),
+  diff: z.enum(["working", "none"]).default("none"),
+  open: z.boolean().default(true),
+  allow_sensitive: z.boolean().default(false),
+  connectors: z.array(ConnectorSchema).max(100).optional(),
+  idempotency_key: z.string().min(1).max(128).regex(SAFE_IDEMPOTENCY_KEY).optional(),
+}).strict();
+
+const RequestInputSchema = z.object({ request_id: IdentifierSchema }).strict();
+const PublishInputSchema = z.object({
+  request_id: IdentifierSchema,
+  output: ProjectPathSchema.optional(),
+}).strict();
+
+const StartOutputSchema = z.object({
+  requestId: IdentifierSchema,
+  state: StateSchema,
+  revision: z.number().int().nonnegative(),
+  claimToken: z.string().min(1),
+  handoff: z.string().min(1),
+  browser: BrowserStatusSchema.optional(),
+}).strict();
+
+const StatusOutputSchema = z.object({
+  requestId: IdentifierSchema,
+  state: StateSchema,
+  revision: z.number().int().nonnegative(),
+  goal: z.string().min(1),
+  profile: ProfileSchema,
+  parentId: IdentifierSchema.nullable(),
+  createdAt: z.string().datetime({ offset: true }),
+  updatedAt: z.string().datetime({ offset: true }),
+  expiresAt: z.string().datetime({ offset: true }),
+  summary: z.string().min(1).optional(),
+  completionSource: z.enum(["mcp", "manual", "browser"]).optional(),
+  browser: BrowserStatusSchema.optional(),
+}).strict();
+
+const CompletionOutputSchema = z.object({
+  summary: z.string().min(1),
+  answer: z.string().min(1),
+  evidence: z.array(z.string().min(1)),
+  assumptions: z.array(z.string().min(1)),
+  risks: z.array(z.string().min(1)),
+  recommendations: z.array(z.string().min(1)),
+  followUpQuestions: z.array(z.string().min(1)),
+}).strict();
+const ShowOutputSchema = StatusOutputSchema.extend({
+  completion: CompletionOutputSchema.nullable(),
+}).strict();
+const PublishOutputSchema = z.object({ path: ProjectPathSchema }).strict();
+
+const startInput = handlerValidatedInput(StartInputSchema);
+const followupInput = handlerValidatedInput(FollowupInputSchema);
+const requestInput = handlerValidatedInput(RequestInputSchema);
+const publishInput = handlerValidatedInput(PublishInputSchema);
+
+const isActiveSubmissionConfirmation = (
+  browser: z.output<typeof BrowserStatusSchema> | undefined,
+): boolean => browser?.phase === "needs_manual"
+  && browser.reason === "submission_uncertain"
+  && browser.submissionCertainty === "uncertain"
+  && browser.workerActive === true;
+
+const hasUnsafeUncertainMismatch = (
+  browser: z.output<typeof BrowserStatusSchema> | undefined,
+): boolean => browser !== undefined
+  && (browser.reason === "submission_uncertain"
+    || browser.submissionCertainty === "uncertain");
+
+const progressText = (
+  kind: "Consultation" | "Follow-up",
+  result: z.output<typeof StartOutputSchema>,
+): string => {
+  const prefix = `${kind} ${result.requestId} is ${result.state}.`;
+  if (result.state === "completed") return `${prefix} Use consult_show to review the validated result.`;
+  if (isActiveSubmissionConfirmation(result.browser)) {
+    return `${prefix} The active worker is confirming submission; poll consult_status and do not resubmit.`;
+  }
+  if (hasUnsafeUncertainMismatch(result.browser)) {
+    return `${prefix} Use manual handoff/import-result for recovery; never resubmit uncertain work.`;
+  }
+  const recovery = browserRecoveryInstruction(result.browser?.phase, result.browser?.submissionCertainty);
+  if (recovery) return `${prefix} ${recovery}`;
+  if (result.browser) return `${prefix} Automatic browser work is ${result.browser.phase}; poll consult_status.`;
+  return `${prefix} Use the returned handoff, then poll consult_status.`;
+};
+
+const statusText = (result: z.output<typeof StatusOutputSchema>): string => {
+  const prefix = `Consultation ${result.requestId} is ${result.state} at revision ${result.revision}.`;
+  if (result.state === "completed") return `${prefix} Use consult_show to review the validated result.`;
+  if (isActiveSubmissionConfirmation(result.browser)) {
+    return `${prefix} The active worker is confirming submission; poll consult_status and do not resubmit.`;
+  }
+  if (hasUnsafeUncertainMismatch(result.browser)) {
+    return `${prefix} Use manual handoff/import-result for recovery; never resubmit uncertain work.`;
+  }
+  const recovery = browserRecoveryInstruction(result.browser?.phase, result.browser?.submissionCertainty);
+  if (recovery) return `${prefix} ${recovery}`;
+  if (result.browser) return `${prefix} Browser work is ${result.browser.phase}; poll consult_status.`;
+  return prefix;
+};
+
+export const createLocalMcp = (
+  service: ConsultationService,
+  defaultProfile: z.output<typeof ProfileSchema> = "lean",
+): McpServer => {
+  const server = new McpServer(
+    { name: "chatgpt-consult-local", version: "1.0.0" },
+    { instructions: INSTRUCTIONS },
+  );
+
+  server.registerTool("consult_start", {
+    title: "Start consultation",
+    description: `Create a bounded asynchronous ChatGPT consultation. Omitting profile resolves to analysis when files, attachments, or diff carry context, else the configured default (${defaultProfile}).`,
+    inputSchema: startInput,
+    outputSchema: StartOutputSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }, (raw) => runTool(async () => {
+    const input = parseToolInput(StartInputSchema, raw);
+    const value = await service.start({
+      goal: input.goal,
+      profile: resolveRequestedProfile(input.profile, input) ?? defaultProfile,
+      files: input.files,
+      smart: input.smart,
+      attachments: input.attachments,
+      diff: input.diff,
+      open: input.open,
+      allowSensitive: input.allow_sensitive,
+      connectors: input.connectors,
+      ...(input.idempotency_key ? { idempotencyKey: input.idempotency_key } : {}),
+    });
+    return successResult(
+      StartOutputSchema,
+      value,
+      (result) => progressText("Consultation", result),
+    );
+  }));
+
+  server.registerTool("consult_status", {
+    title: "Consultation status",
+    description: "Poll compact consultation state and completion summary.",
+    inputSchema: requestInput,
+    outputSchema: StatusOutputSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }, (raw) => runTool(async () => {
+    const input = parseToolInput(RequestInputSchema, raw);
+    const value = await service.status(input.request_id);
+    return successResult(
+      StatusOutputSchema,
+      value,
+      statusText,
+    );
+  }));
+
+  server.registerTool("consult_show", {
+    title: "Show consultation",
+    description: "Read the bounded structured result of a consultation.",
+    inputSchema: requestInput,
+    outputSchema: ShowOutputSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }, (raw) => runTool(async () => {
+    const input = parseToolInput(RequestInputSchema, raw);
+    const value = await service.show(input.request_id);
+    return successResult(
+      ShowOutputSchema,
+      value,
+      (result) => result.completion
+        ? `Consultation ${result.requestId} is complete: ${compactText(result.completion.summary)}`
+        : `Consultation ${result.requestId} has no completed result yet.`,
+    );
+  }));
+
+  server.registerTool("consult_followup", {
+    title: "Follow up consultation",
+    description: "Create a bounded child consultation in the same topic.",
+    inputSchema: followupInput,
+    outputSchema: StartOutputSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }, (raw) => runTool(async () => {
+    const input = parseToolInput(FollowupInputSchema, raw);
+    const resolvedProfile = resolveRequestedProfile(input.profile, input);
+    const value = await service.followup({
+      parentId: input.parent_id,
+      goal: input.goal,
+      ...(resolvedProfile ? { profile: resolvedProfile } : {}),
+      files: input.files,
+      smart: input.smart,
+      attachments: input.attachments,
+      diff: input.diff,
+      open: input.open,
+      allowSensitive: input.allow_sensitive,
+      ...(input.connectors ? { connectors: input.connectors } : {}),
+      ...(input.idempotency_key ? { idempotencyKey: input.idempotency_key } : {}),
+    });
+    return successResult(
+      StartOutputSchema,
+      value,
+      (result) => progressText("Follow-up", result),
+    );
+  }));
+
+  server.registerTool("consult_cancel", {
+    title: "Cancel consultation",
+    description: "Cancel a pending or claimed consultation without deleting its record.",
+    inputSchema: requestInput,
+    outputSchema: StatusOutputSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }, (raw) => runTool(async () => {
+    const input = parseToolInput(RequestInputSchema, raw);
+    const value = await service.cancel(input.request_id);
+    return successResult(
+      StatusOutputSchema,
+      value,
+      (result) => `Consultation ${result.requestId} is ${result.state}.`,
+    );
+  }));
+
+  server.registerTool("consult_publish", {
+    title: "Publish consultation",
+    description: "Explicitly publish a completed consultation as a new project Markdown file.",
+    inputSchema: publishInput,
+    outputSchema: PublishOutputSchema,
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
+  }, (raw) => runTool(async () => {
+    const input = parseToolInput(PublishInputSchema, raw);
+    const value = await service.publish(input.request_id, input.output);
+    return successResult(
+      PublishOutputSchema,
+      value,
+      (result) => `Published consultation to ${compactText(result.path)}.`,
+    );
+  }));
+
+  return server;
+};
+
+export const installServeRejectionGuard = (
+  write: (message: string) => void = (message) => { process.stderr.write(message); },
+): (() => void) => {
+  const guard = (): void => {
+    write("chatgpt-consult: suppressed background rejection\n");
+  };
+  process.on("unhandledRejection", guard);
+  return () => { process.off("unhandledRejection", guard); };
+};
+
+export const serveLocalStdio = async (factory: McpServerFactory): Promise<void> => {
+  installServeRejectionGuard();
+  serveStdio(factory, {
+    onerror: () => {
+      process.stderr.write("chatgpt-consult: MCP transport error\n");
+    },
+  });
+};

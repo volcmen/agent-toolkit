@@ -95,6 +95,35 @@
           "Give me a grounded second opinion \u2014 here is my position, attack it."
         ]
       }
+    },
+    {
+      "name": "chatgpt-consult",
+      "displayName": "ChatGPT Consult",
+      "source": "./chatgpt-consult/plugins/chatgpt-consult",
+      "version": "1.0.0",
+      "description": "Bounded project consultations through ChatGPT web, with local MCP context, structured results, and explicit publishing.",
+      "category": "Productivity",
+      "keywords": [
+        "chatgpt",
+        "consultation",
+        "mcp",
+        "second-opinion",
+        "project-context"
+      ],
+      "license": "MIT",
+      "codex": {
+        "shortDescription": "Consult ChatGPT web with bounded project context.",
+        "longDescription": "Creates project-scoped consultation requests, hands them to ChatGPT web through a safe MCP bridge, retrieves structured results, and publishes only when explicitly requested.",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "defaultPrompt": [
+          "Consult ChatGPT web about this decision using only the files I name.",
+          "Ask my ChatGPT Project to review this diff and report the result.",
+          "Continue the last ChatGPT consultation with this follow-up."
+        ]
+      }
     }
   ],
   "renames": {

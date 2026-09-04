@@ -1,0 +1,22 @@
+{
+  "name": "chatgpt-consult",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.0",
+  "bin": { "chatgpt-consult": "./bin/chatgpt-consult.ts" },
+  "scripts": {
+    "test": "bun test --timeout 30000",
+    "typecheck": "tsc --noEmit",
+    "check": "bun run typecheck && bun test --timeout 30000"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@types/bun": "1.4.0",
+    "typescript": "5.9.2"
+  }
+}
