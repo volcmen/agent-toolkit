@@ -5,100 +5,93 @@ paths:
   - "**/.{bash_profile,bashrc,profile,zprofile,zshrc}"
 ---
 
-# Code quality
+# Code and test quality
 
-Applies when writing or modifying code and structured configuration. Project
-instructions, formatter output, and established repository conventions win.
+Elaborates the source and test invariants in `CLAUDE.md` for code and
+structured configuration. Formatter output and established repository
+conventions win on style; instruction precedence is `CLAUDE.md`'s.
 
 ## Comments
 
-The default is no comment. A comment is a failure to express intent in code.
-When code seems to need narration, rename, extract, or restructure it instead.
+A comment is a failure to express intent in code: rename, extract, or
+restructure instead. Never add narration of what code does, rationale or
+rejected alternatives, section banners, docstrings that restate a signature,
+module or test docstrings about fixtures or provenance, `TODO`/`FIXME` markers,
+commented-out code, or attribution notes. Match the surrounding comment density
+and never raise it; delete comments the change makes false.
 
-Never add:
-
-- explanatory comments describing what the code does or how it works;
-- rationale for the change, the alternative rejected, or the bug being fixed;
-- section banners, step numbering, or reviewer narration;
-- docstrings that restate a signature already carried by names and types;
-- module or test docstrings that narrate context, fixtures, provenance,
-  history, or the ticket that motivated the code — test intent lives in the
-  test name; provenance lives in the commit body;
-- `TODO`, `FIXME`, deferred-work markers, or issue and ticket keys such as
-  `NTD-1234` anywhere in source;
-- commented-out code, dead code kept "for reference", or attribution notes.
-
-Rationale belongs in the commit body and the merge-request description, never
-inline. Deferred work belongs in the tracker, never in a marker.
-
-Narrow exceptions, permitted only when the language, toolchain, or published
-contract requires them:
-
-- license headers and generated-file markers;
-- public API documentation the project actually publishes;
-- tool directives such as `# noqa`, `# type: ignore`, or
-  `// eslint-disable-next-line`;
-- one line stating an externally imposed constraint that cannot be inferred
-  from the code at all — a protocol quirk, upstream defect, or hardware limit.
-  State the constraint, not the reasoning, and only when the file already
-  carries comments of that kind.
-
-Match the surrounding file's comment density and never raise it. Delete
-comments the change makes false; do not update a comment that should not exist.
+Permitted only when the language, toolchain, or a published contract demands
+them: license headers and generated-file markers; public API documentation the
+project actually publishes; tool directives such as `# noqa`, `# type: ignore`,
+`// eslint-disable-next-line`; one line stating an externally imposed constraint
+that cannot be inferred from the code (protocol quirk, upstream defect,
+hardware limit) — the constraint, not the reasoning, and only in a file that
+already carries comments of that kind.
 
 ## Naming and functions
 
-- Names state intent and are searchable and pronounceable. No abbreviations,
-  type prefixes, encodings, or generic terms such as `data`, `info`, `handle`,
-  `process`, `manager`, `helper`, or `util`.
-- A function does one thing at a single level of abstraction, and its name says
-  which thing. Extract when a block needs a heading to be understood.
-- Prefer zero to two parameters. Replace a boolean flag parameter with two
-  named functions. Avoid output parameters.
-- Separate commands from queries. A name that reads as a question must not
-  mutate state, and a function must not hide side effects from its caller.
+- Names state intent and are searchable and pronounceable: no abbreviations,
+  type prefixes, or generic terms such as `data`, `info`, `handle`, `process`,
+  `manager`, `helper`, `util`.
+- A function does one thing at one level of abstraction and its name says
+  which. Extract when a block needs a heading to be understood.
+- Zero to two parameters; two named functions instead of a boolean flag; no
+  output parameters. Separate commands from queries — a name that reads as a
+  question must not mutate, and side effects are never hidden from the caller.
 - Return neither `null`/`None` nor a sentinel where the type system offers an
   empty value, an option, or an explicit error.
 
 ## Structure and failure behavior
 
-- Keep the happy path easy to follow; use guard clauses when they reduce
-  nesting. Choose precise domain names instead of generic counters or helpers.
-- Keep functions and modules focused. Prefer explicit data flow and narrow
-  interfaces over hidden mutation, global state, or action at a distance.
-- Prefer small local duplication over a premature abstraction. Extract when the
-  repeated behavior represents a stable concept and the abstraction makes its
-  callers and contract clearer.
-- Validate untrusted input and external responses at system boundaries. Trust
-  internal invariants once established; do not add defensive branches for
-  impossible states.
-- Fail explicitly on broken invariants and preserve useful error context.
-  Defaults or fallbacks are acceptable when required by the contract, but must
-  not silently conceal corruption, outages, or programmer errors.
+- Guard clauses over nesting; explicit data flow and narrow interfaces over
+  hidden mutation, global state, or action at a distance.
+- Small local duplication beats a premature abstraction; extract when the
+  repeated behavior is a stable concept and the abstraction clarifies callers.
+- Validate untrusted input and external responses at system boundaries; trust
+  established internal invariants — no defensive branches for impossible states.
+- Fail explicitly on broken invariants and preserve error context. A default or
+  fallback is acceptable when the contract requires it and must never conceal
+  corruption, an outage, or a programmer error.
 
 ## Change discipline
 
-- Touch only what the requested change needs. Avoid drive-by formatting,
-  renames, dependency changes, or adjacent refactors.
-- Refactor inside the change's footprint when it directly reduces the risk or
-  complexity of the requested change. Propose broader cleanup separately.
-- Reuse repository dependencies and patterns before adding new ones. Add a
-  dependency only when its benefit justifies its maintenance and supply-chain
-  cost.
+- Touch only what the requested change needs: no drive-by formatting, renames,
+  dependency changes, or adjacent refactors. Refactor inside the footprint only
+  when it directly reduces the change's risk; propose broader cleanup separately.
+- Reuse repository dependencies and patterns before adding new ones; a new
+  dependency must justify its maintenance and supply-chain cost.
 
 ## Tests
 
-- Test observable behavior through stable public or integration boundaries
-  where practical; avoid assertions tied only to implementation details.
-- A new test file adopts the harness of its sibling tests — base class,
-  assert style, fixture mechanism, runner — verified by reading two neighbor
-  files before writing; never mix unittest-style classes with pytest fixtures
-  in a suite that uses one convention.
-- Prefer property-based tests for pure and contract-bearing functions per
-  `~/.claude/rules/testing.md`; hand-picked examples pin regressions only.
-- When behavior changes and a test harness exists, add or update tests in
-  proportion to the risk. Bug fixes should include a regression case that
-  demonstrates the prior failure when practical.
-- Keep tests deterministic and independent. Do not weaken, delete, or skip a
-  failing test merely to make a check green; fix the cause or report why the
-  expectation is wrong.
+- Test observable behavior through stable public or integration boundaries;
+  assert the persisted or emitted result — the stored row, the event, the final
+  state — not merely a return value or the absence of an exception.
+- A new test file copies the harness of the test files beside it: base class,
+  assert style, fixture mechanism, runner. Read two neighbours before writing
+  the first line; diverge only for a named repository reason; never mix unittest classes
+  with pytest fixtures inside one convention.
+- For any pure or contract-bearing function write a property-based test first;
+  hand-picked examples only pin known regressions or document a spec value.
+  Pick the strongest fitting property: round-trip `parse(render(x)) == x`;
+  invariant `valid(f(x))`; idempotence `f(f(x)) == f(x)`; oracle
+  `fast(x) == trusted(x)` with a genuinely independent reference; metamorphic
+  `f(perturb(x)) ~ f(x)`; commutativity for merges. Python: `hypothesis`
+  (`st.builds`, `RuleBasedStateMachine`); TypeScript: `fast-check`
+  (`@fast-check/vitest`, `zod-fast-check`). If the repo lacks the framework,
+  propose the dependency in its own MR and meanwhile write a generative test
+  with per-run entropy that prints the failing input.
+- Fresh data every run: no `derandomize`, no global seed, no `Faker.seed`, no
+  hardcoded RNG seed. Reproducibility comes from the framework — hypothesis
+  replays `.hypothesis/examples`, fast-check prints `{seed, path}`; commit the
+  shrunk counterexample as an explicit example, never the seed. Framework
+  default example count in the dev loop; 500+ for parsers, money, and
+  security-sensitive paths; never lower it to hide slowness.
+- Generate the right shape directly (`st.builds`, mapped arbitraries) rather
+  than `filter`/`assume` chains. Faker supplies surface values nested inside a
+  strategy that owns structure and edge cases; it never provides adversarial
+  values. Keep the nasty values reachable: empty, one element, duplicates,
+  NaN/±Infinity/-0.0, unicode, leap and DST dates, boundary integers.
+- One property per test; no tautologies that only exercise the generator or
+  the type. Every new test has a named mutation that kills it, run red → green
+  once. Never weaken, delete, or skip a failing test to go green — fix the
+  cause or report why the expectation is wrong.

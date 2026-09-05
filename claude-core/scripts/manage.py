@@ -17,18 +17,27 @@ BACKUP_ROOT = Path.home() / ".config" / "claude-core" / "backups"
 MANAGED_FILES = (
     "CLAUDE.md",
     "chrome-cdp.md",
-    "rules/workflow.md",
-    "rules/testing.md",
     "rules/waiting.md",
     "rules/code-style.md",
     "hooks/f17-ticket-keys.sh",
     "hooks/f17-comment-count.sh",
 )
 MANAGED_DIRECTORIES = (
+    "skills/engineering",
     "skills/mr-preflight",
     "skills/review-retro",
 )
 REQUIRED_DIRECTORY_FILES = {
+    "skills/engineering": (
+        "SKILL.md",
+        "references/shaping.md",
+        "references/minimalism.md",
+        "references/debugging.md",
+        "references/verification.md",
+        "references/second-opinion.md",
+        "references/writing.md",
+        "references/delivery.md",
+    ),
     "skills/mr-preflight": (
         "SKILL.md",
         "preflight-triage.sh",
@@ -208,6 +217,26 @@ def replace_with_link(source: Path, target: Path, backups: BackupStore) -> None:
     temporary.replace(target)
 
 
+def points_into_root(link: Path) -> bool:
+    target = Path(os.readlink(link))
+    if not target.is_absolute():
+        target = link.parent / target
+    normalized = Path(os.path.normpath(target))
+    return normalized == ROOT or ROOT in normalized.parents
+
+
+def prune_stale_links() -> list[Path]:
+    pruned: list[Path] = []
+    for directory in sorted({target.parent for _, target in managed_links()}):
+        if not directory.is_dir():
+            continue
+        for child in sorted(directory.iterdir()):
+            if child.is_symlink() and not child.exists() and points_into_root(child):
+                child.unlink()
+                pruned.append(child)
+    return pruned
+
+
 def install_links(backups: BackupStore) -> list[Path]:
     changed: list[Path] = []
     for source, target in managed_links():
@@ -254,6 +283,8 @@ def cmd_install(_: argparse.Namespace) -> int:
     if problems:
         raise Problem("package validation failed:\n" + "\n".join(f"- {p}" for p in problems))
     backups = BackupStore()
+    for path in prune_stale_links():
+        print(f"pruned {path}")
     changed = install_links(backups)
     for path in changed:
         print(f"linked {path}")

@@ -125,6 +125,47 @@ class Package(unittest.TestCase):
         self.assertIn('"unittest", "discover", "-s", str(ROOT / "tests")', text)
 
 
+class Consolidation(unittest.TestCase):
+    CORPUS = ("CLAUDE.md", "rules/code-style.md", "rules/waiting.md")
+    SENTINELS = ("never claim", "smallest coherent", "ticket key", "sibling", "session link", "claude-session")
+    PLUGIN_RULE = ROOT.parent / "wiki" / "plugins" / "obsidian-memory" / "rules" / "obsidian-vault.md"
+
+    def corpus_files(self) -> list[Path]:
+        files = [ROOT / rel for rel in self.CORPUS]
+        files.extend(sorted((ROOT / "skills" / "engineering").rglob("*.md")))
+        return files
+
+    def test_inventory_names_the_engineering_skill_and_drops_the_merged_rules(self) -> None:
+        self.assertIn("skills/engineering", manage.MANAGED_DIRECTORIES)
+        self.assertEqual(len(manage.REQUIRED_DIRECTORY_FILES["skills/engineering"]), 8)
+        for rel in ("rules/workflow.md", "rules/testing.md"):
+            self.assertNotIn(rel, manage.MANAGED_FILES)
+            self.assertFalse((ROOT / rel).exists(), rel)
+
+    def test_always_on_bytes_stay_within_budget(self) -> None:
+        core = (ROOT / "CLAUDE.md").stat().st_size
+        always_on = core + (ROOT / "rules" / "waiting.md").stat().st_size + self.PLUGIN_RULE.stat().st_size
+        with_code = always_on + (ROOT / "rules" / "code-style.md").stat().st_size
+        self.assertLessEqual(core, 3500)
+        self.assertLessEqual(always_on, 9500)
+        self.assertLessEqual(with_code, 16000)
+
+    def test_each_sentinel_rule_lives_in_at_most_one_file(self) -> None:
+        for sentinel in self.SENTINELS:
+            homes = [path.relative_to(ROOT).as_posix() for path in self.corpus_files() if sentinel in path.read_text(encoding="utf-8").lower()]
+            self.assertLessEqual(len(homes), 1, f"{sentinel!r} in {homes}")
+
+    def test_code_style_keeps_its_path_scope(self) -> None:
+        text = (ROOT / "rules" / "code-style.md").read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("---\npaths:\n"))
+        self.assertIn('"**/*.{asm,bash,c,cc,clj', text)
+
+    def test_engineering_skill_routes_every_reference(self) -> None:
+        skill = (ROOT / "skills" / "engineering" / "SKILL.md").read_text(encoding="utf-8")
+        for name in manage.REQUIRED_DIRECTORY_FILES["skills/engineering"][1:]:
+            self.assertIn(f"`{name}`", skill)
+
+
 class ReferenceLiterals(unittest.TestCase):
     def test_extracts_every_spelling_and_strips_trailing_punctuation(self) -> None:
         text = (
@@ -213,14 +254,14 @@ class Lifecycle(unittest.TestCase):
             backups = Path(tmp) / "backups"
             (home / "CLAUDE.md").write_text("previous personal file\n", encoding="utf-8")
             (home / "rules").mkdir()
-            (home / "rules" / "testing.md").symlink_to(Path(tmp) / "elsewhere.md")
+            (home / "rules" / "waiting.md").symlink_to(Path(tmp) / "elsewhere.md")
             with patched(root, home, backups):
                 code, output = quiet(manage.cmd_install, None)
             self.assertEqual(code, 0)
             self.assertIn("backed up 2 replaced path(s)", output)
             saved = list(backups.rglob("*"))
             regular = next(path for path in saved if path.name == "CLAUDE.md")
-            foreign = next(path for path in saved if path.name == "testing.md")
+            foreign = next(path for path in saved if path.name == "waiting.md")
             self.assertEqual(regular.read_text(encoding="utf-8"), "previous personal file\n")
             self.assertEqual(os.readlink(foreign), str(Path(tmp) / "elsewhere.md"))
             self.assertEqual(os.readlink(home / "CLAUDE.md"), str(root / "CLAUDE.md"))
@@ -266,6 +307,27 @@ class Lifecycle(unittest.TestCase):
             self.assertEqual(os.readlink(home / "rules" / "obsidian-vault.md"), str(Path(tmp) / "vault-rule.md"))
             self.assertEqual(os.readlink(home / "skills" / "pr-review"), str(Path(tmp) / "pr-review"))
             self.assertEqual((home / "settings.json").read_text(encoding="utf-8"), "{}\n")
+
+    def test_install_prunes_only_dangling_links_into_the_repository(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            (home / "rules").mkdir()
+            (home / "rules" / "workflow.md").symlink_to(root / "rules" / "workflow.md")
+            (home / "rules" / "relative.md").symlink_to(Path("..") / ".." / "repo" / "rules" / "gone.md")
+            (home / "rules" / "foreign.md").symlink_to(Path(tmp) / "elsewhere" / "gone.md")
+            (home / "rules" / "obsidian-vault.md").symlink_to(root / "README.md")
+            (root / "README.md").write_text("live\n", encoding="utf-8")
+            (home / "rules" / "local.md").write_text("regular\n", encoding="utf-8")
+            with patched(root, home, Path(tmp) / "backups"):
+                _, first = quiet(manage.cmd_install, None)
+                _, second = quiet(manage.cmd_install, None)
+            self.assertEqual(first.count("pruned "), 2)
+            self.assertNotIn("pruned ", second)
+            self.assertFalse((home / "rules" / "workflow.md").is_symlink())
+            self.assertFalse((home / "rules" / "relative.md").is_symlink())
+            self.assertTrue((home / "rules" / "foreign.md").is_symlink())
+            self.assertTrue((home / "rules" / "obsidian-vault.md").is_symlink())
+            self.assertEqual((home / "rules" / "local.md").read_text(encoding="utf-8"), "regular\n")
 
     def test_external_caller_reference_to_a_managed_path_must_resolve(self) -> None:
         with TemporaryDirectory() as tmp:
