@@ -18,12 +18,17 @@ Claude agent MD   Codex profile + agent TOML
       v            v
 Fable controller        GPT-5.6 Sol controller
 Sonnet/Opus specialists GPT-5.6 Sol/Terra specialists
+(task-analyst, Explore,
+ alan-wake, mr-review-fixer)
 ```
 
 `agents.json` and `prompts/` render Claude Markdown into `claude/agents/`.
 `manage.py install` validates those sources and copies them as regular files to
 `~/.claude/agents/`. `Explore.md` intentionally overrides the built-in Explore
-agent and pins Sonnet. The project is not a plugin and has no plugin lifecycle.
+agent and pins Sonnet. `mr-review-fixer` is Claude-only and carries project
+memory; `alan-wake` runs in plan permission mode with the mutating tools denied
+so connected read tools stay available. The project is not a plugin and has no
+plugin lifecycle.
 
 The Codex TOMLs, controller profile, and Codex policy remain source-controlled
 adapters for future use, but this project performs no Codex installation.
@@ -59,5 +64,5 @@ exact transcription, and explicit opt-out.
 ## Safety and recovery
 
 Read-only agents use Claude-native read-only boundaries. The installer preserves
-replaced files beneath `~/.config/shared-agents/backups/`. It owns only the four
+replaced files beneath `~/.config/shared-agents/backups/`. It owns only the five
 copied agent files and does not alter user-owned aliases or global policies.

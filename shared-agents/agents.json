@@ -12,24 +12,18 @@
     },
     {
       "id": "alan-wake",
-      "description": "Final-draft specialist for developer and workplace writing. Use for Slack, issues, PR/MR text, reviews, email, docs, release notes, status updates, decisions, requests, and handoffs. Preserves facts, matches destination formatting, and returns ready-to-use prose. Never implements or publishes.",
+      "description": "Use proactively for human-facing developer and workplace writing: compose, rewrite, shorten, polish, reply, summarize, title, structure, or format Slack/chat messages; Jira work items and comments; GitLab/GitHub MR/PR titles, descriptions, and reviews; Confluence and Notion pages; email; technical docs and articles; release notes; incidents; status updates; decisions; requests; and handoffs. Resolves verified links, uses destination-native formatting, and returns one compact ready-to-paste artifact. Never implements, sends, posts, or publishes.",
       "prompt": "prompts/alan-wake.md",
       "claude": {
         "model": "opus",
         "effort": "medium",
-        "maxTurns": 12,
-        "tools": [
-          "Read",
-          "Grep",
-          "Glob",
-          "ToolSearch",
-          "WebSearch",
-          "WebFetch"
-        ],
+        "maxTurns": 8,
+        "permissionMode": "plan",
         "disallowedTools": [
           "Write",
           "Edit",
-          "NotebookEdit"
+          "NotebookEdit",
+          "Agent"
         ]
       },
       "codex": {
@@ -92,6 +86,25 @@
         "model": "gpt-5.6-sol",
         "model_reasoning_effort": "high",
         "sandbox_mode": "read-only"
+      }
+    },
+    {
+      "id": "mr-review-fixer",
+      "description": "Independently reviews and improves a GitLab merge request before human review, after review feedback, or before re-requesting review: audits the complete diff for defects, regressions, missing cases, security, performance, tests, and MR hygiene; validates unresolved discussions; applies focused fixes; verifies the result; and prepares concise GitLab replies. Use on completed or reviewed MRs, not for initial feature development, approval, assignment, or merge.",
+      "prompt": "prompts/mr-review-fixer.md",
+      "claude": {
+        "model": "sonnet",
+        "effort": "high",
+        "maxTurns": 100,
+        "memory": "project",
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "Edit",
+          "Write",
+          "Bash"
+        ]
       }
     }
   ]

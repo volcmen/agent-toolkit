@@ -11,7 +11,8 @@ plugin marketplace.
 | Controller | Fable `controller` (medium effort) |
 | Task analyst | Sonnet `task-analyst` |
 | Repository explorer | Sonnet `Explore` |
-| Writing specialist | Opus `alan-wake` (medium effort) |
+| Writing specialist | Opus `alan-wake` (medium effort, plan permission mode) |
+| MR quality gate and fixer | Sonnet `mr-review-fixer` (high effort, project memory) |
 
 Claude Code loads the copied user agents from `~/.claude/agents/`. `Explore.md`
 intentionally overrides Claude Code's built-in Explore agent and pins it to
@@ -22,6 +23,13 @@ titles and descriptions, review comments, emails, docs, release notes, status
 updates, decisions, requests, and handoffs. The controller verifies the facts
 before delegation and validates the final draft afterward. Alan Wake remains
 read-only and never publishes. Ordinary conversation does not use it.
+
+The controller prompt covers only what the controller alone decides —
+delegation, the model matrix, the specialist roster, the prose route, and peer
+sessions; invariants live in `claude-core/CLAUDE.md` and procedure in its
+`engineering` skill. `mr-review-fixer` audits and repairs a GitLab merge
+request; it points at the `mr-preflight` failure-modes ledger and the
+`engineering` references rather than restating them.
 
 ## Source of truth
 

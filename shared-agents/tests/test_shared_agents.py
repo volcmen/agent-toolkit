@@ -123,12 +123,40 @@ class Rendering(unittest.TestCase):
         self.assertEqual(profile["model_reasoning_effort"], "max")
         self.assertIn("active shared-agents controller", profile["developer_instructions"])
 
-    def test_claude_agents_do_not_use_unsupported_permission_mode(self) -> None:
+    def test_alan_wake_renders_plan_mode_with_mutators_denied(self) -> None:
+        text = (ROOT / "claude" / "agents" / "alan-wake.md").read_text(encoding="utf-8")
+        frontmatter = text.split("---")[1]
+        self.assertIn("\nmaxTurns: 8\n", frontmatter)
+        self.assertIn("\npermissionMode: plan\n", frontmatter)
+        self.assertIn("\ndisallowedTools: Write, Edit, NotebookEdit, Agent\n", frontmatter)
+        self.assertNotIn("\ntools:", frontmatter)
         for path in (ROOT / "claude" / "agents").glob("*.md"):
-            self.assertNotIn("permissionMode:", path.read_text(encoding="utf-8"), str(path))
+            if path.name != "alan-wake.md":
+                self.assertNotIn("permissionMode:", path.read_text(encoding="utf-8"), str(path))
+
+    def test_renderer_emits_optional_scalars_for_the_mr_fixer(self) -> None:
+        text = (ROOT / "claude" / "agents" / "mr-review-fixer.md").read_text(encoding="utf-8")
+        frontmatter = text.split("---")[1]
+        self.assertIn("\nmaxTurns: 100\n", frontmatter)
+        self.assertIn("\nmemory: project\n", frontmatter)
+        self.assertIn("\ntools: Read, Grep, Glob, Edit, Write, Bash\n", frontmatter)
+        for forbidden in ("skills:", "color:", "superpowers"):
+            self.assertNotIn(forbidden, text)
+
+    def test_rendered_agents_stay_within_size_budgets(self) -> None:
+        budgets = {"controller.md": 2800, "mr-review-fixer.md": 6000, "alan-wake.md": 14500}
+        for name, limit in budgets.items():
+            self.assertLessEqual((ROOT / "claude" / "agents" / name).stat().st_size, limit, name)
+
+    def test_rendered_agents_do_not_restate_core_rules(self) -> None:
+        sentinels = ("never claim", "smallest coherent", "ticket key", "sibling", "session link", "superpowers")
+        for path in (ROOT / "claude" / "agents").glob("*.md"):
+            text = path.read_text(encoding="utf-8").lower()
+            for sentinel in sentinels:
+                self.assertNotIn(sentinel, text, f"{path.name}: {sentinel!r}")
 
     def test_claude_agents_render_to_standalone_source_directory(self) -> None:
-        expected = {"controller.md", "task-analyst.md", "Explore.md", "alan-wake.md"}
+        expected = {"controller.md", "task-analyst.md", "Explore.md", "alan-wake.md", "mr-review-fixer.md"}
         actual = {path.name for path in (ROOT / "claude" / "agents").glob("*.md")}
         self.assertEqual(actual, expected)
 
@@ -142,13 +170,18 @@ class Rendering(unittest.TestCase):
         for thoroughness in ("quick", "medium", "very thorough"):
             self.assertIn(thoroughness, text.lower())
 
-    def test_read_only_claude_agents_do_not_receive_shell_access(self) -> None:
+    def test_specialists_declare_their_tool_posture_explicitly(self) -> None:
         catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
-        for agent in catalog:
-            claude = agent.get("claude", {})
-            if not set(claude.get("disallowedTools", [])) & {"Write", "Edit", "NotebookEdit"}:
-                continue
-            self.assertNotIn("Bash", claude.get("tools", []), agent["id"])
+        by_id = {agent["id"]: agent["claude"] for agent in catalog}
+        for agent_id in ("repo-explorer", "task-analyst"):
+            self.assertNotIn("Bash", by_id[agent_id]["tools"], agent_id)
+            self.assertEqual(set(by_id[agent_id]["disallowedTools"]), {"Write", "Edit", "NotebookEdit"}, agent_id)
+        self.assertNotIn("tools", by_id["alan-wake"])
+        self.assertEqual(by_id["alan-wake"]["disallowedTools"], ["Write", "Edit", "NotebookEdit", "Agent"])
+        self.assertEqual(by_id["alan-wake"]["permissionMode"], "plan")
+        self.assertEqual(by_id["mr-review-fixer"]["tools"], ["Read", "Grep", "Glob", "Edit", "Write", "Bash"])
+        self.assertEqual(by_id["mr-review-fixer"]["memory"], "project")
+        self.assertNotIn("skills", by_id["mr-review-fixer"])
 
 
 class ClaudeRoutingSurfaces(unittest.TestCase):
@@ -164,7 +197,15 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
         self.assertIn("`Explore` on Sonnet", text)
         self.assertIn("`task-analyst` on Sonnet", text)
         self.assertIn("`alan-wake` on Opus", text)
+        self.assertIn("`mr-review-fixer` on Sonnet", text)
         self.assertNotIn("shared-agents:", text)
+
+    def test_controller_points_at_core_and_engineering_instead_of_restating_them(self) -> None:
+        text = " ".join((ROOT / "prompts" / "controller.md").read_text(encoding="utf-8").split())
+        self.assertIn("`CLAUDE.md` holds the invariants", text)
+        self.assertIn("`engineering` skill", text)
+        for restated in ("## Operating principles", "## Shape the work", "## Execute and verify"):
+            self.assertNotIn(restated, text)
 
     def test_every_surface_requires_an_explicit_model_per_agent_call(self) -> None:
         for relative_path in self.SURFACES:
@@ -277,6 +318,7 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
             "alan-wake": "opus",
             "repo-explorer": "sonnet",
             "task-analyst": "sonnet",
+            "mr-review-fixer": "sonnet",
         }
         for agent in catalog:
             self.assertEqual(agent["claude"]["model"], expected[agent["id"]], agent["id"])
@@ -344,21 +386,21 @@ class StandaloneCopies(unittest.TestCase):
                             [f"{settings_path}: must contain a JSON object"],
                         )
 
-    def test_install_backs_up_a_conflicting_target(self) -> None:
+    def test_install_backs_up_a_hand_maintained_agent_before_replacing_it(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = root / "source"
             target = root / "live"
             source.mkdir()
             target.mkdir()
-            (source / "Explore.md").write_text("new\n", encoding="utf-8")
-            (target / "Explore.md").write_text("personal\n", encoding="utf-8")
+            (source / "mr-review-fixer.md").write_text("rendered\n", encoding="utf-8")
+            (target / "mr-review-fixer.md").write_text("hand-maintained\n", encoding="utf-8")
             backups = manage.BackupStore(root / "backups" / "install")
             with mock.patch.multiple(manage, CLAUDE_SOURCE=source, CLAUDE_TARGET=target):
                 manage.install_claude_agents(backups)
-            self.assertEqual((target / "Explore.md").read_text(), "new\n")
+            self.assertEqual((target / "mr-review-fixer.md").read_text(), "rendered\n")
             self.assertEqual(len(backups.created), 1)
-            self.assertEqual(backups.created[0].read_text(), "personal\n")
+            self.assertEqual(backups.created[0].read_text(), "hand-maintained\n")
 
     def test_uninstall_preserves_a_user_modified_copy(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -434,11 +476,23 @@ class Package(unittest.TestCase):
                 "never dispatch it as a worker."
             ),
             "alan-wake": (
-                "Final-draft specialist for developer and workplace writing. Use for "
-                "Slack, issues, PR/MR text, reviews, email, docs, release notes, status "
-                "updates, decisions, requests, and handoffs. Preserves facts, matches "
-                "destination formatting, and returns ready-to-use prose. Never "
-                "implements or publishes."
+                "Use proactively for human-facing developer and workplace writing: compose, "
+                "rewrite, shorten, polish, reply, summarize, title, structure, or format "
+                "Slack/chat messages; Jira work items and comments; GitLab/GitHub MR/PR "
+                "titles, descriptions, and reviews; Confluence and Notion pages; email; "
+                "technical docs and articles; release notes; incidents; status updates; "
+                "decisions; requests; and handoffs. Resolves verified links, uses "
+                "destination-native formatting, and returns one compact ready-to-paste "
+                "artifact. Never implements, sends, posts, or publishes."
+            ),
+            "mr-review-fixer": (
+                "Independently reviews and improves a GitLab merge request before human "
+                "review, after review feedback, or before re-requesting review: audits the "
+                "complete diff for defects, regressions, missing cases, security, "
+                "performance, tests, and MR hygiene; validates unresolved discussions; "
+                "applies focused fixes; verifies the result; and prepares concise GitLab "
+                "replies. Use on completed or reviewed MRs, not for initial feature "
+                "development, approval, assignment, or merge."
             ),
             "repo-explorer": (
                 "Read-only repository explorer for one bounded question: file and "
@@ -466,6 +520,9 @@ class Package(unittest.TestCase):
         self.assertNotIn("a bare name is a defect", normalized)
         self.assertNotIn("unfinished text until it is clickable", normalized)
         self.assertNotRegex(normalized, r"default to one to \d+")
+        self.assertNotRegex(normalized, r"at most \d+ (words|lines|blocks|bullets|headings)")
+        self.assertNotIn("Default maximum", normalized)
+        self.assertIn("Length guidance", normalized)
 
     def test_alan_wake_link_evals_cover_resource_contract(self) -> None:
         payload = json.loads(
@@ -514,6 +571,23 @@ class Package(unittest.TestCase):
         self.assertNotIn("ready-to-use artifact", analyst)
         self.assertNotIn("execution brief", explorer)
 
+    def test_mr_review_fixer_has_its_own_terminal_contract(self) -> None:
+        controller = " ".join((ROOT / "prompts" / "controller.md").read_text(encoding="utf-8").split())
+        fixer = (ROOT / "prompts" / "mr-review-fixer.md").read_text(encoding="utf-8")
+        self.assertIn("`mr-review-fixer` on Sonnet: a completed or reviewed GitLab MR → a quality-gate report", controller)
+        self.assertIn("## MR quality gate", fixer)
+        self.assertIn("**Status:** READY | NOT READY | NEEDS DECISION", fixer)
+        for restated in ("smallest change", "weaken assertions", "confirm the root cause", "narrowest tests first"):
+            self.assertNotIn(restated, fixer, restated)
+        self.assertIn("~/.claude/skills/engineering/references/debugging.md", fixer)
+        self.assertIn("~/.claude/skills/engineering/references/verification.md", fixer)
+
+    def test_controller_brief_contract_and_peer_triggers_survive_compression(self) -> None:
+        text = " ".join((ROOT / "prompts" / "controller.md").read_text(encoding="utf-8").split())
+        self.assertIn("one objective, the relevant paths and constraints, ownership, the expected output, and its verification", text)
+        self.assertIn("material decision, breaking change, landed change, or requested status", text)
+        self.assertIn("route them through the user", text)
+
     def test_alan_wake_consults_official_destination_references(self) -> None:
         prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
         sources = (ROOT / "docs" / "sources.md").read_text(encoding="utf-8")
@@ -530,6 +604,11 @@ class Package(unittest.TestCase):
             "https://support.atlassian.com/confluence-cloud/docs/insert-links-and-anchors/",
             "https://docs.gitlab.com/user/markdown/",
             "https://www.jenkins.io/doc/book/using/remote-access-api/",
+            "https://docs.slack.dev/block-kit/",
+            "https://support.atlassian.com/jira-software-cloud/docs/markdown-and-keyboard-shortcuts/",
+            "https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/",
+            "https://developers.notion.com/guides/data-apis/enhanced-markdown",
+            "https://docs.gitlab.com/user/project/description_templates/",
         )
         self.assertIn("consult the applicable official reference", normalized)
         self.assertIn("before finalizing", normalized)

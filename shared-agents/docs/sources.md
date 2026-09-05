@@ -58,9 +58,15 @@ Alan Wake consults the applicable official source before finalizing content for
 these destinations:
 
 - [Slack: formatting message text](https://docs.slack.dev/messaging/formatting-message-text/)
-  — raw message `mrkdwn`, links, escaping, lists, quotes, and code.
+  and [Block Kit](https://docs.slack.dev/block-kit/)
+  — raw message `mrkdwn`, links, escaping, lists, quotes, code, and block
+  payloads with their `text` fallback.
+- [Jira: Markdown and keyboard shortcuts](https://support.atlassian.com/jira-software-cloud/docs/markdown-and-keyboard-shortcuts/)
+  and [Atlassian Document Format](https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/)
+  — editor Markdown for issue text and the ADF representation API tools require.
 - [Notion: block reference](https://developers.notion.com/reference/block),
   [working with Markdown content](https://developers.notion.com/guides/data-apis/working-with-markdown-content),
+  [enhanced Markdown](https://developers.notion.com/guides/data-apis/enhanced-markdown),
   [rich text](https://developers.notion.com/reference/rich-text),
   and [what is a block?](https://www.notion.com/help/what-is-a-block)
   — native block types, rich-text links, Notion-flavored Markdown, and editor
@@ -72,7 +78,9 @@ these destinations:
   — current editor formatting, inline and Smart Links, Markdown shortcuts, and
   the legacy-editor boundary.
 - [GitLab Flavored Markdown](https://docs.gitlab.com/user/markdown/)
-  — supported syntax, native references, and title limitations.
+  and [description templates](https://docs.gitlab.com/user/project/description_templates/)
+  — supported syntax, native references, title limitations, and the issue and
+  merge-request templates whose sections a draft must preserve.
 - [Jenkins: Remote Access API](https://www.jenkins.io/doc/book/using/remote-access-api/)
   — job and build resources, including instance-specific nested paths.
 

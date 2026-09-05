@@ -79,8 +79,9 @@ def render_claude(agent: dict[str, Any], prompt: str) -> str:
         f"model: {config['model']}",
         f"effort: {config['effort']}",
     ]
-    if config.get("maxTurns") is not None:
-        frontmatter.append(f"maxTurns: {config['maxTurns']}")
+    for key in ("maxTurns", "permissionMode", "memory"):
+        if config.get(key) is not None:
+            frontmatter.append(f"{key}: {config[key]}")
     for key in ("tools", "disallowedTools"):
         if config.get(key):
             frontmatter.append(f"{key}: {', '.join(config[key])}")
