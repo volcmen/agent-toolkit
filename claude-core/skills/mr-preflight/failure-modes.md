@@ -9,7 +9,7 @@ Compact, gate-facing. `preflight-triage.sh` decides which rows are TRIGGERED fro
 | F4 | blast-radius-unmeasured | any src change | count the affected population or name its bound; "unknown" on a blocking/visible change = FAIL |
 | F5 | sibling-path-unswept | any src change | paste `rg` of the fixed pattern's structural shape; table every hit fixed / justified |
 | F6 | boundary-uncoerced | added `sorted(`/`min(`/`max(`/`.sort(` | iterable may mix int/float/str from JSON/API? needs `key=str`/canonical key or FAIL |
-| F7 | non-discriminating-test | new/changed test file | per new test: mutate the target, run (paste the red assertion line), revert, run (green). No runner = FAIL, never N-A |
+| F7 | non-discriminating-test | new/changed test file | per changed test: does it assert the production result of the changed behaviour (not a mock of the subject)? Mutation red→green only through the RUNNER command (`OK`/`OVERRIDE`), up to 3 groups, one disposable worktree, never an environment bootstrap; groups not mutated = RUN-REQUIRED with the exact command (NOT READY until pasted) |
 | F8 | partial-function-misuse | added `parseInt`/`Number(`/`JSON.parse`/`int(`/`float(` | justify prefix-parse (`"12abc"`), undefined/NaN, `"1e5"` per call |
 | F9 | scope-rider | any src change | hunk not required by the ticket → split or name it in the description |
 | F10 | remediation-path-removed | added `disabled`/`readOnly`/`locked`, removed button/link | grep every flow routing users TO the affordance; each keeps a surviving path |
@@ -38,7 +38,7 @@ Compact, gate-facing. `preflight-triage.sh` decides which rows are TRIGGERED fro
 
 | id | class | when | check |
 |----|-------|------|-------|
-| F3 | fix-composition-hazard | before pushing a batch of MRs | `glab mr list --author=@me`, intersect changed files; state and test each composed behavior |
+| F3 | fix-composition-hazard | before pushing a batch of MRs | `PREFLIGHT_BATCH=1` triage (or `glab mr list --author=@me`) to intersect changed files across open MRs; state and test each composed behavior |
 | F26 | merge-without-required-approval | before merging | `glab api …/approvals`; every listed reviewer approved or waived in thread; component owner's row must be approved |
 | F28 | inherited-diagnosis-unverified | before posting a root-cause claim externally | `rg` every named symbol (zero hits = fiction); reproduce boundary behavior against the real boundary, paste transcript |
 | F29 | acceptance-item-unmet-at-closure | before `Closes <KEY>` or moving to Ready for Validation | fetch the newest acceptance list; table each item delivered (code + test) / not-delivered / withdrawn (quote) |

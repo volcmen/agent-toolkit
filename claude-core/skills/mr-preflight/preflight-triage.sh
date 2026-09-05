@@ -13,27 +13,93 @@ out_dir="$(git rev-parse --git-path mr-preflight)"
 mkdir -p "$out_dir"
 report="$out_dir/triage.txt"
 always_on=""
-ident=$(printf '%s|%s|%s|%s' \
+repo_abs=$(pwd -P)
+test_re='(^|/)(tests?|__tests__|spec)/|(_test|\.test|\.spec|_spec)\.[a-z]+|(^|/)test_[^/]+\.py'
+test_files=$(printf '%s\n' "$files" | grep -E "$test_re")
+nearest_up() { local d="$1" name; shift; while :; do for name in "$@"; do [ -e "$d/$name" ] && { echo "$d/$name"; return 0; }; done; [ "$d" = "." ] && return 1; d=$(dirname "$d"); done; }
+py_cfg_dir() { local d="$1"; while :; do
+    { [ -f "$d/pytest.ini" ] || { [ -f "$d/tox.ini" ] && grep -q '^\[pytest\]' "$d/tox.ini"; } || { [ -f "$d/setup.cfg" ] && grep -q '^\[tool:pytest' "$d/setup.cfg"; } || { [ -f "$d/pyproject.toml" ] && grep -q '^\[tool\.pytest' "$d/pyproject.toml"; }; } && { echo "$d"; return 0; }
+    [ "$d" = "." ] && return 1; d=$(dirname "$d"); done; }
+relpath() { if [ "$2" = "." ]; then printf '%s\n' "$1"; else printf '%s\n' "${1#$2/}"; fi; }
+classify_deps() { printf '%s' "$1" | grep -qE 'No module named|ModuleNotFoundError|ImportError|Cannot find module|ERR_MODULE_NOT_FOUND|could not determine executable|not found|command not found|ENOENT'; }
+runner_line() { printf '%s|%s|%s|%s\n' "$1" "$2" "$3" "$4" | tee -a "$out_dir/runner.txt"; }
+runner_section() {
+  : > "$out_dir/runner.txt"
+  echo "== RUNNER  class|test file|command|note   (recomputed on every invocation; run the command from the repo or worktree root: cd is relative, executables are absolute paths into this checkout; OK = dry collection succeeded; UNVERIFIED = detected, not dry-run; MISSING-DEPS/UNKNOWN = the gate marks F7 RUN-REQUIRED and never installs anything)"
+  local runner_count=0 tf cfg venv base rel py cmd out rc pkg pd bin listcmd
+  if [ -z "$test_files" ]; then echo "none — no test files in the diff"; echo; return; fi
+  while IFS= read -r tf; do
+    [ -z "$tf" ] && continue
+    if [ -n "${PREFLIGHT_TEST_CMD:-}" ]; then
+      case "$PREFLIGHT_TEST_CMD" in *'{file}'*) cmd=${PREFLIGHT_TEST_CMD//\{file\}/$tf};; *) cmd="$PREFLIGHT_TEST_CMD $tf";; esac
+      runner_line OVERRIDE "$tf" "$cmd" "caller-supplied command; authoritative, not dry-run"; continue
+    fi
+    runner_count=$((runner_count+1))
+    case "$tf" in
+      *.py)
+        cfg=$(py_cfg_dir "$(dirname "$tf")") || cfg=""
+        venv=$(nearest_up "$(dirname "$tf")" .venv/bin/python venv/bin/python) || venv=""
+        base=${cfg:-.}; rel=$(relpath "$tf" "$base")
+        if [ -n "$venv" ]; then py="$repo_abs/${venv#./}"; else py=$(command -v python3); fi
+        cmd="cd $base && $py -m pytest $rel -q -x"
+        if [ -z "$cfg" ] && [ -z "$venv" ]; then runner_line UNKNOWN "$tf" "$cmd" "no pytest config or venv found above the file"; continue; fi
+        [ "$runner_count" -gt 3 ] && { runner_line UNVERIFIED "$tf" "$cmd" "detected${cfg:+ config in $cfg}${venv:+, interpreter $venv}; dry collection capped at 3 files"; continue; }
+        out=$( (cd "$base" && perl -e 'alarm 60; exec @ARGV' "$py" -m pytest --collect-only -q -- "$rel") 2>&1 ); rc=$?
+        if [ "$rc" = 0 ]; then runner_line OK "$tf" "$cmd" "collected $(printf '%s\n' "$out" | grep -c '::')${cfg:+; config in $cfg}${venv:+; interpreter $venv}"
+        elif classify_deps "$out"; then runner_line MISSING-DEPS "$tf" "$cmd" "$(printf '%s\n' "$out" | grep -E 'No module named|ModuleNotFoundError|ImportError' | head -n 1 | cut -c1-120)"
+        else runner_line UNKNOWN "$tf" "$cmd" "dry collection failed: $(printf '%s\n' "$out" | grep . | head -n 1 | cut -c1-120)"; fi ;;
+      *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs)
+        pkg=$(nearest_up "$(dirname "$tf")" package.json) || pkg=""
+        if [ -z "$pkg" ]; then runner_line UNKNOWN "$tf" "npx vitest run $tf" "no package.json found above the file"; continue; fi
+        pd=$(dirname "$pkg"); rel=$(relpath "$tf" "$pd"); bin="$repo_abs/${pd#./}/node_modules/.bin"; listcmd=""
+        if ls "$pd"/vitest.config.* >/dev/null 2>&1 || grep -q '"vitest"' "$pkg"; then cmd="cd $pd && $bin/vitest run $rel"; listcmd="$bin/vitest list $rel"
+        elif ls "$pd"/jest.config.* >/dev/null 2>&1 || grep -q '"jest"' "$pkg"; then cmd="cd $pd && $bin/jest $rel"; listcmd="$bin/jest --listTests $rel"
+        else cmd="cd $pd && npm test -- $rel"; fi
+        [ -d "$pd/node_modules" ] || { runner_line MISSING-DEPS "$tf" "$cmd" "no node_modules in $pd"; continue; }
+        [ -z "$listcmd" ] && { runner_line UNVERIFIED "$tf" "$cmd" "npm test has no list operation; node_modules present in $pd"; continue; }
+        [ -x "${listcmd%% *}" ] || { runner_line MISSING-DEPS "$tf" "$cmd" "${listcmd%% *} is not executable"; continue; }
+        [ "$runner_count" -gt 3 ] && { runner_line UNVERIFIED "$tf" "$cmd" "detected; dry listing capped at 3 files"; continue; }
+        out=$( (cd "$pd" && perl -e 'alarm 60; exec @ARGV' $listcmd) 2>&1 ); rc=$?
+        if [ "$rc" = 0 ] && printf '%s' "$out" | grep -q .; then runner_line OK "$tf" "$cmd" "listed $(printf '%s\n' "$out" | grep -c .) entr(y|ies) via ${listcmd#$bin/}; in a worktree first: ln -s $repo_abs/${pd#./}/node_modules <worktree>/$pd/node_modules"
+        elif classify_deps "$out"; then runner_line MISSING-DEPS "$tf" "$cmd" "$(printf '%s\n' "$out" | grep . | head -n 1 | cut -c1-120)"
+        else runner_line UNKNOWN "$tf" "$cmd" "dry listing failed: $(printf '%s\n' "$out" | grep . | head -n 1 | cut -c1-120)"; fi ;;
+      *) runner_line UNKNOWN "$tf" "—" "no runner heuristic for this extension" ;;
+    esac
+  done <<< "$test_files"
+  echo
+}
+branch=$(git branch --show-current)
+mr_json=${PREFLIGHT_MR_JSON-$(perl -e 'alarm 10; exec @ARGV' glab mr view --output json 2>/dev/null || true)}
+mr_title=$(printf '%s' "$mr_json" | jq -r '.title // empty' 2>/dev/null)
+mr_desc=$(printf '%s' "$mr_json" | jq -r '.description // empty' 2>/dev/null | perl -0pe 's/<!--.*?-->//gs')
+tools_present="ruff=$(command -v ruff >/dev/null && echo 1)|npx=$(command -v npx >/dev/null && echo 1)"
+ident=$(printf '%s|%s|%s|%s|%s|%s' \
   "$(git rev-parse "$target")" "$(git rev-parse HEAD)" \
   "$(cat "$0" "$HOME/.claude/skills/mr-preflight/harness-delta.py" 2>/dev/null | shasum | cut -d' ' -f1)" \
-  "$(git ls-tree -r "$target" --name-only -- .claude/rules CLAUDE.md 2>/dev/null | xargs -I{} git rev-parse "$target:{}" 2>/dev/null | shasum | cut -d' ' -f1)")
+  "$(git ls-tree -r "$target" --name-only -- .claude/rules CLAUDE.md 2>/dev/null | xargs -I{} git rev-parse "$target:{}" 2>/dev/null | shasum | cut -d' ' -f1)" \
+  "$(printf '%s\n%s' "$mr_title" "$mr_desc" | shasum | cut -d' ' -f1)" "$tools_present")
 cache="$out_dir/cache-$(printf '%s' "$ident" | shasum | cut -c1-16).txt"
 if [ -z "${PREFLIGHT_INNER:-}" ]; then
+  export PREFLIGHT_MR_JSON="$mr_json"
+  if [ -n "${PREFLIGHT_BATCH:-}" ]; then
+    PREFLIGHT_INNER=1 bash "$0" "$repo" "$target" | tee "$report"; exit "${PIPESTATUS[0]}"
+  fi
   if [ -s "$cache" ] && [ -z "${PREFLIGHT_NO_CACHE:-}" ]; then
-    cat "$cache"; echo "== CACHED (identical base/head/script/rules; PREFLIGHT_NO_CACHE=1 to force)"; exit 0
+    runner_section > "$out_dir/runner-fresh.txt"
+    awk -v f="$out_dir/runner-fresh.txt" '/^== RUNNER/{while ((getline l < f) > 0) print l; skip=1; next} skip && /^== ROWS/{skip=0} !skip' "$cache" | tee "$report"
+    echo "== CACHED (identical base/head/script/rules/MR text/tools; RUNNER recomputed; PREFLIGHT_NO_CACHE=1 to force)"; exit 0
   fi
   PREFLIGHT_INNER=1 bash "$0" "$repo" "$target" | tee "$report" > "$cache"
   rc="${PIPESTATUS[0]}"; cat "$cache"
   [ "$rc" = 0 ] || rm -f "$cache"
   exit "$rc"
 fi
-rm -f "$out_dir"/F*.txt
+rm -f "$out_dir"/F*.txt "$out_dir"/always-on.ctx.txt "$out_dir"/runner.txt
 
 diff0=$(git diff "$range" -U0 --no-color)
 diff2=$(git diff "$range" -U2 --no-color)
-test_re='(^|/)(tests?|__tests__|spec)/|(_test|\.test|\.spec|_spec)\.[a-z]+|(^|/)test_[^/]+\.py'
+diff4=$(git diff "$range" -U4 --no-color)
 generated_re='\.(lock|snap|min\.js|min\.css|svg|png|jpg|gif|ico|woff2?|map|pb\.go|_pb2\.py)$|package-lock\.json|yarn\.lock|uv\.lock|poetry\.lock|(^|/)dist/|(^|/)build/|(^|/)vendor/|__snapshots__/'
-test_files=$(printf '%s\n' "$files" | grep -E "$test_re")
 src_files=$(printf '%s\n' "$files" | grep -vE "$test_re" | grep -vE "$generated_re" | grep -vE '\.(md|rst|txt|json|ya?ml|toml|cfg|ini)$')
 new_test_files=$(git diff "$range" --name-status -M | awk '$1 ~ /^A/{print $2}' | grep -E "$test_re")
 doc_files=$(printf '%s\n' "$files" | grep -E '\.(md|rst)$|Jenkinsfile|\.groovy$|\.sh$')
@@ -43,13 +109,61 @@ ts_src=$(printf '%s\n' "$src_files" | grep -E '\.(ts|tsx|js|jsx)$')
 rule_files_changed=$(printf '%s\n' "$files" | grep -E '^CLAUDE\.md$|^\.claude/rules/')
 
 annot() { printf '%s\n' "$2" | awk -v sign="$1" '
-  /^\+\+\+ b\// { f=substr($0,7); next }
+  /^diff --git / { f=$0; sub(/^diff --git a\/.* b\//,"",f); next }
   /^@@/ { match($0,/^@@ -[0-9]+(,[0-9]+)? \+[0-9]+/); h=substr($0,RSTART,RLENGTH)
           split(h,a," "); o=a[2]; n=a[3]; sub(/^-/,"",o); sub(/^\+/,"",n); sub(/,.*/,"",o); sub(/,.*/,"",n); old=o+0; new=n+0; next }
   /^\+\+\+|^---|^diff |^index |^similarity|^rename|^new file|^deleted file/ { next }
   /^\+/ { if (sign=="+" || sign=="ctx") print f ":+" new " :: " substr($0,2); new++; next }
   /^-/  { if (sign=="-") print f ":-" old " :: " substr($0,2); old++; next }
   /^ /  { if (sign=="ctx") print f ":~" new " :: " substr($0,2); old++; new++; next }'; }
+annot_all() { printf '%s\n' "$1" | awk '
+  /^diff --git / { f=$0; sub(/^diff --git a\/.* b\//,"",f); next }
+  /^@@/ { hunk++; match($0,/^@@ -[0-9]+(,[0-9]+)? \+[0-9]+/); h=substr($0,RSTART,RLENGTH)
+          split(h,a," "); o=a[2]; n=a[3]; sub(/^-/,"",o); sub(/^\+/,"",n); sub(/,.*/,"",o); sub(/,.*/,"",n); old=o+0; new=n+0; next }
+  /^\+\+\+|^---|^index |^similarity|^rename|^new file|^deleted file|^Binary/ { next }
+  /^\+/ { printf "%s\t+\t%d\t%d\t%d\t%s\n", f, 0, new, hunk, substr($0,2); new++; next }
+  /^-/  { printf "%s\t-\t%d\t%d\t%d\t%s\n", f, old, 0, hunk, substr($0,2); old++; next }
+  /^ /  { printf "%s\t~\t%d\t%d\t%d\t%s\n", f, old, new, hunk, substr($0,2); old++; new++; next }'; }
+all4=$(annot_all "$diff4")
+text_of() { awk -F'\t' '{ t=$6; for (k=7; k<=NF; k++) t=t "\t" $k; print $1 "\t" $2 "\t" $3 "\t" $4 "\t" $5 "\t" t }'; }
+emitted=0
+file_excerpt() { local file="$1" cap="$2" out="$3" total
+  total=$(printf '%s\n' "$all4" | awk -F'\t' -v f="$file" '$1==f' | grep -c .)
+  if [ "$total" = 0 ]; then emitted=0; echo "-- $file (no diff lines; path or rename only)" >> "$out"; return 0; fi
+  emitted=$(( total < cap ? total : cap ))
+  echo "-- $file (diff, $emitted of $total lines$([ "$emitted" -lt "$total" ] && echo '; TRUNCATED'))" >> "$out"
+  printf '%s\n' "$all4" | text_of | awk -F'\t' -v f="$file" -v cap="$cap" '$1==f && n<cap { n++; print " " $2 " " ($2=="-"?$3:$4) " " $6 }' >> "$out"
+  [ "$emitted" -lt "$total" ] && return 1 || return 0; }
+file_set_excerpts() { local out="$1" per_file="$2" total_cap="$3" shown=0 omitted=0 truncated=0 f cap
+  shift 3
+  for f in "$@"; do
+    cap=$(( total_cap - shown )); [ "$cap" -gt "$per_file" ] && cap=$per_file
+    if [ "$cap" -le 0 ]; then omitted=$((omitted+1)); continue; fi
+    file_excerpt "$f" "$cap" "$out" || truncated=$((truncated+1))
+    shown=$((shown + emitted))
+  done
+  if [ "$omitted" -gt 0 ] || [ "$truncated" -gt 0 ]; then
+    echo "-- TRUNCATED: $omitted file(s) not shown, $truncated file(s) cut (≤$per_file lines each, ≤$total_cap total) — evidence incomplete; read git diff $range -- <file> for each before any PASS, or mark the row RUN-REQUIRED / FAIL" >> "$out"; fi; }
+ctx_spill() { local id="$1" hits="$2" out="$out_dir/$id.ctx.txt" n=0 total; : > "$out"
+  total=$(printf '%s\n' "$hits" | grep -c .)
+  if ! printf '%s\n' "$hits" | grep -qE '^[^:]+:[+~-][0-9]+ :: '; then
+    local paths; paths=$(printf '%s\n' "$hits" | grep . | sed 's/ :: .*//; s/:$//' | awk '!seen[$0]++')
+    if printf '%s\n' "$paths" | grep -qxF -f <(printf '%s\n' "$files"); then
+      file_set_excerpts "$out" 60 400 $(printf '%s\n' "$paths" | grep -xF -f <(printf '%s\n' "$files"))
+      printf '%s\n' "$hits" | grep -v -F -f <(printf '%s\n' "$paths" | grep -xF -f <(printf '%s\n' "$files")) | sed 's/^/-- /' >> "$out"
+    else printf '%s\n' "$hits" | sed 's/^/-- /' >> "$out"; fi
+    return; fi
+  while IFS= read -r hit; do
+    [ -z "$hit" ] && continue
+    n=$((n+1)); [ "$n" -gt 6 ] && { echo "-- +$((total-6)) more hits in $out_dir/$id.txt" >> "$out"; break; }
+    if printf '%s' "$hit" | grep -qE '^[^:]+:[+~-][0-9]+ :: '; then
+      local file rest kind num; file=${hit%%:*}; rest=${hit#*:}; kind=${rest:0:1}; num=$(printf '%s' "$rest" | grep -oE '^[+~-][0-9]+' | tr -d '+~-')
+      echo "-- $file:$kind$num" >> "$out"
+      printf '%s\n' "$all4" | text_of | awk -F'\t' -v f="$file" -v k="$kind" -v n="$num" '
+        $1==f { i++; line[i]=$2 " " ($2=="-"?$3:$4) " " $6; hunk[i]=$5; if (!hit && $2==k && ($2=="-"?$3:$4)==n) hit=i }
+        END { if (!hit) exit; s=hit-4; if (s<1) s=1; e=hit+4; if (e>i) e=i; for (j=s;j<=e;j++) if (hunk[j]==hunk[hit]) print (j==hit?">":" ") line[j] }' >> "$out"
+    else echo "-- $hit" >> "$out"; fi
+  done <<< "$hits"; }
 added_lines=$(annot '+' "$diff0")
 removed_lines=$(annot '-' "$diff0")
 ctx_lines=$(annot 'ctx' "$diff2")
@@ -86,13 +200,13 @@ undetected=()
 ctx_only=()
 row() { local id="$1" hits="$2" why="$3" kind="${4:-heuristic}"
   if printf '%s\n' "$hits" | grep -qE '^[^:]*:~[0-9]+ :: ' && ! printf '%s\n' "$hits" | grep -qE '^[^:]*:[+-][0-9]+ :: '; then
-    [ -n "$hits" ] && { ctx_only+=("$id"); printf '%s\n' "$hits" > "$out_dir/$id.txt"; }
+    [ -n "$hits" ] && { ctx_only+=("$id"); printf '%s\n' "$hits" > "$out_dir/$id.txt"; ctx_spill "$id" "$hits"; }
     hits=""
   fi
   if [ -n "$hits" ]; then
     triggered+=("$id")
     local n sev loc; n=$(printf '%s\n' "$hits" | grep -c .); sev=$(sev_of "$id")
-    printf '%s\n' "$hits" > "$out_dir/$id.txt"
+    printf '%s\n' "$hits" > "$out_dir/$id.txt"; ctx_spill "$id" "$hits"
     if printf '%s\n' "$hits" | grep -q ' :: '; then loc=$(printf '%s\n' "$hits" | locs)
     else loc=$(printf '%s\n' "$hits" | grep . | head -n 6 | tr '\n' ';' | sed 's/;$//'); fi
     echo "$id|$sev|$n|$(printf '%s' "$loc" | short)|$why"
@@ -101,10 +215,6 @@ row() { local id="$1" hits="$2" why="$3" kind="${4:-heuristic}"
 
 echo "== MR $range  base=$(git rev-parse --short=10 "$target") head=$(git rev-parse --short=10 HEAD)  spill=$out_dir"
 git diff "$range" --stat | tail -n 1
-branch=$(git branch --show-current)
-mr_json=$(glab mr view --output json 2>/dev/null || true)
-mr_title=$(printf '%s' "$mr_json" | jq -r '.title // empty' 2>/dev/null)
-mr_desc=$(printf '%s' "$mr_json" | jq -r '.description // empty' 2>/dev/null | perl -0pe 's/<!--.*?-->//gs')
 ticket=$(printf '%s %s' "$branch" "$mr_title" | grep -oE '\b[A-Z]{2,5}-[0-9]{2,6}\b' | sort -u | tr '\n' ' ')
 echo "branch=$branch ticket=${ticket:-none} mr=${mr_title:-none} src=$(printf '%s\n' "$src_files" | grep -c .) tests=$(printf '%s\n' "$test_files" | grep -c .) new_tests=$(printf '%s\n' "$new_test_files" | grep -c .)"
 [ -n "$rule_files_changed" ] && echo "NOTE: MR edits reviewer instructions ($(printf '%s' "$rule_files_changed" | tr '\n' ' ')) — policy is read from $target; the change itself is reviewable content"
@@ -146,7 +256,9 @@ if [ -n "$ts_src" ]; then
 fi
 echo
 
-echo "== ROWS  id|sev|n|locations|what to settle   (paths relative to root=${root:-.}; full hits: $out_dir/<id>.txt)"
+runner_section
+
+echo "== ROWS  id|sev|n|locations|what to settle   (paths relative to root=${root:-.}; hits: $out_dir/<id>.txt; context ±4 lines from git diff -U4: $out_dir/<id>.ctx.txt)"
 sig_removed=$(removed_in ' :: [[:space:]]*(export |def |async def |function |public |fn |func )[^(]*\(' | src_only)
 row F1 "$sig_removed" "changed signature — candidate references (lexical; aliases/dynamic dispatch not covered):"
 if [ -n "$sig_removed" ]; then
@@ -187,9 +299,8 @@ if [ -n "$new_test_files" ]; then
     d=$(dirname "$tf"); hit=""; collected=""
     [ -n "$ci_cfg" ] && hit=$(rg -n --no-heading -e "$d" -e "$(basename "$d")" $ci_cfg 2>/dev/null | head -n 1)
     [ -z "$hit" ] && [ -n "$runner_cfg" ] && hit=$(rg -n --no-heading -e 'testpaths|testMatch|"test":|karma|jest|vitest|python_files' $runner_cfg 2>/dev/null | head -n 1)
-    case "$tf" in *.py) collected=$(perl -e 'alarm 60; exec @ARGV' python3 -m pytest --collect-only -q -- "$tf" 2>/dev/null | grep -c '::' || true);; esac
-    if [ -n "$hit" ]; then echo "PASS F22 $tf — runner/CI ref: $(printf '%s' "$hit" | cut -c1-90)${collected:+; pytest collects $collected tests locally} (confirm the CI job's glob reaches it)"
-    else f22_unwired="$f22_unwired$tf :: no CI/runner config references its directory${collected:+ (pytest collects $collected locally)}
+    if [ -n "$hit" ]; then echo "PASS F22 $tf — runner/CI ref: $(printf '%s' "$hit" | cut -c1-90) (confirm the CI job's glob reaches it; RUNNER section says whether it runs locally)"
+    else f22_unwired="$f22_unwired$tf :: no CI/runner config references its directory
 "; fi
   done <<< "$new_test_files"
 fi
@@ -204,6 +315,9 @@ if [ -n "$src_files" ]; then
   always_on="F4 F5 F9 F16"
   echo "ALWAYS-ON: F4 blast-radius | F5 sibling-sweep (paste rg of the fixed shape) | F9 scope-rider (ticket: ${ticket:-none}) | F16 claim drift"
   desc_file="$out_dir/description.txt"; printf '%s\n' "$payload" | grep -vE '^\s*$' > "$desc_file"
+  : > "$out_dir/always-on.ctx.txt"
+  file_set_excerpts "$out_dir/always-on.ctx.txt" 80 600 $src_files
+  echo "  F4/F5/F9/F16 — source diffs in $out_dir/always-on.ctx.txt ($(grep -c '^-- ' "$out_dir/always-on.ctx.txt") file header(s); a TRUNCATED marker means the excerpt is not complete evidence)"
   dl=$(grep -c . "$desc_file")
   echo "  F16 — $dl-line description + commit bodies in $desc_file ($(grep -cEi '\b(fix(es|ed)?|idempotent|reject(s|ed)?|backwards?[- ]compat|ensures?|prevents?|guarantee|blocks?|no longer|always|never|converge|supports?|allows?|handles?|keeps?)\b' "$desc_file") claim lines) — read it whole, then reverse-check for changed behaviour it does not claim"
 else always_on=""; echo "N-A F4 F5 F9 F16 — no production source changed"; fi
@@ -286,8 +400,8 @@ echo "== NA ${na[*]:-none}"
 echo "== UNDETECTED (detector silent — promote only if a read contradicts it) ${undetected[*]:-none}"
 echo
 
-if [ -z "${PREFLIGHT_SKIP_BATCH:-}" ]; then
-echo "== F3 batch composition (open MRs by me touching the same files; PREFLIGHT_SKIP_BATCH=1 to skip)"
+if [ -n "${PREFLIGHT_BATCH:-}" ]; then
+echo "== F3 batch composition (open MRs by me touching the same files; opt-in via PREFLIGHT_BATCH=1)"
 if command -v glab >/dev/null && mine=$(glab mr list --author=@me --per-page 30 --output json 2>/dev/null); then
   overlap=""
   for iid in $(printf '%s' "$mine" | jq -r --arg b "$branch" '.[] | select(.source_branch != $b) | .iid' | head -n 15); do
@@ -300,6 +414,7 @@ if command -v glab >/dev/null && mine=$(glab mr list --author=@me --per-page 30 
   else echo "N-A F3 — $(printf '%s' "$mine" | jq length) open MRs by me, none shares a changed file"; fi
 else echo "UNKNOWN F3 — glab unavailable or unauthenticated; intersect open MRs manually"; fi
 echo
+else echo "== F3 skipped — out-of-gate checkpoint (before pushing a batch of MRs); PREFLIGHT_BATCH=1 to intersect open MRs by me"; echo
 fi
 echo "== OUT-OF-GATE F26@merge F29@closure F28@external-claim"
 needs_model=1
