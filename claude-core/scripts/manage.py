@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+CLAUDE_HOME = Path.home() / ".claude"
+BACKUP_ROOT = Path.home() / ".config" / "claude-core" / "backups"
+
+MANAGED_FILES = (
+    "CLAUDE.md",
+    "chrome-cdp.md",
+    "rules/workflow.md",
+    "rules/testing.md",
+    "rules/waiting.md",
+    "rules/code-style.md",
+    "hooks/f17-ticket-keys.sh",
+    "hooks/f17-comment-count.sh",
+)
+MANAGED_DIRECTORIES = (
+    "skills/mr-preflight",
+    "skills/review-retro",
+)
+REQUIRED_DIRECTORY_FILES = {
+    "skills/mr-preflight": (
+        "SKILL.md",
+        "preflight-triage.sh",
+        "mr-doctor.sh",
+        "mr-doctor-fields.py",
+        "harness-delta.py",
+        "bench.sh",
+        "failure-modes.md",
+        "failure-modes-history.md",
+    ),
+    "skills/review-retro": ("SKILL.md",),
+}
+EXECUTABLES = (
+    "hooks/f17-ticket-keys.sh",
+    "hooks/f17-comment-count.sh",
+    "skills/mr-preflight/preflight-triage.sh",
+    "skills/mr-preflight/mr-doctor.sh",
+    "skills/mr-preflight/bench.sh",
+)
+MANAGED_CONTAINERS = ("rules", "hooks", "skills", *MANAGED_DIRECTORIES)
+EXTERNAL_CALLERS = ("settings.json", "agents")
+CLAUDE_PATH_LITERAL = re.compile(
+    r"(?:~|\$HOME|/Users/[^/\s`'\"]+)/\.claude/([A-Za-z0-9_./-]*[A-Za-z0-9_/-])"
+)
+
+
+class Problem(RuntimeError):
+    pass
+
+
+def backup_relative_path(path: Path) -> Path:
+    try:
+        return path.relative_to(Path.home())
+    except ValueError:
+        return Path("external") / str(path).lstrip(os.sep)
+
+
+class BackupStore:
+    def __init__(self, root: Path | None = None) -> None:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self.root = root or BACKUP_ROOT / timestamp
+        self.created: list[Path] = []
+
+    def destination(self, path: Path) -> Path:
+        return self.root / backup_relative_path(path)
+
+    def preserve(self, path: Path) -> Path | None:
+        if not path.exists() and not path.is_symlink():
+            return None
+        destination = self.destination(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists() or destination.is_symlink():
+            raise Problem(f"backup destination already exists: {destination}")
+        if path.is_symlink():
+            destination.symlink_to(os.readlink(path))
+        elif path.is_dir():
+            shutil.copytree(path, destination, symlinks=True)
+        else:
+            shutil.copy2(path, destination)
+        self.created.append(destination)
+        return destination
+
+
+def managed_links() -> list[tuple[Path, Path]]:
+    return [(ROOT / rel, CLAUDE_HOME / rel) for rel in (*MANAGED_FILES, *MANAGED_DIRECTORIES)]
+
+
+def is_managed(rel: str) -> bool:
+    rel = rel.rstrip("/")
+    if rel in MANAGED_FILES:
+        return True
+    return any(rel == directory or rel.startswith(directory + "/") for directory in MANAGED_DIRECTORIES)
+
+
+def reference_literals(text: str) -> set[str]:
+    return {match.group(1) for match in CLAUDE_PATH_LITERAL.finditer(text)}
+
+
+def managed_text_files() -> list[Path]:
+    files = [ROOT / rel for rel in MANAGED_FILES]
+    for rel in MANAGED_DIRECTORIES:
+        files.extend(sorted(path for path in (ROOT / rel).rglob("*") if path.is_file()))
+    return files
+
+
+def literals_in(path: Path) -> set[str]:
+    try:
+        return reference_literals(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return set()
+
+
+def reference_edges() -> list[tuple[Path, str]]:
+    return [(path, rel) for path in managed_text_files() for rel in sorted(literals_in(path))]
+
+
+def external_caller_files() -> list[Path]:
+    files: list[Path] = []
+    for name in EXTERNAL_CALLERS:
+        path = CLAUDE_HOME / name
+        if path.is_dir():
+            files.extend(sorted(child for child in path.iterdir() if child.is_file()))
+        elif path.is_file():
+            files.append(path)
+    return files
+
+
+def link_state(source: Path, target: Path) -> str:
+    if target.is_symlink():
+        if os.readlink(target) != str(source):
+            return "wrong-link"
+        return "ok" if target.exists() else "dangling"
+    if target.is_dir():
+        return "directory"
+    if target.exists():
+        return "regular"
+    return "missing"
+
+
+def package_problems() -> list[str]:
+    problems: list[str] = []
+    for rel in MANAGED_FILES:
+        source = ROOT / rel
+        if not source.is_file() or source.is_symlink():
+            problems.append(f"{rel}: must be a regular file in the repository")
+    for rel in MANAGED_DIRECTORIES:
+        source = ROOT / rel
+        if not source.is_dir() or source.is_symlink():
+            problems.append(f"{rel}: must be a directory in the repository")
+            continue
+        for name in REQUIRED_DIRECTORY_FILES[rel]:
+            if not (source / name).is_file():
+                problems.append(f"{rel}/{name}: required file is missing")
+    for rel in EXECUTABLES:
+        source = ROOT / rel
+        if source.is_file() and not source.stat().st_mode & 0o111:
+            problems.append(f"{rel}: must keep its executable bit")
+    for path, rel in reference_edges():
+        origin = path.relative_to(ROOT)
+        if rel.endswith("/"):
+            if rel.rstrip("/") not in MANAGED_CONTAINERS:
+                problems.append(f"{origin} references unmanaged ~/.claude/{rel}")
+        elif not is_managed(rel):
+            problems.append(f"{origin} references unmanaged ~/.claude/{rel}")
+        elif not (ROOT / rel).exists():
+            problems.append(f"{origin} references ~/.claude/{rel}, which does not exist in the repository")
+    return problems
+
+
+def live_problems() -> list[str]:
+    problems = package_problems()
+    for source, target in managed_links():
+        state = link_state(source, target)
+        if state != "ok":
+            problems.append(f"{target}: {state}, expected symlink -> {source}")
+    for path, rel in reference_edges():
+        if not (CLAUDE_HOME / rel).exists():
+            problems.append(f"{path.relative_to(ROOT)} references ~/.claude/{rel}, which does not resolve")
+    for path in external_caller_files():
+        for rel in sorted(literals_in(path)):
+            if is_managed(rel) and not (CLAUDE_HOME / rel).exists():
+                problems.append(f"{path} references ~/.claude/{rel}, which does not resolve")
+    return problems
+
+
+def replace_with_link(source: Path, target: Path, backups: BackupStore) -> None:
+    backups.preserve(target)
+    if target.is_symlink() or target.is_file():
+        target.unlink()
+    elif target.is_dir():
+        shutil.rmtree(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.parent / f".{target.name}.claude-core.tmp"
+    if temporary.is_symlink() or temporary.exists():
+        temporary.unlink()
+    temporary.symlink_to(source)
+    temporary.replace(target)
+
+
+def install_links(backups: BackupStore) -> list[Path]:
+    changed: list[Path] = []
+    for source, target in managed_links():
+        if link_state(source, target) == "ok":
+            continue
+        replace_with_link(source, target, backups)
+        changed.append(target)
+    return changed
+
+
+def uninstall_links() -> list[Path]:
+    removed: list[Path] = []
+    for source, target in managed_links():
+        if target.is_symlink() and os.readlink(target) == str(source):
+            target.unlink()
+            removed.append(target)
+    return removed
+
+
+def report(label: str, problems: list[str]) -> None:
+    print(f"{'FAIL' if problems else 'ok  '} {label}")
+    for problem in problems:
+        print(f"  - {problem}")
+
+
+def cmd_check(_: argparse.Namespace) -> int:
+    problems = package_problems()
+    report("claude-core package", problems)
+    tests = subprocess.run(
+        [sys.executable, "-m", "unittest", "discover", "-s", str(ROOT / "tests"), "-v"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    print(tests.stdout, end="")
+    print(tests.stderr, end="", file=sys.stderr)
+    if tests.returncode:
+        problems.append("claude-core unit tests failed")
+    return 1 if problems else 0
+
+
+def cmd_install(_: argparse.Namespace) -> int:
+    problems = package_problems()
+    if problems:
+        raise Problem("package validation failed:\n" + "\n".join(f"- {p}" for p in problems))
+    backups = BackupStore()
+    changed = install_links(backups)
+    for path in changed:
+        print(f"linked {path}")
+    print(f"unchanged {len(managed_links()) - len(changed)} link(s)")
+    if backups.created:
+        print(f"backed up {len(backups.created)} replaced path(s) under {backups.root}")
+    return cmd_status(argparse.Namespace())
+
+
+def cmd_status(_: argparse.Namespace) -> int:
+    problems = live_problems()
+    report("claude-core live installation", problems)
+    if not problems:
+        print(f"  {len(MANAGED_FILES)} file link(s), {len(MANAGED_DIRECTORIES)} directory link(s), {len(reference_edges())} reference edge(s) resolve")
+    return 1 if problems else 0
+
+
+def cmd_uninstall(_: argparse.Namespace) -> int:
+    removed = uninstall_links()
+    for path in removed:
+        print(f"removed {path}")
+    print("preserved unmanaged paths and all backups")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Validate, install, inspect, or uninstall the claude-core symlinks under ~/.claude."
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    for name, handler in (
+        ("check", cmd_check),
+        ("install", cmd_install),
+        ("status", cmd_status),
+        ("uninstall", cmd_uninstall),
+    ):
+        subparser = subparsers.add_parser(name)
+        subparser.set_defaults(handler=handler)
+    args = parser.parse_args()
+    return int(args.handler(args))
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Problem as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(1)
