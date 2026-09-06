@@ -37,3 +37,27 @@ Keep independent AI projects in clearly named top-level directories.
 - Use Bun for user-installed global JavaScript CLI packages. Do not run
   `npm install --global`; update `bun-global-tools/manifest.json` and validate
   with `python3 bun-global-tools/sync.py check --deep`.
+
+## Commands
+
+Declared so agents and people run the same verified commands instead of
+rediscovering them. Every entry below was executed from this directory and
+exited zero. `test-one` carries a `{file}` placeholder that a caller replaces
+with one path.
+
+```commands
+test: python3 scripts/plugins.py check
+test-claude-core: python3 claude-core/scripts/manage.py check
+test-wiki: python3 wiki/scripts/check.py
+test-codex-pair: bash codex-pair/scripts/check.sh
+test-chatgpt-consult: bun run --cwd chatgpt-consult check
+test-qwen-gsd: python3 qwen-gsd/scripts/check.py
+test-shared-agents: python3 shared-agents/scripts/manage.py check
+```
+
+The workspace root installs nothing: its scripts are Python standard library
+only, and each project installs its own dependencies. `python3 scripts/plugins.py check` is the umbrella gate: it validates the
+catalog, runs the workspace suite, and dispatches each project's own command.
+`claude-core` is not yet in that dispatcher, so run its check separately. A
+project with its own harness declares `test-one` in its own `AGENTS.md`; this
+workspace has no single test command that fits every project.
