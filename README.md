@@ -13,9 +13,9 @@ their own projects and use their product-native installation workflows.
   web, with local project context, structured results, and explicit publishing.
 - [`qwen-gsd`](qwen-gsd/): economical, bounded Qwen-authored development
   slices with orchestrator review, verification, and usage accounting.
-- [`shared-agents`](shared-agents/): standalone Claude Code controller and
-  specialist-agent sources, including automatic Alan Wake routing for requested
-  human-facing prose. It is not a workspace plugin.
+- [`claude-core`](claude-core/): personal Claude Code configuration, controller,
+  and specialist agents, with one lifecycle CLI and test suite. It is not a
+  workspace plugin.
 - [`bun-global-tools`](bun-global-tools/): exact-pinned Bun global CLI tools,
   lifecycle trust policy, and npm-global drift detection.
 
@@ -54,13 +54,8 @@ python3 scripts/plugins.py install
 python3 scripts/plugins.py status
 ```
 
-The marketplace never installs `shared-agents`. Install and verify its Claude
-agents separately from the repository root:
-
-```bash
-python3 shared-agents/scripts/manage.py install
-python3 shared-agents/scripts/manage.py status
-```
+Personal Claude Code configuration has its own lifecycle, described in
+[claude-core/README.md](claude-core/README.md).
 
 Start a new Claude Code or Codex session after installing so newly added skills
 and hooks are loaded.
@@ -88,7 +83,7 @@ plugins.json                            ← edit catalog metadata here
 ├── qwen-gsd/plugins/qwen-gsd/
 │   ├── .claude-plugin/plugin.json      ← generated
 │   └── .codex-plugin/plugin.json       ← generated
-└── shared-agents/                      ← standalone Claude agent project
+└── claude-core/                        ← standalone Claude configuration project
 ```
 
 After changing `plugins.json`, a plugin, or project automation:
@@ -144,6 +139,7 @@ validation commands above.
 ├── scripts/
 ├── bun-global-tools/
 ├── chatgpt-consult/
+├── claude-core/
 ├── codex-pair/
 ├── qwen-gsd/
 └── wiki/
