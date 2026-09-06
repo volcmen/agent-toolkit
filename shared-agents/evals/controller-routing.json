@@ -4,10 +4,10 @@
     {
       "id": 1,
       "prompt": "Inspect the current branch and write a concise GitLab MR title and description using the repository template.",
-      "expected_output": "The controller verifies the branch facts and routes the final ready-to-paste MR prose through Alan Wake.",
+      "expected_output": "The controller verifies the diff, evidence, and required template, then drafts a small MR inline using the shared writing contract.",
       "files": [],
       "expectations": [
-        "Uses alan-wake for the final draft",
+        "Drafts inline when the MR is small; delegates only if substantial editing would help",
         "Checks the actual diff, verification, and repository template before drafting",
         "Does not invent test, deployment, or rollout claims"
       ]
@@ -37,10 +37,10 @@
     {
       "id": 4,
       "prompt": "Rewrite this rough deployment update for Slack. Keep every supplied fact, make it concise, and return only the message.",
-      "expected_output": "The controller sends the verified source packet to Alan Wake on Opus and returns the artifact without drafting commentary.",
+      "expected_output": "The controller drafts a short update inline without alan-wake, preserves facts, and returns rendered Markdown links in this chat unless raw Slack output is explicitly requested.",
       "files": [],
       "expectations": [
-        "Uses alan-wake on Opus for the final draft",
+        "Does not force an alan-wake call or Opus for a routine rewrite",
         "Preserves supplied facts and uncertainty",
         "Returns only destination-ready Slack text"
       ]

@@ -1,0 +1,18 @@
+{
+  "name": "qwen-gsd",
+  "version": "1.0.0",
+  "description": "Economical Qwen-authored development slices with bounded orchestration, diff review, verification, and usage accounting.",
+  "author": {
+    "name": "David David"
+  },
+  "license": "MIT",
+  "keywords": [
+    "qwen",
+    "gsd",
+    "code-generation",
+    "orchestration",
+    "cost-control",
+    "claude-code",
+    "codex"
+  ]
+}

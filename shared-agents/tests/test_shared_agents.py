@@ -129,7 +129,7 @@ class Rendering(unittest.TestCase):
         self.assertIn("\nmaxTurns: 8\n", frontmatter)
         self.assertIn("\npermissionMode: plan\n", frontmatter)
         self.assertIn("\ndisallowedTools: Write, Edit, NotebookEdit, Agent\n", frontmatter)
-        self.assertNotIn("\ntools:", frontmatter)
+        self.assertIn("\ntools: Read, Grep, Glob\n", frontmatter)
         for path in (ROOT / "claude" / "agents").glob("*.md"):
             if path.name != "alan-wake.md":
                 self.assertNotIn("permissionMode:", path.read_text(encoding="utf-8"), str(path))
@@ -144,7 +144,7 @@ class Rendering(unittest.TestCase):
             self.assertNotIn(forbidden, text)
 
     def test_rendered_agents_stay_within_size_budgets(self) -> None:
-        budgets = {"controller.md": 2800, "mr-review-fixer.md": 6000, "alan-wake.md": 14500, "gate.md": 1000}
+        budgets = {"controller.md": 2800, "mr-review-fixer.md": 3500, "alan-wake.md": 1600, "gate.md": 1400}
         for name, limit in budgets.items():
             self.assertLessEqual((ROOT / "claude" / "agents" / name).stat().st_size, limit, name)
 
@@ -176,31 +176,31 @@ class Rendering(unittest.TestCase):
         for agent_id in ("repo-explorer", "task-analyst"):
             self.assertNotIn("Bash", by_id[agent_id]["tools"], agent_id)
             self.assertEqual(set(by_id[agent_id]["disallowedTools"]), {"Write", "Edit", "NotebookEdit"}, agent_id)
-        self.assertNotIn("tools", by_id["alan-wake"])
+        self.assertEqual(by_id["alan-wake"]["tools"], ["Read", "Grep", "Glob"])
         self.assertEqual(by_id["alan-wake"]["disallowedTools"], ["Write", "Edit", "NotebookEdit", "Agent"])
         self.assertEqual(by_id["alan-wake"]["permissionMode"], "plan")
         self.assertEqual(by_id["mr-review-fixer"]["tools"], ["Read", "Grep", "Glob", "Edit", "Write", "Bash"])
         self.assertEqual(by_id["mr-review-fixer"]["memory"], "project")
         self.assertNotIn("skills", by_id["mr-review-fixer"])
         self.assertEqual(by_id["gate"]["tools"], ["Bash", "Read", "Grep", "Glob"])
-        self.assertEqual(by_id["gate"]["maxTurns"], 40)
+        self.assertEqual(by_id["gate"]["maxTurns"], 20)
         for absent in ("disallowedTools", "memory", "skills", "permissionMode"):
             self.assertNotIn(absent, by_id["gate"])
 
-    def test_gate_is_the_fork_target_of_mr_preflight_and_not_a_specialist(self) -> None:
+    def test_preflight_stays_inline_with_an_optional_bounded_reviewer(self) -> None:
         catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
         gate = next(agent for agent in catalog if agent["id"] == "gate")
         self.assertNotIn("codex", gate)
         skill = (ROOT.parent / "claude-core" / "skills" / "mr-preflight" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("\nagent: gate\n", skill.split("---")[1])
-        self.assertIn("\ncontext: fork\n", skill.split("---")[1])
+        self.assertNotIn("agent:", skill.split("---")[1])
+        self.assertNotIn("context:", skill.split("---")[1])
         controller = (ROOT / "prompts" / "controller.md").read_text(encoding="utf-8")
         self.assertNotIn("`gate`", controller)
         self.assertNotIn("gate on Sonnet", controller)
         rendered = (ROOT / "claude" / "agents" / "gate.md").read_text(encoding="utf-8")
         self.assertIn("\nmodel: sonnet\n", rendered)
         self.assertIn("\neffort: medium\n", rendered)
-        self.assertIn("\nmaxTurns: 40\n", rendered)
+        self.assertIn("\nmaxTurns: 20\n", rendered)
         self.assertIn("\ntools: Bash, Read, Grep, Glob\n", rendered)
         self.assertIn("Never install a dependency, create an environment, or build", rendered)
 
@@ -217,7 +217,7 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
         text = (ROOT / "prompts" / "controller.md").read_text(encoding="utf-8")
         self.assertIn("`Explore` on Sonnet", text)
         self.assertIn("`task-analyst` on Sonnet", text)
-        self.assertIn("`alan-wake` on Opus", text)
+        self.assertIn("`alan-wake` on Sonnet", text)
         self.assertIn("`mr-review-fixer` on Sonnet", text)
         self.assertNotIn("shared-agents:", text)
 
@@ -296,10 +296,10 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
             self.assertIn("ready-to-use artifact", text, relative_path)
             self.assertNotIn("generic packet", text, relative_path)
 
-    def test_controller_keeps_the_mandatory_prose_route(self) -> None:
+    def test_controller_uses_proportional_prose_routing(self) -> None:
         text = self.surface("prompts/controller.md")
-        self.assertIn("automatically delegate its final draft", text)
-        self.assertIn("`alan-wake` on opus", text)
+        self.assertIn("draft routine prose inline", text)
+        self.assertIn("`alan-wake` on sonnet", text)
         self.assertIn("drafting never authorizes sending or publishing", text)
 
     def test_codex_contract_mirrors_the_claude_delegation_rules(self) -> None:
@@ -312,7 +312,7 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
             "terminal contract",
             text,
         )
-        self.assertIn("automatically spawn `alan_wake`", text)
+        self.assertIn("draft routine prose inline", text)
         self.assertIn('fork_turns = "none"', text)
 
     def test_claude_surfaces_govern_peer_session_messaging(self) -> None:
@@ -336,7 +336,7 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
         catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
         expected = {
             "controller": "fable",
-            "alan-wake": "opus",
+            "alan-wake": "sonnet",
             "repo-explorer": "sonnet",
             "task-analyst": "sonnet",
             "mr-review-fixer": "sonnet",
@@ -439,6 +439,19 @@ class StandaloneCopies(unittest.TestCase):
 
 
 class Package(unittest.TestCase):
+    def test_shared_writer_reference_resolves_with_a_small_total_context(self) -> None:
+        prompt = ROOT / "prompts/alan-wake.md"
+        contract = ROOT.parent / "claude-core/skills/engineering/references/writing.md"
+        self.assertIn("~/.claude/skills/engineering/references/writing.md", prompt.read_text())
+        self.assertTrue(contract.is_file())
+        self.assertLessEqual(prompt.stat().st_size + contract.stat().st_size, 5500)
+
+    def test_risk_reviewer_reference_resolves_without_preloading_a_fork(self) -> None:
+        skill = ROOT.parent / "claude-core/skills/mr-preflight/SKILL.md"
+        self.assertTrue(skill.is_file())
+        self.assertIn("~/.claude/skills/mr-preflight/SKILL.md", (ROOT / "prompts/gate.md").read_text())
+        self.assertLessEqual(skill.stat().st_size, 5000)
+
     def test_package_validation_passes(self) -> None:
         self.assertEqual(manage.package_problems(), [])
 
@@ -485,71 +498,8 @@ class Package(unittest.TestCase):
             ]
         )
         self.assertIn("alan-wake", alan_case)
-        self.assertIn("Opus", alan_case)
+        self.assertIn("inline", alan_case)
 
-    def test_agent_catalog_has_focused_routing_descriptions(self) -> None:
-        catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))
-        by_id = {agent["id"]: agent for agent in catalog["agents"]}
-        expected = {
-            "controller": (
-                "Main-thread Fable technical lead for repository work. Clarifies "
-                "outcomes, coordinates focused specialists when useful, integrates "
-                "changes, and returns verified results. Run as the primary agent; "
-                "never dispatch it as a worker."
-            ),
-            "alan-wake": (
-                "Use proactively for human-facing developer and workplace writing: compose, "
-                "rewrite, shorten, polish, reply, summarize, title, structure, or format "
-                "Slack/chat messages; Jira work items and comments; GitLab/GitHub MR/PR "
-                "titles, descriptions, and reviews; Confluence and Notion pages; email; "
-                "technical docs and articles; release notes; incidents; status updates; "
-                "decisions; requests; and handoffs. Resolves verified links, uses "
-                "destination-native formatting, and returns one compact ready-to-paste "
-                "artifact. Never implements, sends, posts, or publishes."
-            ),
-            "gate": (
-                "Fresh-context reviewer for the mr-preflight skill: runs its triage, reads the "
-                "spilled evidence once, settles every ledger row with executed commands inside "
-                "the call budget, and returns the verdict. Fork target only; never dispatched."
-            ),
-            "mr-review-fixer": (
-                "Independently reviews and improves a GitLab merge request before human "
-                "review, after review feedback, or before re-requesting review: audits the "
-                "complete diff for defects, regressions, missing cases, security, "
-                "performance, tests, and MR hygiene; validates unresolved discussions; "
-                "applies focused fixes; verifies the result; and prepares concise GitLab "
-                "replies. Use on completed or reviewed MRs, not for initial feature "
-                "development, approval, assignment, or merge."
-            ),
-            "repo-explorer": (
-                "Read-only repository explorer for one bounded question: file and "
-                "symbol discovery, behavior and dependency tracing, architecture, "
-                "tests, or implementation context. Supports quick, medium, and very "
-                "thorough depth. Never edits."
-            ),
-            "task-analyst": (
-                "Read-only task shaper for vague, symptom-based, conflicting, risky, "
-                "or solution-first requests. Establishes evidence, scope, acceptance "
-                "criteria, and the one decision needed before work. Never edits."
-            ),
-        }
-        for agent_id, description in expected.items():
-            self.assertEqual(by_id[agent_id]["description"], description)
-
-    def test_alan_wake_uses_judgment_not_rigid_prose_limits(self) -> None:
-        prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
-        normalized = " ".join(prompt.split())
-        self.assertIn("Use plain, familiar words", normalized)
-        self.assertIn(
-            "A missing URL must not block an otherwise correct draft", normalized
-        )
-        self.assertIn("Return one ready-to-use artifact", normalized)
-        self.assertNotIn("a bare name is a defect", normalized)
-        self.assertNotIn("unfinished text until it is clickable", normalized)
-        self.assertNotRegex(normalized, r"default to one to \d+")
-        self.assertNotRegex(normalized, r"at most \d+ (words|lines|blocks|bullets|headings)")
-        self.assertNotIn("Default maximum", normalized)
-        self.assertIn("Length guidance", normalized)
 
     def test_alan_wake_link_evals_cover_resource_contract(self) -> None:
         payload = json.loads(
@@ -557,8 +507,8 @@ class Package(unittest.TestCase):
         )
         self.assertEqual(payload["agent_name"], "alan-wake")
         by_id = {case["id"]: case for case in payload["evals"]}
-        self.assertEqual(
-            set(by_id),
+        self.assertTrue(
+            set(by_id).issuperset(
             {
                 "gitlab-native-mr",
                 "slack-named-mr",
@@ -567,7 +517,7 @@ class Package(unittest.TestCase):
                 "deduplicate-resource-link",
                 "missing-url",
                 "plain-text-url",
-            },
+            }),
         )
         for case in by_id.values():
             with self.subTest(case=case["id"]):
@@ -576,23 +526,12 @@ class Package(unittest.TestCase):
                 self.assertTrue(case["expected_output"])
                 self.assertGreaterEqual(len(case["expectations"]), 2)
 
-    def test_alan_wake_formats_verified_resource_links(self) -> None:
-        prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
-        normalized = " ".join(prompt.split())
-        self.assertIn("Active tool schema", normalized)
-        self.assertIn("Destination-native reference", normalized)
-        self.assertIn("Named link", normalized)
-        self.assertIn("Do not write `label: URL`", normalized)
-        self.assertIn("Jenkins", normalized)
-        self.assertIn("do not repeat its URL or add a second link", normalized)
-        self.assertIn("Missing link metadata is not an essential gap", normalized)
-        self.assertIn("Do not ask for link metadata", normalized)
 
     def test_each_specialist_has_one_terminal_contract(self) -> None:
         alan = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
         analyst = (ROOT / "prompts" / "task-analyst.md").read_text(encoding="utf-8")
         explorer = (ROOT / "prompts" / "repo-explorer.md").read_text(encoding="utf-8")
-        self.assertIn("Return one ready-to-use artifact", alan)
+        self.assertIn("Return one finished artifact", alan)
         self.assertIn("Return a concise execution brief", analyst)
         self.assertIn("Return a compact report", explorer)
         self.assertNotIn("ready-to-use artifact", analyst)
@@ -602,12 +541,12 @@ class Package(unittest.TestCase):
         controller = " ".join((ROOT / "prompts" / "controller.md").read_text(encoding="utf-8").split())
         fixer = (ROOT / "prompts" / "mr-review-fixer.md").read_text(encoding="utf-8")
         self.assertIn("`mr-review-fixer` on Sonnet: a completed or reviewed GitLab MR → a quality-gate report", controller)
-        self.assertIn("## MR quality gate", fixer)
-        self.assertIn("**Status:** READY | NOT READY | NEEDS DECISION", fixer)
+        self.assertIn("## Return", fixer)
+        self.assertIn("READY / CHANGES NEEDED / INCOMPLETE / NEEDS DECISION", fixer)
         for restated in ("smallest change", "weaken assertions", "confirm the root cause", "narrowest tests first"):
             self.assertNotIn(restated, fixer, restated)
-        self.assertIn("~/.claude/skills/engineering/references/debugging.md", fixer)
-        self.assertIn("~/.claude/skills/engineering/references/verification.md", fixer)
+        self.assertIn("engineering debugging", fixer)
+        self.assertIn("verification references", fixer)
 
     def test_controller_brief_contract_and_peer_triggers_survive_compression(self) -> None:
         text = " ".join((ROOT / "prompts" / "controller.md").read_text(encoding="utf-8").split())
@@ -615,66 +554,6 @@ class Package(unittest.TestCase):
         self.assertIn("material decision, breaking change, landed change, or requested status", text)
         self.assertIn("route them through the user", text)
 
-    def test_alan_wake_consults_official_destination_references(self) -> None:
-        prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
-        sources = (ROOT / "docs" / "sources.md").read_text(encoding="utf-8")
-        normalized = " ".join(prompt.split())
-        urls = (
-            "https://docs.slack.dev/messaging/formatting-message-text/",
-            "https://developers.notion.com/reference/block",
-            "https://developers.notion.com/guides/data-apis/working-with-markdown-content",
-            "https://developers.notion.com/reference/rich-text",
-            "https://www.notion.com/help/what-is-a-block",
-            "https://support.atlassian.com/confluence-cloud/docs/format-text/",
-            "https://support.atlassian.com/confluence-cloud/docs/available-markdown-commands/",
-            "https://support.atlassian.com/confluence-cloud/docs/insert-confluence-wiki-markup/",
-            "https://support.atlassian.com/confluence-cloud/docs/insert-links-and-anchors/",
-            "https://docs.gitlab.com/user/markdown/",
-            "https://www.jenkins.io/doc/book/using/remote-access-api/",
-            "https://docs.slack.dev/block-kit/",
-            "https://support.atlassian.com/jira-software-cloud/docs/markdown-and-keyboard-shortcuts/",
-            "https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/",
-            "https://developers.notion.com/guides/data-apis/enhanced-markdown",
-            "https://docs.gitlab.com/user/project/description_templates/",
-        )
-        self.assertIn("consult the applicable official reference", normalized)
-        self.assertIn("before finalizing", normalized)
-        self.assertIn("temporarily unavailable", normalized)
-        for url in urls:
-            with self.subTest(url=url):
-                self.assertIn(url, prompt)
-                self.assertIn(url, sources)
-
-    def test_alan_wake_uses_destination_native_format_contracts(self) -> None:
-        prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
-        normalized = " ".join(prompt.split())
-        self.assertIn("Notion-flavored Markdown", normalized)
-        self.assertIn("ordinary Markdown does not represent every Notion block", normalized)
-        self.assertIn("legacy wiki markup", normalized)
-        self.assertIn("current Confluence editor", normalized)
-        self.assertIn("GitLab Flavored Markdown", normalized)
-        self.assertIn("titles do not support full GitLab Flavored Markdown", normalized)
-
-    def test_alan_wake_writes_destination_native_slack_mrkdwn(self) -> None:
-        prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
-        normalized = " ".join(prompt.split())
-        self.assertIn("`<url|label>`", normalized)
-        self.assertIn("`[text](url)` does not render in raw Slack messages", normalized)
-        self.assertIn("active tool contract explicitly documents", normalized)
-        self.assertNotIn("Slack MCP draft/send tools", prompt)
-        self.assertIn("named link", normalized)
-        self.assertIn("never invent a URL", normalized)
-        self.assertIn("lead with the current state, result, or request", normalized)
-        self.assertIn("Use verified, descriptive link labels", normalized)
-
-    def test_alan_wake_is_a_terminal_writer(self) -> None:
-        prompt = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
-        policy = (ROOT / "policy" / "codex-global.md").read_text(encoding="utf-8")
-        normalized = " ".join(prompt.split())
-        self.assertIn(
-            "not spawn, delegate to, or ask for another writing agent", normalized
-        )
-        self.assertIn("already `alan_wake`", policy)
 
     def test_check_command_runs_unit_suite(self) -> None:
         if os.environ.get("SHARED_AGENTS_CHECK_CHILD") == "1":

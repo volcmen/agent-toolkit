@@ -37,9 +37,11 @@ REQUIRED_DIRECTORY_FILES = {
         "references/second-opinion.md",
         "references/writing.md",
         "references/delivery.md",
+        "references/tracking.md",
     ),
     "skills/mr-preflight": (
         "SKILL.md",
+        "preflight-snapshot.py",
         "preflight-triage.sh",
         "mr-doctor.sh",
         "mr-doctor-fields.py",

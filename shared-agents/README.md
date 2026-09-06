@@ -11,19 +11,20 @@ plugin marketplace.
 | Controller | Fable `controller` (medium effort) |
 | Task analyst | Sonnet `task-analyst` |
 | Repository explorer | Sonnet `Explore` |
-| Writing specialist | Opus `alan-wake` (medium effort, plan permission mode) |
+| Writing specialist | Sonnet `alan-wake` (medium effort, plan permission mode) |
 | MR quality gate and fixer | Sonnet `mr-review-fixer` (high effort, project memory) |
-| Gate fork target | Sonnet `gate` (medium effort, 40 turns, tools Bash/Read/Grep/Glob) — used only by the `mr-preflight` skill's `context: fork`, never dispatched by the controller |
+| Independent reviewer | Sonnet `gate` (medium effort, 20 turns, tools Bash/Read/Grep/Glob) — optional for high-risk or unfamiliar changes in `mr-preflight` |
 
 Claude Code loads the copied user agents from `~/.claude/agents/`. `Explore.md`
 intentionally overrides Claude Code's built-in Explore agent and pins it to
 Sonnet.
 
-The writing route is automatic for requested Slack messages, Jira text, PR/MR
-titles and descriptions, review comments, emails, docs, release notes, status
-updates, decisions, requests, and handoffs. The controller verifies the facts
-before delegation and validates the final draft afterward. Alan Wake remains
-read-only and never publishes. Ordinary conversation does not use it.
+Routine workplace writing stays in the primary thread. Alan Wake handles explicit
+requests, substantial rewrites, delicate wording, or long documents. Both read
+`claude-core/skills/engineering/references/writing.md`, the single contract for
+brevity and rendered links. Alan Wake has only Read/Grep/Glob tools and never
+publishes. Install `claude-core` alongside these agents so the shared references
+resolve. Only Claude agents are installed; the Codex adapters remain dormant.
 
 The controller prompt covers only what the controller alone decides —
 delegation, the model matrix, the specialist roster, the prose route, and peer

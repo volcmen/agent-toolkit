@@ -12,10 +12,10 @@
     },
     {
       "id": "alan-wake",
-      "description": "Use proactively for human-facing developer and workplace writing: compose, rewrite, shorten, polish, reply, summarize, title, structure, or format Slack/chat messages; Jira work items and comments; GitLab/GitHub MR/PR titles, descriptions, and reviews; Confluence and Notion pages; email; technical docs and articles; release notes; incidents; status updates; decisions; requests; and handoffs. Resolves verified links, uses destination-native formatting, and returns one compact ready-to-paste artifact. Never implements, sends, posts, or publishes.",
+      "description": "Engineering editor for substantial rewrites, delicate workplace wording, long documents, or an explicit Alan Wake request. Returns one concise draft with links formatted for the actual output surface. Routine messages stay inline; never sends or publishes.",
       "prompt": "prompts/alan-wake.md",
       "claude": {
-        "model": "opus",
+        "model": "sonnet",
         "effort": "medium",
         "maxTurns": 8,
         "permissionMode": "plan",
@@ -24,6 +24,11 @@
           "Edit",
           "NotebookEdit",
           "Agent"
+        ],
+        "tools": [
+          "Read",
+          "Grep",
+          "Glob"
         ]
       },
       "codex": {
@@ -109,12 +114,12 @@
     },
     {
       "id": "gate",
-      "description": "Fresh-context reviewer for the mr-preflight skill: runs its triage, reads the spilled evidence once, settles every ledger row with executed commands inside the call budget, and returns the verdict. Fork target only; never dispatched.",
+      "description": "Independent read-only review of a completed high-risk or unfamiliar change when existing review evidence is insufficient. Returns actionable findings and coverage gaps. Optional mr-preflight reviewer; never fixes or publishes.",
       "prompt": "prompts/gate.md",
       "claude": {
         "model": "sonnet",
         "effort": "medium",
-        "maxTurns": 40,
+        "maxTurns": 20,
         "tools": [
           "Bash",
           "Read",

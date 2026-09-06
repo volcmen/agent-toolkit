@@ -76,7 +76,7 @@ class Package(unittest.TestCase):
             ("skills/mr-preflight/SKILL.md", "skills/mr-preflight/preflight-triage.sh"),
             ("skills/mr-preflight/preflight-triage.sh", "skills/mr-preflight/failure-modes.md"),
             ("skills/mr-preflight/preflight-triage.sh", "skills/mr-preflight/harness-delta.py"),
-            ("skills/review-retro/SKILL.md", "skills/mr-preflight/"),
+            ("skills/review-retro/SKILL.md", "skills/mr-preflight/failure-modes.md"),
             ("CLAUDE.md", "rules/code-style.md"),
         ):
             self.assertIn(expected, edges)
@@ -137,7 +137,7 @@ class Consolidation(unittest.TestCase):
 
     def test_inventory_names_the_engineering_skill_and_drops_the_merged_rules(self) -> None:
         self.assertIn("skills/engineering", manage.MANAGED_DIRECTORIES)
-        self.assertEqual(len(manage.REQUIRED_DIRECTORY_FILES["skills/engineering"]), 8)
+        self.assertEqual(len(manage.REQUIRED_DIRECTORY_FILES["skills/engineering"]), 9)
         for rel in ("rules/workflow.md", "rules/testing.md"):
             self.assertNotIn(rel, manage.MANAGED_FILES)
             self.assertFalse((ROOT / rel).exists(), rel)

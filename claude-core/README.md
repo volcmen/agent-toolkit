@@ -79,3 +79,39 @@ against.
 Edit the files here; the links make the change live immediately. The
 `mr-preflight` triage cache keys on script bytes, not paths, so linking does
 not invalidate it.
+
+## Personal work tracking
+
+The shared [tracking guide](skills/engineering/references/tracking.md) routes
+ongoing work in Claude Code and Codex to a verified personal Linear workspace.
+The Claude core and the personal Codex `AGENTS.md` point to the same file;
+the latter is a local addition outside the Obsidian-managed block. Repository
+policy still owns official Jira/GitHub/GitLab tracking. Linear keeps personal
+actions, and migrated Obsidian tasks become locators rather than duplicate state.
+
+The `linear-personal` MCP connection is configured separately in each client.
+Account and workspace IDs live locally in `~/.config/work-tracking/linear.json`;
+credentials remain in the clients' authentication stores. See the
+[setup record](docs/2026-09-06-personal-work-tracking.md) for installation,
+verification, and remaining setup. The existing whole-directory engineering
+link exposes the guide without a new plugin or background dispatcher.
+
+## Preflight and writing defaults
+
+`mr-preflight` runs in the current conversation. `preflight-snapshot.py` provides
+an offline, read-only inventory of committed HEAD, merge base, target, excluded
+local edits, paths, and whitespace evidence; it never returns readiness.
+Known review and test results can be reused for unchanged inputs. The optional
+`gate` reviewer covers high-risk or unfamiliar changes; a completed independent
+`mr-review-fixer` pass can satisfy it. Mutation testing is reserved for a
+specific unresolved doubt about test discrimination. Results distinguish
+READY, CHANGES NEEDED, and INCOMPLETE, with short exception-focused output.
+
+The old `preflight-triage.sh`, runner probes, and `mr-doctor.sh` remain opt-in
+diagnostics for their existing callers. Their caches and heuristic classifications
+are not reusable readiness evidence. The default path does not run them.
+
+Routine workplace drafts stay inline. `engineering/references/writing.md` is
+the shared contract for the primary thread and Alan Wake: concise prose, named
+links in the actual output format, and no automatic publishing. See
+[the refresh record](docs/2026-09-06-agent-refresh.md) for evidence and limits.

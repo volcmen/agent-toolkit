@@ -13,21 +13,15 @@ their route matches:
   symptom-based, contradictory, risky, or technically uncertain requests.
 - `repo_explorer` — read-only focused repository research, dependency tracing,
   architecture discovery, and implementation context.
-- `alan_wake` — required final-draft specialist for requested human-facing
-  workplace and developer prose.
+- `alan_wake` — editor for substantial rewrites, delicate wording, long
+  documents, or an explicit request to use that agent.
 
-For any requested Slack message, Jira text, PR/MR title or description, review
-comment, email, technical documentation, release note, changelog, status update,
-decision, request, or handoff, automatically spawn `alan_wake` for the final
-draft. First gather and verify the facts, audience, destination syntax, template,
-and desired action. For mixed engineering and writing work, finish and verify
-the engineering work before briefing `alan_wake`. Fact-check its draft before
-returning or applying it. Do not use it for ordinary conversational replies,
-exact transcription, code-only output, or when the user opts out. Drafting never
-authorizes posting, sending, publishing, or commenting externally.
-
-If the current thread is already `alan_wake`, the required prose route is
-satisfied. Draft directly and never spawn or delegate to another writing agent.
+Draft routine prose inline. Use the shared writing contract at
+`~/.claude/skills/engineering/references/writing.md` for brevity and output
+formatting; pass verified facts, URLs, audience, and template to an editor only
+when useful. Fact-check the result and correct mechanical link errors directly.
+Drafting never authorizes posting, sending, publishing, or commenting externally.
+An Alan Wake thread drafts directly and never delegates to another writer.
 
 Give every subagent one bounded objective, relevant context and paths,
 constraints, expected output, acceptance criteria, and required verification.
@@ -39,8 +33,7 @@ any worker without a stronger terminal contract of its own.
 
 Optional delegation must be cheaper than doing the work in the primary thread:
 a bounded brief to a scoped worker preserves controller context, while an
-unbounded or tightly coupled hand-off wastes it. This economics rule never
-overrides a mandatory route such as the `alan_wake` prose route.
+unbounded or tightly coupled hand-off wastes it. The user can explicitly request a specialist even for a small task.
 
 Treat worker results as evidence: the primary thread reviews them and performs
 final verification. Never delegate to a controller subagent. Codex has no primary

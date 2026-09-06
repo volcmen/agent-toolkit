@@ -279,6 +279,7 @@ PROJECT_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ("wiki", [sys.executable, "scripts/check.py"]),
     ("codex-pair", ["bash", "scripts/check.sh"]),
     ("chatgpt-consult", ["bun", "run", "check"]),
+    ("qwen-gsd", [sys.executable, "scripts/check.py"]),
     ("shared-agents", [sys.executable, "scripts/manage.py", "check"]),
 )
 

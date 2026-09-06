@@ -5,9 +5,9 @@
       "id": "gitlab-native-mr",
       "destination": "GitLab merge request comment in group/project",
       "prompt": "Rewrite for a GitLab MR comment in group/project: Review merge request !123 at the verified URL https://gitlab.example.com/group/project/-/merge_requests/123. Return only the comment.",
-      "expected_output": "Review !123.",
+      "expected_output": "Review [MR !123](https://gitlab.example.com/group/project/-/merge_requests/123).",
       "expectations": [
-        "Uses the native clickable !123 reference",
+        "Keeps the known URL as an explicit named link; native IDs alone do not preserve a supplied URL",
         "Does not append or expose the raw URL",
         "Does not add a second link or a Needs from you section",
         "Does not change the merge request identifier"
@@ -75,6 +75,48 @@
       "expectations": [
         "Keeps the useful label and raw URL",
         "Does not emit Markdown or Slack link syntax"
+      ]
+    },
+    {
+      "id": "slack-audience-chat-surface",
+      "destination": "Rendered chat draft for a Slack audience",
+      "prompt": "Shorten for Slack: Review MR !123 at https://gitlab.example.com/group/project/-/merge_requests/123. Return the draft here; no raw API payload.",
+      "expected_output": "👀 Review [MR !123](https://gitlab.example.com/group/project/-/merge_requests/123).",
+      "expectations": [
+        "Uses a rendered Markdown link in this chat",
+        "Does not output literal Slack API markup",
+        "One short sentence; emoji optional"
+      ]
+    },
+    {
+      "id": "preserve-uncertainty",
+      "destination": "Status reply",
+      "prompt": "Shorten: The patch is committed. CI is still running. We have not deployed it. Please review: https://gitlab.example.com/group/project/-/merge_requests/123",
+      "expected_output": "Patch committed; CI is running. Not deployed yet. Please review [MR !123](https://gitlab.example.com/group/project/-/merge_requests/123).",
+      "expectations": [
+        "Preserves all three distinct states",
+        "Does not claim fixed, tests passed, or deployed",
+        "No headings or repeated summary"
+      ]
+    },
+    {
+      "id": "adf-native-link",
+      "destination": "Jira ADF API comment body",
+      "prompt": "Return a Jira ADF document containing only: Review MR !123. Verified URL https://gitlab.example.com/group/project/-/merge_requests/123.",
+      "expected_output": "{\"version\":1,\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Review \"},{\"type\":\"text\",\"text\":\"MR !123\",\"marks\":[{\"type\":\"link\",\"attrs\":{\"href\":\"https://gitlab.example.com/group/project/-/merge_requests/123\"}}]},{\"type\":\"text\",\"text\":\".\"}]}]}",
+      "expectations": [
+        "Valid ADF doc with a link mark and exact href",
+        "No Markdown link syntax inside text nodes"
+      ]
+    },
+    {
+      "id": "long-required-template",
+      "destination": "GitLab MR template",
+      "prompt": "Draft an MR description from verified facts and an explicitly supplied long mandatory template. All fields and checklists must remain.",
+      "expected_output": "Preserve the mandatory template and all material evidence even when it exceeds the default length.",
+      "expectations": [
+        "User template wins over default word budget",
+        "Does not fill unknown fields with invented results or commitments"
       ]
     }
   ]

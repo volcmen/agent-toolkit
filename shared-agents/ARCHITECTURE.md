@@ -20,18 +20,19 @@ Fable controller        GPT-5.6 Sol controller
 Sonnet/Opus specialists GPT-5.6 Sol/Terra specialists
 (task-analyst, Explore,
  alan-wake, mr-review-fixer,
- gate — skill fork target)
+ gate — optional independent review)
 ```
 
 `agents.json` and `prompts/` render Claude Markdown into `claude/agents/`.
 `manage.py install` validates those sources and copies them as regular files to
 `~/.claude/agents/`. `Explore.md` intentionally overrides the built-in Explore
 agent and pins Sonnet. `mr-review-fixer` is Claude-only and carries project
-memory; `gate` is Claude-only with a four-tool allowlist and a 40-turn ceiling, the
-hard cost cap of the forked `mr-preflight` skill (its birth context is
-platform-fixed, so the ceiling and the minimal prompt are its value); `alan-wake` runs in plan permission mode with the mutating tools denied
-so connected read tools stay available. The project is not a plugin and has no
-plugin lifecycle.
+memory; `gate` is an optional independent reviewer with a four-tool allowlist
+and a 20-turn ceiling. `mr-preflight` runs inline and reuses valid evidence;
+it delegates only when an independent review is useful and not already present.
+Alan Wake uses Sonnet, plan permission mode, and Read/Grep/Glob only. Both its
+prompt and the primary thread use claude-core's shared writing contract.
+The project is not a plugin and has no plugin lifecycle.
 
 The Codex TOMLs, controller profile, and Codex policy remain source-controlled
 adapters for future use, but this project performs no Codex installation.
@@ -51,18 +52,14 @@ It does not install marketplace plugins or modify Codex configuration.
 
 ## Writing route
 
-Alan Wake is a draft-only Opus specialist at medium effort. The primary
-controller:
-
-1. establishes the artifact, audience, destination format, and desired action;
-2. gathers authoritative facts and verification evidence;
-3. delegates the final draft automatically;
-4. checks that the draft adds no unsupported facts, timing, ownership, or
-   commitments;
-5. returns or applies the text without publishing it externally.
-
-This route is intentionally excluded from ordinary chat, code-only output,
-exact transcription, and explicit opt-out.
+The primary controller drafts routine messages directly. It uses Alan Wake on
+Sonnet for explicit requests, substantial editing, delicate wording, or long
+text; Opus is reserved for writing judgment that warrants it. The shared
+writing contract defines small defaults, preserves evidence and templates,
+and selects links by the actual output surface. A Slack audience does not by
+itself request raw Slack API syntax. The parent checks facts and formatting;
+mechanical corrections do not require another agent round. Drafting never
+authorizes publishing.
 
 ## Safety and recovery
 
