@@ -1,7 +1,0 @@
-node_modules/
-web/node_modules/
-*.tsbuildinfo
-
-# `ab init .` creates a local runtime board here. Boards contain user cards,
-# machine-specific paths, session metadata, logs, leases, and scratch work.
-/board/

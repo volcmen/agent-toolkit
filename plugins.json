@@ -38,35 +38,6 @@
       }
     },
     {
-      "name": "agent-board",
-      "displayName": "Agent Board",
-      "source": "./agent-board/plugins/agent-board",
-      "version": "1.0.0",
-      "description": "Autonomous local Kanban for coding agents: markdown cards, souls/roles, local-first triage, capacity-safe dispatch, attachable sessions.",
-      "category": "Productivity",
-      "keywords": [
-        "kanban",
-        "orchestration",
-        "autonomous-agents",
-        "claude-code",
-        "codex"
-      ],
-      "license": "MIT",
-      "codex": {
-        "shortDescription": "Turn goals into routed Kanban cards that agents execute unattended.",
-        "longDescription": "Product-manager control of a local agent board: raw ideas are specified, split, and routed to role souls by a local-first triage model; a dispatcher runs codex/claude/local workers under atomic capacity controls; cards are markdown files you can edit by hand.",
-        "capabilities": [
-          "Read",
-          "Write"
-        ],
-        "defaultPrompt": [
-          "Put these goals on the board and route them.",
-          "What are my agents working on, and what did the board spend today?",
-          "This card keeps blocking \u2014 re-spec it and re-route it."
-        ]
-      }
-    },
-    {
       "name": "codex-pair",
       "displayName": "Codex Pair",
       "source": "./codex-pair/plugins/codex-pair",
@@ -122,6 +93,37 @@
           "Consult ChatGPT web about this decision using only the files I name.",
           "Ask my ChatGPT Project to review this diff and report the result.",
           "Continue the last ChatGPT consultation with this follow-up."
+        ]
+      }
+    },
+    {
+      "name": "qwen-gsd",
+      "displayName": "Qwen GSD",
+      "source": "./qwen-gsd/plugins/qwen-gsd",
+      "version": "1.0.0",
+      "description": "Economical Qwen-authored development slices with bounded orchestration, diff review, verification, and usage accounting.",
+      "category": "Developer Tools",
+      "keywords": [
+        "qwen",
+        "gsd",
+        "code-generation",
+        "orchestration",
+        "cost-control",
+        "claude-code",
+        "codex"
+      ],
+      "license": "MIT",
+      "codex": {
+        "shortDescription": "Bounded Qwen coding with review and cost telemetry.",
+        "longDescription": "Orchestrates economical, bounded development slices in which Qwen Code authors production and test changes while Codex or Claude Code scopes the work, reviews the diff, verifies the project, and records model, budget, failure, and usage evidence.",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "defaultPrompt": [
+          "Use Qwen to implement the next bounded GSD slice.",
+          "Have Qwen build this change while you review and verify it.",
+          "Implement this slice with Qwen and report its measured cost."
         ]
       }
     }

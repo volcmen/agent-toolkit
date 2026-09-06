@@ -28,8 +28,8 @@ Keep independent AI projects in clearly named top-level directories.
   both `claude plugin install` and `claude plugin update` no-op when the version
   is unchanged. `status` diffs each live copy against this checkout and exits
   nonzero on drift, so a missed `--force` fails loudly. If you do bump a version,
-  keep `agent-board/package.json` and the obsidian-memory manifests in step;
-  both projects assert parity. Note `wiki/scripts/update.py` runs a Codex
+  keep the obsidian-memory manifests in step; that project asserts parity. Note
+  `wiki/scripts/update.py` runs a Codex
   cachebuster that rewrites obsidian-memory's version — re-pin after using it.
 - Run `python3 wiki/scripts/check.py` after changes under `wiki/`.
 - Treat `python3 wiki/scripts/update.py` as a mutating release operation, not a

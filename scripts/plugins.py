@@ -277,7 +277,6 @@ def check_plugin(entry: dict[str, Any]) -> list[str]:
 # (project dir, command run from inside that dir)
 PROJECT_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ("wiki", [sys.executable, "scripts/check.py"]),
-    ("agent-board", ["bun", "run", "check"]),
     ("codex-pair", ["bash", "scripts/check.sh"]),
     ("chatgpt-consult", ["bun", "run", "check"]),
     ("shared-agents", [sys.executable, "scripts/manage.py", "check"]),
