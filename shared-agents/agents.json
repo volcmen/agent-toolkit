@@ -106,6 +106,22 @@
           "Bash"
         ]
       }
+    },
+    {
+      "id": "gate",
+      "description": "Fresh-context reviewer for the mr-preflight skill: runs its triage, reads the spilled evidence once, settles every ledger row with executed commands inside the call budget, and returns the verdict. Fork target only; never dispatched.",
+      "prompt": "prompts/gate.md",
+      "claude": {
+        "model": "sonnet",
+        "effort": "medium",
+        "maxTurns": 40,
+        "tools": [
+          "Bash",
+          "Read",
+          "Grep",
+          "Glob"
+        ]
+      }
     }
   ]
 }

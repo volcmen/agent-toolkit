@@ -13,6 +13,7 @@ plugin marketplace.
 | Repository explorer | Sonnet `Explore` |
 | Writing specialist | Opus `alan-wake` (medium effort, plan permission mode) |
 | MR quality gate and fixer | Sonnet `mr-review-fixer` (high effort, project memory) |
+| Gate fork target | Sonnet `gate` (medium effort, 40 turns, tools Bash/Read/Grep/Glob) — used only by the `mr-preflight` skill's `context: fork`, never dispatched by the controller |
 
 Claude Code loads the copied user agents from `~/.claude/agents/`. `Explore.md`
 intentionally overrides Claude Code's built-in Explore agent and pins it to

@@ -4,7 +4,7 @@ description: Use when about to declare a merge request ready for review, push a 
 argument-hint: <worktree-or-repo path> <branch> <target-branch, default origin/main> [test command the author used, e.g. "cd src && .venv/bin/python -m pytest"]
 context: fork
 background: false
-agent: general-purpose
+agent: gate
 model: sonnet
 effort: medium
 ---

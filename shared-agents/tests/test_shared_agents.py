@@ -144,7 +144,7 @@ class Rendering(unittest.TestCase):
             self.assertNotIn(forbidden, text)
 
     def test_rendered_agents_stay_within_size_budgets(self) -> None:
-        budgets = {"controller.md": 2800, "mr-review-fixer.md": 6000, "alan-wake.md": 14500}
+        budgets = {"controller.md": 2800, "mr-review-fixer.md": 6000, "alan-wake.md": 14500, "gate.md": 1000}
         for name, limit in budgets.items():
             self.assertLessEqual((ROOT / "claude" / "agents" / name).stat().st_size, limit, name)
 
@@ -156,7 +156,7 @@ class Rendering(unittest.TestCase):
                 self.assertNotIn(sentinel, text, f"{path.name}: {sentinel!r}")
 
     def test_claude_agents_render_to_standalone_source_directory(self) -> None:
-        expected = {"controller.md", "task-analyst.md", "Explore.md", "alan-wake.md", "mr-review-fixer.md"}
+        expected = {"controller.md", "task-analyst.md", "Explore.md", "alan-wake.md", "mr-review-fixer.md", "gate.md"}
         actual = {path.name for path in (ROOT / "claude" / "agents").glob("*.md")}
         self.assertEqual(actual, expected)
 
@@ -182,6 +182,27 @@ class Rendering(unittest.TestCase):
         self.assertEqual(by_id["mr-review-fixer"]["tools"], ["Read", "Grep", "Glob", "Edit", "Write", "Bash"])
         self.assertEqual(by_id["mr-review-fixer"]["memory"], "project")
         self.assertNotIn("skills", by_id["mr-review-fixer"])
+        self.assertEqual(by_id["gate"]["tools"], ["Bash", "Read", "Grep", "Glob"])
+        self.assertEqual(by_id["gate"]["maxTurns"], 40)
+        for absent in ("disallowedTools", "memory", "skills", "permissionMode"):
+            self.assertNotIn(absent, by_id["gate"])
+
+    def test_gate_is_the_fork_target_of_mr_preflight_and_not_a_specialist(self) -> None:
+        catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
+        gate = next(agent for agent in catalog if agent["id"] == "gate")
+        self.assertNotIn("codex", gate)
+        skill = (ROOT.parent / "claude-core" / "skills" / "mr-preflight" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("\nagent: gate\n", skill.split("---")[1])
+        self.assertIn("\ncontext: fork\n", skill.split("---")[1])
+        controller = (ROOT / "prompts" / "controller.md").read_text(encoding="utf-8")
+        self.assertNotIn("`gate`", controller)
+        self.assertNotIn("gate on Sonnet", controller)
+        rendered = (ROOT / "claude" / "agents" / "gate.md").read_text(encoding="utf-8")
+        self.assertIn("\nmodel: sonnet\n", rendered)
+        self.assertIn("\neffort: medium\n", rendered)
+        self.assertIn("\nmaxTurns: 40\n", rendered)
+        self.assertIn("\ntools: Bash, Read, Grep, Glob\n", rendered)
+        self.assertIn("Never install a dependency, create an environment, or build", rendered)
 
 
 class ClaudeRoutingSurfaces(unittest.TestCase):
@@ -319,6 +340,7 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
             "repo-explorer": "sonnet",
             "task-analyst": "sonnet",
             "mr-review-fixer": "sonnet",
+            "gate": "sonnet",
         }
         for agent in catalog:
             self.assertEqual(agent["claude"]["model"], expected[agent["id"]], agent["id"])
@@ -484,6 +506,11 @@ class Package(unittest.TestCase):
                 "decisions; requests; and handoffs. Resolves verified links, uses "
                 "destination-native formatting, and returns one compact ready-to-paste "
                 "artifact. Never implements, sends, posts, or publishes."
+            ),
+            "gate": (
+                "Fresh-context reviewer for the mr-preflight skill: runs its triage, reads the "
+                "spilled evidence once, settles every ledger row with executed commands inside "
+                "the call budget, and returns the verdict. Fork target only; never dispatched."
             ),
             "mr-review-fixer": (
                 "Independently reviews and improves a GitLab merge request before human "

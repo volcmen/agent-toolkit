@@ -141,7 +141,7 @@ def package_problems() -> list[str]:
     if result.returncode:
         problems.append("provider files have render drift; run `python3 scripts/render.py`")
 
-    expected_claude = {"controller.md", "task-analyst.md", "Explore.md", "alan-wake.md", "mr-review-fixer.md"}
+    expected_claude = {"controller.md", "task-analyst.md", "Explore.md", "alan-wake.md", "mr-review-fixer.md", "gate.md"}
     actual_claude = {path.name for path in claude_agent_sources()}
     if actual_claude != expected_claude:
         problems.append(
@@ -159,9 +159,9 @@ def package_problems() -> list[str]:
     except (OSError, json.JSONDecodeError) as exc:
         return [f"agents.json: {exc}"]
     by_id = {agent["id"]: agent for agent in catalog.get("agents", [])}
-    if set(by_id) != {"controller", "alan-wake", "repo-explorer", "task-analyst", "mr-review-fixer"}:
+    if set(by_id) != {"controller", "alan-wake", "repo-explorer", "task-analyst", "mr-review-fixer", "gate"}:
         problems.append(
-            "agents.json must define controller, alan-wake, repo-explorer, task-analyst, and mr-review-fixer"
+            "agents.json must define controller, alan-wake, repo-explorer, task-analyst, mr-review-fixer, and gate"
         )
     if by_id.get("controller", {}).get("codex"):
         problems.append(
@@ -171,7 +171,7 @@ def package_problems() -> list[str]:
         problems.append("Claude controller must use fable")
     if by_id.get("alan-wake", {}).get("claude", {}).get("model") != "opus":
         problems.append("Claude alan-wake must use opus")
-    for agent_id in ("repo-explorer", "task-analyst", "mr-review-fixer"):
+    for agent_id in ("repo-explorer", "task-analyst", "mr-review-fixer", "gate"):
         if by_id.get(agent_id, {}).get("claude", {}).get("model") != "sonnet":
             problems.append(f"Claude {agent_id} must use sonnet")
 
@@ -275,7 +275,7 @@ def cmd_status(_: argparse.Namespace) -> int:
     for problem in problems:
         print(f"  - {problem}")
     if not problems:
-        print("  Claude: controller + 4 standalone agents")
+        print("  Claude: controller + 5 standalone agents")
     return 1 if problems else 0
 
 
