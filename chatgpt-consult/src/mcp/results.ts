@@ -18,9 +18,41 @@ const safeMessages: Record<ConsultErrorCode, string> = {
 const MAX_REPORTED_ISSUES = 5;
 const MAX_ISSUE_KEYS = 5;
 const MAX_ISSUE_LABEL_LENGTH = 100;
+const MAX_PATTERN_LENGTH = 48;
+const MAX_RULE_LENGTH = 80;
 
 const issuePath = (issue: z.core.$ZodIssue): string =>
   issue.path.length ? issue.path.map(String).join(".") : "(root)";
+
+const receivedType = (issue: z.core.$ZodIssue): string => {
+  const match = /received (\w+)$/.exec(issue.message ?? "");
+  return match ? `, received ${match[1]}` : "";
+};
+
+const issueDetail = (issue: z.core.$ZodIssue): string => {
+  if (issue.code === "invalid_type") {
+    return `expected ${issue.expected}${receivedType(issue)}`;
+  }
+  if (issue.code === "invalid_value") {
+    const options = issue.values.slice(0, MAX_ISSUE_KEYS)
+      .map((value) => compactText(String(value), 40));
+    const remaining = issue.values.length - options.length;
+    return `expected one of ${options.join(" | ")}${remaining > 0 ? ` (+${remaining} more)` : ""}`;
+  }
+  if (issue.code === "too_small") {
+    return `expected ${issue.origin} >= ${String(issue.minimum)}`;
+  }
+  if (issue.code === "too_big") {
+    return `expected ${issue.origin} <= ${String(issue.maximum)}`;
+  }
+  if (issue.code === "invalid_format") {
+    const pattern = "pattern" in issue && typeof issue.pattern === "string" ? issue.pattern : "";
+    if (pattern && pattern.length <= MAX_PATTERN_LENGTH) return `expected ${issue.format} ${pattern}`;
+    const rule = issue.message && pattern && !issue.message.includes(pattern) ? issue.message : "";
+    return rule ? `expected ${compactText(rule, MAX_RULE_LENGTH)}` : `expected ${issue.format}`;
+  }
+  return issue.code;
+};
 
 const issueLabel = (issue: z.core.$ZodIssue): string => {
   const path = issuePath(issue);
@@ -31,7 +63,7 @@ const issueLabel = (issue: z.core.$ZodIssue): string => {
     const keySuffix = remainingKeys > 0 ? `, +${remainingKeys} more` : "";
     return `${path}: unrecognized_keys [${keyList}${keySuffix}]`;
   }
-  return `${path}: ${issue.code}`;
+  return `${path}: ${issueDetail(issue)}`;
 };
 
 const describeValidationIssues = (issues: readonly z.core.$ZodIssue[]): string => {
@@ -54,7 +86,7 @@ export const browserRecoveryInstruction = (
 ): string | null => {
   if (phase === "needs_login") {
     return "No browser worker is running for this request; it will not resume on its own. "
-      + "Run setup browser, sign in directly, then run open or poll consult_status.";
+      + "Run setup browser, sign in directly, then run open and wait with consult_status.";
   }
   if (phase === "needs_manual") {
     if (submissionCertainty === "uncertain") {
@@ -62,7 +94,7 @@ export const browserRecoveryInstruction = (
         + "Use manual handoff/import-result for recovery.";
     }
     return "No browser worker is running for this request; it will not resume on its own. "
-      + "Run open to resume automatically, then poll consult_status; "
+      + "Run open to resume automatically, then wait with consult_status; "
       + "if that does not help, use manual handoff/import-result.";
   }
   return null;

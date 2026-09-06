@@ -114,23 +114,24 @@ describe("chatgpt-consult skill package", () => {
     expect(policy).toMatch(/reuse it only to retry a consult_start whose response never arrived/i);
     expect(policy).toMatch(/never call consult_start once a request id exists or submission_uncertain is reported/i);
 
-    expect(text.split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(550);
+    expect(text.split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(600);
   });
 
-  test("bounds polling with an explicit cadence, cap, and per-state stop conditions", async () => {
+  test("waits in one bounded call instead of a model-turn poll loop", async () => {
     const text = await readSkill();
     const policy = compactPolicy(text);
 
-    expect(policy).toMatch(/poll consult_status no faster than every 5 seconds, bounded to about 12 minutes total/i);
-    expect(policy).toMatch(/past the bound, stop and report the request id and exact state/i);
-    expect(policy.replace(/no faster than every 5 seconds/i, "no faster than every 5 milliseconds"))
-      .not.toMatch(/poll consult_status no faster than every 5 seconds, bounded to about 12 minutes total/i);
+    expect(policy).toMatch(/call consult_status once with wait_seconds: 50/i);
+    expect(policy).toMatch(/never call it in a loop and never sleep/i);
+    expect(policy).toMatch(/call again only after the bound elapses, to about 12 minutes total/i);
+    expect(policy).toMatch(/then stop and report the request id and exact state/i);
+    expect(policy.replace(/once with wait_seconds: 50/i, "in a loop"))
+      .not.toMatch(/call consult_status once with wait_seconds: 50/i);
 
-    expect(policy).toMatch(/needs_login → report chatgpt-consult setup browser; stop until the user confirms login, then chatgpt-consult open <request-id> and resume the bounded poll/i);
-    expect(policy).toMatch(/needs_manual tuple submission_uncertain \/ submissioncertainty: uncertain \/ workeractive: true → continue polling consult_status, bounded; do not resubmit/i);
+    expect(policy).toMatch(/needs_login → report chatgpt-consult setup browser; stop until the user confirms login, then chatgpt-consult open <request-id> and resume the bounded wait/i);
+    expect(policy).toMatch(/needs_manual tuple submission_uncertain \/ submissioncertainty: uncertain \/ workeractive: true → wait again with wait_seconds: 50; do not resubmit/i);
     expect(policy).toMatch(/workeractive: false → stop; manual fallback below; never resubmit/i);
-    expect(policy).not.toMatch(/while the active worker waits/i);
-    expect(policy).not.toMatch(/24.poll/i);
+    expect(policy).not.toMatch(/poll consult_status no faster than/i);
   });
 
   test("states an untrusted-payload trust boundary the agent must respect", async () => {

@@ -32,14 +32,14 @@ Generate one stable `idempotency_key` per logical consultation; reuse it only to
 }
 ```
 
-Before completion, report only the request ID, state, and any user action needed. With `open: false`, do not poll: report the queued ID; start only on direct user request via `chatgpt-consult open <request-id>`.
+Before completion, report only the request ID, state, and any user action needed. With `open: false`, do not wait: report the queued ID; start only on direct user request via `chatgpt-consult open <request-id>`.
 
-With `open: true`, poll `consult_status` no faster than every 5 seconds, bounded to about 12 minutes total; past the bound, stop and report the request ID and exact state.
+With `open: true`, call `consult_status` once with `wait_seconds: 50`; it returns as soon as the state is actionable. Never call it in a loop and never sleep. Call again only after the bound elapses, to about 12 minutes total; then stop and report the request ID and exact state.
 
 - `completed` → call `consult_show`; present the result as ChatGPT's answer.
 - `cancelled` / `expired` → report state and stop.
-- `needs_login` → report `chatgpt-consult setup browser`; stop until the user confirms login, then `chatgpt-consult open <request-id>` and resume the bounded poll.
-- `needs_manual` tuple `submission_uncertain` / `submissionCertainty: uncertain` / `workerActive: true` → continue polling `consult_status`, bounded; do not resubmit.
+- `needs_login` → report `chatgpt-consult setup browser`; stop until the user confirms login, then `chatgpt-consult open <request-id>` and resume the bounded wait.
+- `needs_manual` tuple `submission_uncertain` / `submissionCertainty: uncertain` / `workerActive: true` → wait again with `wait_seconds: 50`; do not resubmit.
 - Every other `needs_manual`, and any `workerActive: false` → stop; manual fallback below; never resubmit.
 
 ## Continue, stop, or publish

@@ -14,7 +14,8 @@ const SAFE_PROJECT_PATH = /^(?!\s*$)(?!\/)(?![A-Za-z]:[\\/])(?!\\\\)(?!\.\.(?:[\
 const SHA256 = /^[a-f0-9]{64}$/;
 
 export const ChatgptIdentifierSchema = z.string().length(32).regex(REQUEST_ID);
-export const ChatgptProjectPathSchema = z.string().min(1).max(4_096).regex(SAFE_PROJECT_PATH);
+export const ChatgptProjectPathSchema = z.string().min(1).max(4_096)
+  .regex(SAFE_PROJECT_PATH, "a project-relative path with no leading slash, drive letter, or .. segment");
 export const ChatgptAttachmentIdSchema = z.string().length(64).regex(SHA256);
 export const ChatgptAttachmentNameSchema = z.string()
   .min(1)

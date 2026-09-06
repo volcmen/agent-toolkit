@@ -1,7 +1,8 @@
 import { McpServer, type McpServerFactory } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod/v4";
-import type { ConsultationService } from "../core/service";
+import { MAX_STATUS_WAIT_SECONDS } from "../core/service";
+import type { ConsultationService, WaitStatusResult } from "../core/service";
 import { resolveRequestedProfile } from "../core/schema";
 import {
   browserRecoveryInstruction,
@@ -12,7 +13,7 @@ import {
   successResult,
 } from "./results";
 
-const INSTRUCTIONS = "Consultations are asynchronous: poll consult_status until completion or recovery. On needs_login run setup browser. Within needs_manual, only reason submission_uncertain, submission certainty uncertain, and workerActive true may poll consult_status. Every other recovery tuple uses manual handoff/import-result and must never be resubmitted. Use consult_show after completion; publication requires explicit user intent.";
+const INSTRUCTIONS = "Consultations are asynchronous: call consult_status with wait_seconds to block until the state is actionable, and call it again only after the bound elapses. On needs_login run setup browser. Within needs_manual, only reason submission_uncertain, submission certainty uncertain, and workerActive true may wait again. Every other recovery tuple uses manual handoff/import-result and must never be resubmitted. Use consult_show after completion; publication requires explicit user intent.";
 
 const ProfileSchema = z.enum(["lean", "research", "analysis", "connected"]);
 const StateSchema = z.enum(["pending", "claimed", "completed", "cancelled", "expired"]);
@@ -20,7 +21,8 @@ const REQUEST_ID = /^[a-f0-9]{32}$/;
 const SAFE_IDEMPOTENCY_KEY = /^[A-Za-z0-9._:-]{1,128}$/;
 const SAFE_PROJECT_PATH = /^(?!\s*$)(?!\/)(?![A-Za-z]:[\\/])(?!\\\\)(?!\.\.(?:[\\/]|$))(?!.*[\\/]\.\.(?:[\\/]|$))[^\0]+$/;
 const IdentifierSchema = z.string().length(32).regex(REQUEST_ID);
-const ProjectPathSchema = z.string().min(1).max(4_096).regex(SAFE_PROJECT_PATH);
+const ProjectPathSchema = z.string().min(1).max(4_096)
+  .regex(SAFE_PROJECT_PATH, "a project-relative path with no leading slash, drive letter, or .. segment");
 const GoalSchema = z.string().min(1).max(8_192).regex(/\S/);
 const ConnectorSchema = z.string().min(1).max(128).regex(/\S/);
 const BrowserStatusSchema = z.object({
@@ -66,6 +68,10 @@ const FollowupInputSchema = z.object({
 }).strict();
 
 const RequestInputSchema = z.object({ request_id: IdentifierSchema }).strict();
+const StatusInputSchema = z.object({
+  request_id: IdentifierSchema,
+  wait_seconds: z.number().int().min(0).max(MAX_STATUS_WAIT_SECONDS).default(0),
+}).strict();
 const PublishInputSchema = z.object({
   request_id: IdentifierSchema,
   output: ProjectPathSchema.optional(),
@@ -112,6 +118,7 @@ const PublishOutputSchema = z.object({ path: ProjectPathSchema }).strict();
 const startInput = handlerValidatedInput(StartInputSchema);
 const followupInput = handlerValidatedInput(FollowupInputSchema);
 const requestInput = handlerValidatedInput(RequestInputSchema);
+const statusInput = handlerValidatedInput(StatusInputSchema);
 const publishInput = handlerValidatedInput(PublishInputSchema);
 
 const isActiveSubmissionConfirmation = (
@@ -127,36 +134,56 @@ const hasUnsafeUncertainMismatch = (
   && (browser.reason === "submission_uncertain"
     || browser.submissionCertainty === "uncertain");
 
+const isTerminal = (state: z.output<typeof StateSchema>): boolean =>
+  state === "cancelled" || state === "expired";
+
 const progressText = (
   kind: "Consultation" | "Follow-up",
   result: z.output<typeof StartOutputSchema>,
 ): string => {
   const prefix = `${kind} ${result.requestId} is ${result.state}.`;
   if (result.state === "completed") return `${prefix} Use consult_show to review the validated result.`;
+  if (isTerminal(result.state)) return `${prefix} It cannot be resumed; start a new consultation if the work is still needed.`;
   if (isActiveSubmissionConfirmation(result.browser)) {
-    return `${prefix} The active worker is confirming submission; poll consult_status and do not resubmit.`;
+    return `${prefix} The active worker is confirming submission; call consult_status with wait_seconds and do not resubmit.`;
   }
   if (hasUnsafeUncertainMismatch(result.browser)) {
     return `${prefix} Use manual handoff/import-result for recovery; never resubmit uncertain work.`;
   }
   const recovery = browserRecoveryInstruction(result.browser?.phase, result.browser?.submissionCertainty);
   if (recovery) return `${prefix} ${recovery}`;
-  if (result.browser) return `${prefix} Automatic browser work is ${result.browser.phase}; poll consult_status.`;
-  return `${prefix} Use the returned handoff, then poll consult_status.`;
+  if (result.browser && !result.browser.workerActive) {
+    return `${prefix} Automatic browser work is ${result.browser.phase} but no worker is running; waiting will not advance it. Run open to resume, or use manual handoff/import-result.`;
+  }
+  if (result.browser) return `${prefix} Automatic browser work is ${result.browser.phase}; call consult_status with wait_seconds.`;
+  return `${prefix} Use the returned handoff; no worker is running, so waiting will not advance it.`;
+};
+
+const waitText = (waited: WaitStatusResult): string => {
+  if (waited.outcome === "snapshot") return "";
+  if (waited.outcome === "actionable") {
+    return ` Waited ${waited.waitedSeconds}s for an actionable state.`;
+  }
+  if (waited.outcome === "aborted") return " The wait was cancelled by the caller.";
+  return ` Still running after ${waited.waitedSeconds}s; call consult_status again with wait_seconds to keep waiting.`;
 };
 
 const statusText = (result: z.output<typeof StatusOutputSchema>): string => {
   const prefix = `Consultation ${result.requestId} is ${result.state} at revision ${result.revision}.`;
   if (result.state === "completed") return `${prefix} Use consult_show to review the validated result.`;
+  if (isTerminal(result.state)) return `${prefix} It cannot be resumed; start a new consultation if the work is still needed.`;
   if (isActiveSubmissionConfirmation(result.browser)) {
-    return `${prefix} The active worker is confirming submission; poll consult_status and do not resubmit.`;
+    return `${prefix} The active worker is confirming submission; call consult_status with wait_seconds and do not resubmit.`;
   }
   if (hasUnsafeUncertainMismatch(result.browser)) {
     return `${prefix} Use manual handoff/import-result for recovery; never resubmit uncertain work.`;
   }
   const recovery = browserRecoveryInstruction(result.browser?.phase, result.browser?.submissionCertainty);
   if (recovery) return `${prefix} ${recovery}`;
-  if (result.browser) return `${prefix} Browser work is ${result.browser.phase}; poll consult_status.`;
+  if (result.browser && !result.browser.workerActive) {
+    return `${prefix} Browser work is ${result.browser.phase} but no worker is running; waiting will not advance it. Run open to resume, or use manual handoff/import-result.`;
+  }
+  if (result.browser) return `${prefix} Browser work is ${result.browser.phase}; call consult_status with wait_seconds.`;
   return prefix;
 };
 
@@ -203,8 +230,8 @@ export const createLocalMcp = (
 
   server.registerTool("consult_status", {
     title: "Consultation status",
-    description: "Poll compact consultation state and completion summary.",
-    inputSchema: requestInput,
+    description: "Read consultation state, optionally waiting up to wait_seconds for an actionable state.",
+    inputSchema: statusInput,
     outputSchema: StatusOutputSchema,
     annotations: {
       readOnlyHint: true,
@@ -212,13 +239,15 @@ export const createLocalMcp = (
       idempotentHint: true,
       openWorldHint: false,
     },
-  }, (raw) => runTool(async () => {
-    const input = parseToolInput(RequestInputSchema, raw);
-    const value = await service.status(input.request_id);
+  }, (raw, extra) => runTool(async () => {
+    const input = parseToolInput(StatusInputSchema, raw);
+    const waited: WaitStatusResult = input.wait_seconds === 0
+      ? { status: await service.status(input.request_id), outcome: "snapshot", waitedSeconds: 0 }
+      : await service.waitStatus(input.request_id, input.wait_seconds, extra?.mcpReq?.signal);
     return successResult(
       StatusOutputSchema,
-      value,
-      statusText,
+      waited.status,
+      (value) => `${statusText(value)}${waitText(waited)}`,
     );
   }));
 

@@ -176,7 +176,7 @@ const inspectCandidate = async (
   const resolved = await resolveProjectPath(project, path);
   const mimeType = mimeTypeForPath(resolved.absolutePath);
   if (!textMime(mimeType)) {
-    throw new ConsultError("INVALID_INPUT", "Binary project files must be added as attachments");
+    throw binaryContextError([resolved.relative]);
   }
   const snapshot = await readStableProjectFile(
     project,
@@ -209,6 +209,18 @@ const inspectCandidate = async (
   };
 };
 
+const MAX_REPORTED_BINARY_PATHS = 5;
+
+const binaryContextError = (paths: readonly string[]): ConsultError => {
+  const shown = paths.slice(0, MAX_REPORTED_BINARY_PATHS);
+  const remaining = paths.length - shown.length;
+  const suffix = remaining > 0 ? ` (+${remaining} more)` : "";
+  return new ConsultError(
+    "INVALID_INPUT",
+    `Binary project files must move from files to attachments: ${shown.join(", ")}${suffix}`,
+  );
+};
+
 const explicitEntries = async (
   project: ResolvedProject,
   input: BuildContextInput,
@@ -237,6 +249,12 @@ const explicitEntries = async (
     }
   }
   const paths = [...reasons.keys()].sort(bytewise);
+  const binary: string[] = [];
+  for (const path of paths) {
+    const resolved = await resolveProjectPath(project, path);
+    if (!textMime(mimeTypeForPath(resolved.absolutePath))) binary.push(resolved.relative);
+  }
+  if (binary.length > 0) throw binaryContextError(binary);
   const entries = await Promise.all(paths.map((path) => inspectCandidate(
     project,
     path,

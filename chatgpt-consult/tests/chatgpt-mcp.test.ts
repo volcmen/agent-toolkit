@@ -468,32 +468,32 @@ describe("ChatGPT MCP", () => {
         {
           name: "request_get",
           arguments: { request_id: "0".repeat(31), claim_token: "A".repeat(43) },
-          expected: "request_id: too_small; request_id: invalid_format",
+          expected: "request_id: expected string >= 32; request_id: expected regex /^[a-f0-9]{32}$/",
         },
         {
           name: "context_search",
           arguments: { request_id: "0".repeat(32), claim_token: "A".repeat(43), query: " " },
-          expected: "query: invalid_format",
+          expected: "query: expected regex /\\S/",
         },
         {
           name: "context_read",
           arguments: { request_id: "0".repeat(32), claim_token: "A".repeat(43), path: "../secret" },
-          expected: "path: invalid_format",
+          expected: "path: expected a project-relative path with no leading slash, drive letter, or .. segment",
         },
         {
           name: "diff_get",
           arguments: { request_id: "0".repeat(32), claim_token: "A".repeat(42) },
-          expected: "claim_token: too_small; claim_token: invalid_format",
+          expected: "claim_token: expected string >= 43; claim_token: expected regex /^[A-Za-z0-9_-]{43}$/",
         },
         {
           name: "attachment_get",
           arguments: { request_id: "0".repeat(32), claim_token: "A".repeat(43), attachment_id: "nope" },
-          expected: "attachment_id: too_small; attachment_id: invalid_format",
+          expected: "attachment_id: expected string >= 64; attachment_id: expected regex /^[a-f0-9]{64}$/",
         },
         {
           name: "request_complete",
           arguments: { request_id: "0".repeat(32), claim_token: "A".repeat(43), expected_revision: -1, completion },
-          expected: "expected_revision: too_small",
+          expected: "expected_revision: expected number >= 0",
         },
       ];
       for (const { expected, ...input } of cases) {
@@ -832,7 +832,7 @@ describe("ChatGPT MCP", () => {
       });
       expect(structured(invalid)).toEqual(safeError(
         "INVALID_INPUT",
-        "The request is invalid. completion.answer: too_small; completion: unrecognized_keys [extra]",
+        "The request is invalid. completion.answer: expected string >= 1; completion: unrecognized_keys [extra]",
       ));
       expect(JSON.stringify(invalid)).not.toContain("private marker");
       expect(await fixture.store.getCompletion(invalidStarted.requestId)).toBeNull();
