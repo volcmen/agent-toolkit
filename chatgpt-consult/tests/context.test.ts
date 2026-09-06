@@ -352,6 +352,40 @@ describe("bounded context selection", () => {
     });
   });
 
+  test("names every binary selection and directs the caller to attachments", async () => {
+    const { root, context } = await makeFixture();
+    await writeFile(join(root, "diagram.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    await writeFile(join(root, "report.pdf"), Buffer.from([0x25, 0x50, 0x44, 0x46]));
+    await writeFile(join(root, "notes.ts"), "export const notes = 1;\n");
+
+    await expect(context.build({
+      goal: "Review the assets",
+      files: ["diagram.png", "report.pdf", "notes.ts"],
+      smart: false,
+      allowSensitive: false,
+    })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      message: "Binary project files must move from files to attachments: diagram.png, report.pdf",
+    });
+  });
+
+  test("caps the reported binary selections and counts the rest", async () => {
+    const { root, context } = await makeFixture();
+    const names = ["a", "b", "c", "d", "e", "f", "g"].map((name) => `${name}.png`);
+    for (const name of names) await writeFile(join(root, name), Buffer.from([0x89, 0x50]));
+
+    await expect(context.build({
+      goal: "Review the assets",
+      files: names,
+      smart: false,
+      allowSensitive: false,
+    })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+      message: "Binary project files must move from files to attachments: "
+        + "a.png, b.png, c.png, d.png, e.png (+2 more)",
+    });
+  });
+
   test("rejects an explicit symlink that escapes the project", async () => {
     const { fixture, root, context } = await makeFixture();
     const outside = join(fixture, "outside.ts");

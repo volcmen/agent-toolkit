@@ -8,6 +8,7 @@ import {
   ConsultationService,
   type BrowserStatus,
   type BrowserWorkerLauncher,
+  type StatusResult,
 } from "../src/core/service";
 import { RequestStore } from "../src/core/store";
 import { createLocalMcp } from "../src/mcp/local";
@@ -206,9 +207,9 @@ describe("local MCP", () => {
       const instructions = client.getInstructions() ?? "";
       expect(instructions.length).toBeLessThanOrEqual(512);
       expect(instructions.toLowerCase()).toContain("asynchronous");
-      expect(instructions.toLowerCase()).toContain("poll consult_status");
+      expect(instructions.toLowerCase()).toContain("call consult_status with wait_seconds");
       expect(instructions).toMatch(
-        /needs_manual[^.]+submission_uncertain[^.]+submission certainty uncertain[^.]+workerActive true[^.]+poll consult_status/i,
+        /needs_manual[^.]+submission_uncertain[^.]+submission certainty uncertain[^.]+workerActive true[^.]+wait again/i,
       );
       expect(instructions).toMatch(/needs_login[^.]+setup browser/i);
       expect(instructions).toMatch(/every other recovery tuple[^.]+manual handoff\/import-result/i);
@@ -479,7 +480,7 @@ describe("local MCP", () => {
       expect(startValue).toMatchObject({ state: "pending", revision: 0 });
       expect(started.content).toEqual([{
         type: "text",
-        text: `Consultation ${startValue.requestId} is pending. Use the returned handoff, then poll consult_status.`,
+        text: `Consultation ${startValue.requestId} is pending. Use the returned handoff; no worker is running, so waiting will not advance it.`,
       }]);
       const requestId = startValue.requestId as string;
       const claimToken = startValue.claimToken as string;
@@ -573,7 +574,7 @@ describe("local MCP", () => {
       });
       expect(started.content[0]).toMatchObject({
         type: "text",
-        text: expect.stringContaining("poll consult_status"),
+        text: expect.stringContaining("no worker is running; waiting will not advance it"),
       });
       const requestId = startValue.requestId as string;
       expect(launched).toEqual([requestId]);
@@ -669,7 +670,7 @@ describe("local MCP", () => {
       });
       expect(active.content[0]).toMatchObject({
         type: "text",
-        text: expect.stringContaining("poll consult_status"),
+        text: expect.stringContaining("call consult_status with wait_seconds"),
       });
 
       now = new Date(fixedTime.getTime() + 30_001);
@@ -747,13 +748,13 @@ describe("local MCP", () => {
         browser = mismatch;
         for (const text of await guidance()) {
           expect(text).toContain("manual handoff/import-result");
-          expect(text).not.toContain("poll consult_status");
+          expect(text).not.toContain("call consult_status with wait_seconds");
         }
       }
 
       browser = exact;
       for (const text of await guidance()) {
-        expect(text).toContain("poll consult_status");
+        expect(text).toContain("call consult_status with wait_seconds");
         expect(text).toContain("do not resubmit");
       }
     } finally {
@@ -813,14 +814,14 @@ describe("local MCP", () => {
       });
       expect(invalid.isError).toBe(true);
       expect(structured(invalid)).toEqual({
-        error: { code: "INVALID_INPUT", message: "The request is invalid. profile: invalid_value" },
+        error: { code: "INVALID_INPUT", message: "The request is invalid. profile: expected one of lean | research | analysis | connected" },
       });
       expect(invalid.content).toEqual([{
         type: "text",
-        text: "INVALID_INPUT: The request is invalid. profile: invalid_value",
+        text: "INVALID_INPUT: The request is invalid. profile: expected one of lean | research | analysis | connected",
       }]);
       expect(JSON.stringify(invalid)).not.toContain(marker);
-      expect(JSON.stringify(invalid).length).toBeLessThan(300);
+      expect(JSON.stringify(invalid).length).toBeLessThan(400);
 
       const missing = await client.callTool({
         name: "consult_status",
@@ -853,41 +854,41 @@ describe("local MCP", () => {
     const { client, server } = await connect(fake);
     try {
       const cases = [
-        { name: "consult_start", arguments: { goal: "   " }, expected: "goal: invalid_format" },
+        { name: "consult_start", arguments: { goal: "   " }, expected: "goal: expected regex /\\S/" },
         {
           name: "consult_start",
           arguments: { goal: "Review", connectors: ["  "] },
-          expected: "connectors.0: invalid_format",
+          expected: "connectors.0: expected regex /\\S/",
         },
         {
           name: "consult_start",
           arguments: { goal: "Review", idempotency_key: "bad key" },
-          expected: "idempotency_key: invalid_format",
+          expected: "idempotency_key: expected regex /^[A-Za-z0-9._:-]{1,128}$/",
         },
         {
           name: "consult_start",
           arguments: { goal: "Review", files: ["../secret"] },
-          expected: "files.0: invalid_format",
+          expected: "files.0: expected a project-relative path with no leading slash, drive letter, or .. segment",
         },
         {
           name: "consult_start",
           arguments: { goal: "Review", files: ["   "] },
-          expected: "files.0: invalid_format",
+          expected: "files.0: expected a project-relative path with no leading slash, drive letter, or .. segment",
         },
         {
           name: "consult_start",
           arguments: { goal: "Review", files: ["src/que\0ue.ts"] },
-          expected: "files.0: invalid_format",
+          expected: "files.0: expected a project-relative path with no leading slash, drive letter, or .. segment",
         },
         {
           name: "consult_start",
           arguments: { goal: "Review", files: ["C:\\private.txt"] },
-          expected: "files.0: invalid_format",
+          expected: "files.0: expected a project-relative path with no leading slash, drive letter, or .. segment",
         },
         {
           name: "consult_start",
           arguments: { goal: "Review", attachments: ["/tmp/image.png"] },
-          expected: "attachments.0: invalid_format",
+          expected: "attachments.0: expected a project-relative path with no leading slash, drive letter, or .. segment",
         },
         {
           name: "consult_start",
@@ -897,17 +898,17 @@ describe("local MCP", () => {
         {
           name: "consult_status",
           arguments: { request_id: "missing-request" },
-          expected: "request_id: too_small; request_id: invalid_format",
+          expected: "request_id: expected string >= 32; request_id: expected regex /^[a-f0-9]{32}$/",
         },
         {
           name: "consult_followup",
           arguments: { parent_id: "A".repeat(32), goal: "Review" },
-          expected: "parent_id: invalid_format",
+          expected: "parent_id: expected regex /^[a-f0-9]{32}$/",
         },
         {
           name: "consult_publish",
           arguments: { request_id: "0".repeat(32), output: "docs/../escaped.md" },
-          expected: "output: invalid_format",
+          expected: "output: expected a project-relative path with no leading slash, drive letter, or .. segment",
         },
       ];
       for (const { expected, ...input } of cases) {
@@ -926,10 +927,10 @@ describe("local MCP", () => {
   });
 
   test.each([
-    ["diff: false", { diff: false }, "diff: invalid_value"],
-    ["smart: \"true\"", { smart: "true" }, "smart: invalid_type"],
-    ["files as a bare string", { files: "tsconfig.json" }, "files: invalid_type"],
-    ["idempotency_key with whitespace", { idempotency_key: "a b" }, "idempotency_key: invalid_format"],
+    ["diff: false", { diff: false }, "diff: expected one of working | none"],
+    ["smart: \"true\"", { smart: "true" }, "smart: expected boolean, received string"],
+    ["files as a bare string", { files: "tsconfig.json" }, "files: expected array, received string"],
+    ["idempotency_key with whitespace", { idempotency_key: "a b" }, "idempotency_key: expected regex /^[A-Za-z0-9._:-]{1,128}$/"],
   ])("names the offending field for %s", async (_name, extra, expected) => {
     const { service } = await makeFixture();
     const { client, server } = await connect(service);
@@ -988,7 +989,7 @@ describe("local MCP", () => {
       expect(serialized).not.toContain(secretValue);
       expect(serialized).not.toContain(distinctivePath);
       expect(structured(result)).toEqual({
-        error: { code: "INVALID_INPUT", message: "The request is invalid. profile: invalid_value" },
+        error: { code: "INVALID_INPUT", message: "The request is invalid. profile: expected one of lean | research | analysis | connected" },
       });
     } finally {
       await client.close();
@@ -1019,11 +1020,14 @@ describe("local MCP", () => {
       expect(structured(result)).toEqual({
         error: {
           code: "INVALID_INPUT",
-          message: "The request is invalid. goal: invalid_type; profile: invalid_value; "
-            + "files: invalid_type; smart: invalid_type; attachments: invalid_type (+5 more)",
+          message: "The request is invalid. goal: expected string, received number; "
+            + "profile: expected one of lean | research | analysis | connected; "
+            + "files: expected array, received number; "
+            + "smart: expected boolean, received number; "
+            + "attachments: expected array, received number (+5 more)",
         },
       });
-      expect(JSON.stringify(result).length).toBeLessThan(600);
+      expect(JSON.stringify(result).length).toBeLessThan(800);
     } finally {
       await client.close();
       await server.close();
@@ -1185,6 +1189,323 @@ describe("local MCP", () => {
       expect(JSON.stringify(result)).not.toContain(root);
       expect(JSON.stringify(result)).not.toContain("adapter diagnostic");
       expect(JSON.stringify(result)).not.toContain(started.claimToken);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+});
+
+describe("terminal guidance", () => {
+  test.each([["cancelled"], ["expired"]])("never offers open for a %s request carrying browser state", async (state) => {
+    const requestId = "f".repeat(32);
+    const terminal = {
+      requestId,
+      state: state as "cancelled" | "expired",
+      revision: 2,
+      goal: "Stop cleanly",
+      profile: "lean" as const,
+      parentId: null,
+      createdAt: fixedTime.toISOString(),
+      updatedAt: fixedTime.toISOString(),
+      expiresAt: new Date(fixedTime.getTime() + 60_000).toISOString(),
+      browser: {
+        phase: "awaiting_response",
+        reason: null,
+        attempt: 1,
+        submissionCertainty: "submitted",
+        workerActive: false,
+      } as BrowserStatus,
+    };
+    const fake = {
+      status: async () => terminal,
+      waitStatus: async () => ({ status: terminal, outcome: "actionable", waitedSeconds: 0 }),
+    } as unknown as ConsultationService;
+    const { client, server } = await connect(fake);
+    try {
+      for (const args of [
+        { request_id: requestId },
+        { request_id: requestId, wait_seconds: 5 },
+      ]) {
+        const result = await client.callTool({ name: "consult_status", arguments: args });
+        const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+        expect(text).toContain("It cannot be resumed; start a new consultation");
+        expect(text).not.toContain("Run open");
+        expect(text).not.toContain("wait_seconds");
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+});
+
+describe("consult_status waiting", () => {
+  const pending = (browser?: Partial<BrowserStatus>): StatusResult => ({
+    requestId: "0".repeat(32),
+    state: "pending" as const,
+    revision: 0,
+    goal: "Wait for the worker",
+    profile: "lean" as const,
+    parentId: null,
+    createdAt: fixedTime.toISOString(),
+    updatedAt: fixedTime.toISOString(),
+    expiresAt: new Date(fixedTime.getTime() + 600_000).toISOString(),
+    ...(browser
+      ? {
+        browser: {
+          phase: "awaiting_response",
+          reason: null,
+          attempt: 1,
+          submissionCertainty: "submitted",
+          workerActive: true,
+          ...browser,
+        } as BrowserStatus,
+      }
+      : {}),
+  });
+
+  const waitingService = async (states: StatusResult[]) => {
+    const { root, store } = await makeFixture();
+    const project = await resolveProject(root);
+    const waits: number[] = [];
+    const service = new ConsultationService(project, store, new ContextService(project, store), {
+      now: () => fixedTime,
+      wait: async (milliseconds) => { waits.push(milliseconds); },
+    });
+    let call = 0;
+    service.status = async () => states[Math.min(call++, states.length - 1)]!;
+    return { service, waits, calls: () => call };
+  };
+
+  test("returns immediately when the state is already actionable", async () => {
+    const completed = { ...pending({}), state: "completed" as const };
+    const { service, waits } = await waitingService([completed]);
+    const result = await service.waitStatus("0".repeat(32), 50);
+    expect(result.outcome).toBe("actionable");
+    expect(result.waitedSeconds).toBe(0);
+    expect(waits).toEqual([]);
+  });
+
+  test.each([
+    ["no browser execution", undefined],
+    ["an inactive worker", { workerActive: false }],
+    ["needs_login", { phase: "needs_login" as const }],
+    ["needs_manual with a settled submission", {
+      phase: "needs_manual" as const,
+      reason: "submission_uncertain" as const,
+      submissionCertainty: "not_submitted" as const,
+    }],
+    ["needs_manual for another reason", {
+      phase: "needs_manual" as const,
+      reason: "ui_changed" as const,
+      submissionCertainty: "uncertain" as const,
+    }],
+  ])("does not sleep for %s", async (_name, browser) => {
+    const { service, waits } = await waitingService([pending(browser as Partial<BrowserStatus> | undefined)]);
+    const result = await service.waitStatus("0".repeat(32), 50);
+    expect(result.outcome).toBe("actionable");
+    expect(waits).toEqual([]);
+  });
+
+  test("waits while an active worker is progressing and stops when it becomes actionable", async () => {
+    const progressing = pending({});
+    const done = { ...pending({}), state: "completed" as const };
+    const { service, waits } = await waitingService([progressing, progressing, progressing, done]);
+    const result = await service.waitStatus("0".repeat(32), 50);
+    expect(result.outcome).toBe("actionable");
+    expect(result.waitedSeconds).toBe(3);
+    expect(result.status.state).toBe("completed");
+    expect(waits).toEqual([1_000, 1_000, 1_000]);
+  });
+
+  test("stops at the bound and asks for another bounded call", async () => {
+    const { service, waits } = await waitingService([pending({})]);
+    const result = await service.waitStatus("0".repeat(32), 4);
+    expect(result.outcome).toBe("bound_elapsed");
+    expect(result.waitedSeconds).toBe(4);
+    expect(waits).toHaveLength(4);
+  });
+
+  test("zero seconds is the snapshot and never sleeps", async () => {
+    const { service, waits } = await waitingService([pending({})]);
+    const result = await service.waitStatus("0".repeat(32), 0);
+    expect(result.outcome).toBe("snapshot");
+    expect(waits).toEqual([]);
+  });
+
+  test("stops on the tick after an in-flight abort and leaves no pending timer", async () => {
+    const { root, store } = await makeFixture();
+    const project = await resolveProject(root);
+    const controller = new AbortController();
+    const observed: (boolean | undefined)[] = [];
+    const service = new ConsultationService(project, store, new ContextService(project, store), {
+      now: () => fixedTime,
+      wait: async (_milliseconds, signal) => {
+        observed.push(signal?.aborted);
+        controller.abort();
+      },
+    });
+    service.status = async () => pending({});
+
+    const result = await service.waitStatus("0".repeat(32), 50, controller.signal);
+
+    expect(result.outcome).toBe("aborted");
+    expect(result.waitedSeconds).toBe(0);
+    expect(observed).toEqual([false]);
+    expect(result.status.state).toBe("pending");
+  });
+
+  test("an already aborted signal returns without waiting", async () => {
+    const { service, waits } = await waitingService([pending({})]);
+    const aborted = new AbortController();
+    aborted.abort();
+    const stopped = await service.waitStatus("0".repeat(32), 50, aborted.signal);
+    expect(stopped.outcome).toBe("aborted");
+    expect(stopped.waitedSeconds).toBe(0);
+    expect(waits).toEqual([]);
+  });
+
+  test("the default timer clears when the abort lands inside the interval", async () => {
+    const { root, store } = await makeFixture();
+    const project = await resolveProject(root);
+    const service = new ConsultationService(project, store, new ContextService(project, store), {
+      now: () => fixedTime,
+    });
+    let entered = false;
+    service.status = async () => { entered = true; return pending({}); };
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const inFlight = service.waitStatus("0".repeat(32), 50, controller.signal);
+    while (!entered) await new Promise((resolve) => setTimeout(resolve, 1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort();
+    const result = await inFlight;
+    const elapsed = Date.now() - startedAt;
+    expect(result.outcome).toBe("aborted");
+    expect(elapsed).toBeGreaterThanOrEqual(20);
+    expect(elapsed).toBeLessThan(1_000);
+  });
+
+  test("a successful MCP wait returns the snapshot keys plus its outcome text", async () => {
+    const { root, store } = await makeFixture();
+    const project = await resolveProject(root);
+    const waited: number[] = [];
+    const service = new ConsultationService(project, store, new ContextService(project, store), {
+      now: () => fixedTime,
+      wait: async (milliseconds) => { waited.push(milliseconds); },
+    });
+    const started = await service.start({
+      goal: "Wait through the MCP surface",
+      profile: "lean",
+      files: [],
+      smart: false,
+      attachments: [],
+      diff: "none",
+      open: false,
+      idempotencyKey: "mcp-wait",
+    });
+    await store.queueBrowserExecution(started.requestId);
+    await store.acquireBrowserLease(started.requestId, "e".repeat(32));
+    await store.recordBrowserProgress(started.requestId, "e".repeat(32), {
+      phase: "awaiting_response",
+      reason: null,
+    });
+    const { client, server } = await connect(service);
+    try {
+      const snapshot = await client.callTool({
+        name: "consult_status",
+        arguments: { request_id: started.requestId },
+      });
+      const waitedCall = await client.callTool({
+        name: "consult_status",
+        arguments: { request_id: started.requestId, wait_seconds: 2 },
+      });
+
+      expect(Object.keys(structured(waitedCall)).sort()).toEqual(Object.keys(structured(snapshot)).sort());
+      expect(structured(waitedCall)).toMatchObject({
+        requestId: started.requestId,
+        state: "pending",
+        browser: { phase: "awaiting_response", workerActive: true },
+      });
+      expect(waitedCall.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining("Still running after 2s; call consult_status again with wait_seconds"),
+      });
+      expect(snapshot.content[0]).toMatchObject({
+        type: "text",
+        text: expect.not.stringContaining("Still running after"),
+      });
+      expect(waited).toEqual([1_000, 1_000]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  test("waiting on a real request mutates nothing it observes", async () => {
+    let launches = 0;
+    const { root, store } = await makeFixture();
+    const project = await resolveProject(root);
+    const service = new ConsultationService(project, store, new ContextService(project, store), {
+      now: () => fixedTime,
+      wait: async () => {},
+      workerLauncher: { launch: async () => { launches += 1; } } as unknown as BrowserWorkerLauncher,
+    });
+    const started = await service.start({
+      goal: "Observe that waiting is read-only",
+      profile: "lean",
+      files: [],
+      smart: false,
+      attachments: [],
+      diff: "none",
+      open: false,
+      idempotencyKey: "read-only-wait",
+    });
+    await store.queueBrowserExecution(started.requestId);
+    const ownerId = "d".repeat(32);
+    await store.acquireBrowserLease(started.requestId, ownerId);
+    await store.recordBrowserProgress(started.requestId, ownerId, {
+      phase: "awaiting_response",
+      reason: null,
+    });
+    const before = await store.get(started.requestId);
+
+    const result = await service.waitStatus(started.requestId, 3);
+
+    const after = await store.get(started.requestId);
+    expect(result.outcome).toBe("bound_elapsed");
+    expect(result.waitedSeconds).toBe(3);
+    expect(after.revision).toBe(before.revision);
+    expect(after.claimHash).toBe(before.claimHash);
+    expect(after.state).toBe(before.state);
+    expect(after.browserExecution?.attempt).toBe(before.browserExecution?.attempt);
+    expect(after.browserExecution?.lease?.expiresAt).toBe(before.browserExecution?.lease?.expiresAt);
+    expect(after.browserExecution?.lease?.ownerId).toBe(before.browserExecution?.lease?.ownerId);
+    expect(launches).toBe(0);
+  });
+
+  test.each([[-1], [51], [1.5]])("rejects wait_seconds %p by naming the field and range", async (seconds) => {
+    const { service } = await waitingService([pending({})]);
+    await expect(service.waitStatus("0".repeat(32), seconds as number))
+      .rejects.toThrow("wait_seconds: expected an integer from 0 to 50");
+  });
+
+  test("the tool rejects an out-of-range wait_seconds and keeps the snapshot shape", async () => {
+    const { service } = await makeFixture();
+    const { client, server } = await connect(service);
+    try {
+      const rejected = await client.callTool({
+        name: "consult_status",
+        arguments: { request_id: "0".repeat(32), wait_seconds: 120 },
+      });
+      expect(rejected.isError).toBeTrue();
+      expect(structured(rejected)).toEqual({
+        error: {
+          code: "INVALID_INPUT",
+          message: "The request is invalid. wait_seconds: expected number <= 50",
+        },
+      });
     } finally {
       await client.close();
       await server.close();

@@ -128,7 +128,44 @@ export interface ConsultationServiceOptions {
   workerLauncher?: BrowserWorkerLauncher;
   now?: () => Date;
   beforePublicationCommit?: (directory: string) => Promise<void>;
+  wait?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 }
+
+export type WaitOutcome = "snapshot" | "actionable" | "bound_elapsed" | "aborted";
+
+export interface WaitStatusResult {
+  status: StatusResult;
+  outcome: WaitOutcome;
+  waitedSeconds: number;
+}
+
+export const MAX_STATUS_WAIT_SECONDS = 50;
+const STATUS_WAIT_INTERVAL_MS = 1_000;
+
+const waitForInterval = (milliseconds: number, signal?: AbortSignal): Promise<void> =>
+  new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const settle = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", settle);
+      resolve();
+    };
+    const timer = setTimeout(settle, milliseconds);
+    signal?.addEventListener("abort", settle, { once: true });
+  });
+
+const statusIsActionable = (status: StatusResult): boolean => {
+  if (status.state !== "pending" && status.state !== "claimed") return true;
+  const browser = status.browser;
+  if (browser === undefined) return true;
+  if (!browser.workerActive) return true;
+  if (browser.phase === "needs_login") return true;
+  if (browser.phase !== "needs_manual") return false;
+  return !(browser.reason === "submission_uncertain" && browser.submissionCertainty === "uncertain");
+};
 
 export interface InitializeProjectInput {
   chatgptProjectUrl?: string;
@@ -519,6 +556,7 @@ export class ConsultationService {
   private readonly workerLauncher: BrowserWorkerLauncher;
   private readonly now: () => Date;
   private readonly beforePublicationCommit: ((directory: string) => Promise<void>) | undefined;
+  private readonly wait: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 
   constructor(
     project: ResolvedProject,
@@ -532,6 +570,7 @@ export class ConsultationService {
     this.workerLauncher = options.workerLauncher ?? new UnavailableBrowserWorkerLauncher();
     this.now = options.now ?? (() => new Date());
     this.beforePublicationCommit = options.beforePublicationCommit;
+    this.wait = options.wait ?? waitForInterval;
   }
 
   async start(input: StartInput): Promise<StartResult> {
@@ -624,6 +663,26 @@ export class ConsultationService {
   async status(id: string): Promise<StatusResult> {
     const request = await this.store.get(id);
     return publicStatus(request, await this.store.getCompletion(id), this.now());
+  }
+
+  async waitStatus(id: string, seconds: number, signal?: AbortSignal): Promise<WaitStatusResult> {
+    if (!Number.isInteger(seconds) || seconds < 0 || seconds > MAX_STATUS_WAIT_SECONDS) {
+      throw new ConsultError(
+        "INVALID_INPUT",
+        `wait_seconds: expected an integer from 0 to ${MAX_STATUS_WAIT_SECONDS}`,
+      );
+    }
+    let status = await this.status(id);
+    if (seconds === 0) return { status, outcome: "snapshot", waitedSeconds: 0 };
+    if (statusIsActionable(status)) return { status, outcome: "actionable", waitedSeconds: 0 };
+    for (let waited = 1; waited <= seconds; waited += 1) {
+      if (signal?.aborted) return { status, outcome: "aborted", waitedSeconds: waited - 1 };
+      await this.wait(STATUS_WAIT_INTERVAL_MS, signal);
+      if (signal?.aborted) return { status, outcome: "aborted", waitedSeconds: waited - 1 };
+      status = await this.status(id);
+      if (statusIsActionable(status)) return { status, outcome: "actionable", waitedSeconds: waited };
+    }
+    return { status, outcome: "bound_elapsed", waitedSeconds: seconds };
   }
 
   async show(id: string): Promise<ShowResult> {
