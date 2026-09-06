@@ -1,0 +1,13 @@
+# mr-preflight forked runs on the same fixture (/tmp/pf-fixture, RUNNER MISSING-DEPS), 2026-09-05/06
+
+run                      turns calls  wall first_ctx last_ctx cache_read   out
+general-purpose #1          12     5   62s     50922    59503     552418  2695
+general-purpose #2          11     5   61s     51173    58403     500277  3836
+gate (tools allowlist)       8     3   74s     49461    58048     316996  2592
+gate + mcpServers: []       17     8   84s     49461    60067     937332  1411
+
+Reading: the fork's first-turn context is a platform constant (~49-51k: system prompt, tool
+schemas, skill and agent indexes); the agent's tools allowlist saves ~1.5k per turn and
+mcpServers: [] saves nothing, so MCP is not part of the fork's baseline. A `claude -p` probe
+(general-purpose 27.1k vs lean 7.5k) does not transfer to forked skills. The gate agent's
+value is the 40-turn ceiling and a minimal prompt, not a smaller birth context.
