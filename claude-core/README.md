@@ -58,6 +58,15 @@ up any regular file, directory, or foreign link it replaces under
 `uninstall` removes only links that point exactly at this checkout; a locally
 edited copy stays in place and `status` reports it.
 
+## Measuring
+
+`python3 claude-core/scripts/session-metrics.py --days 7` summarizes the local
+Claude Code transcripts under `~/.claude/projects`: context at the first turn
+and at its peak, cache-read and output tokens, compactions, Bash timeouts,
+status-polling tool calls, and subagent birth context and cost. Snapshots taken
+before a change live in `metrics/` so the next run has something to compare
+against.
+
 ## Recovery
 
 1. `python3 claude-core/scripts/manage.py status` names every link that is

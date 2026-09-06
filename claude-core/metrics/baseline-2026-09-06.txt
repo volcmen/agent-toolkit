@@ -1,0 +1,12 @@
+# Session metrics baseline — 2026-09-06 (7 days before autoCompactWindow=300000 and the gate agent)
+
+main sessions: 92  compactions: 1  bash timeouts: 27  status-poll calls: 268
+  turns       n=92 median=113 p90=444 max=2235
+  first ctx   n=92 median=64093 p90=70910 max=74469
+  max ctx     n=92 median=172860 p90=457063 max=997097
+  cache-read  n=92 median=13869076 p90=115708951 max=1093748527
+  output      n=92 median=92226 p90=596427 max=2409816
+subagent runs: 316  cache-read total: 3648421006
+  first ctx   n=316 median=53781 p90=60286 max=65367
+  turns       n=316 median=46 p90=187 max=664
+  agent types {'general-purpose': 148, 'alan-wake': 40, 'mr-review-fixer': 22, 'Explore': 17, 'claude-code-guide': 4, 'codex:codex-rescue': 2}
