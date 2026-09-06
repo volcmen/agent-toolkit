@@ -40,6 +40,9 @@ def build_fixture(tmp: Path) -> tuple[Path, Path]:
     )
     for rel in manage.EXECUTABLES:
         (root / rel).chmod(0o755)
+    shutil.copytree(ROOT / "agents", root / "agents")
+    (root / "scripts").mkdir()
+    shutil.copy2(ROOT / "scripts" / "render.py", root / "scripts" / "render.py")
     return root, home
 
 
@@ -48,6 +51,11 @@ def patched(root: Path, home: Path, backups: Path) -> ExitStack:
     stack.enter_context(mock.patch.object(manage, "ROOT", root))
     stack.enter_context(mock.patch.object(manage, "CLAUDE_HOME", home))
     stack.enter_context(mock.patch.object(manage, "BACKUP_ROOT", backups))
+    stack.enter_context(mock.patch.object(manage, "CLAUDE_SOURCE", root / "agents" / "rendered"))
+    stack.enter_context(mock.patch.object(manage, "CLAUDE_TARGET", home / "agents"))
+    stack.enter_context(mock.patch.object(manage, "CLAUDE_SETTINGS", home / "settings.json"))
+    stack.enter_context(mock.patch.object(manage, "CODEX_SOURCE", root / "agents" / "codex" / "agents"))
+    stack.enter_context(mock.patch.object(manage, "CODEX_CONTROLLER_PROFILE", root / "agents" / "codex" / "controller.config.toml"))
     return stack
 
 
@@ -342,6 +350,160 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(any("agents/fixer.md" in line and "does not resolve" in line for line in before))
         self.assertTrue(any("settings.json" in line and "does not resolve" in line for line in before))
         self.assertEqual(after, [])
+
+
+class MergedLifecycle(unittest.TestCase):
+    def test_install_renders_before_validation_and_refuses_invalid_package(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            backups = Path(tmp) / "backups"
+            prompt = root / "agents" / "prompts" / "controller.md"
+            prompt.write_text(prompt.read_text() + "\nRead ~/.claude/unknown.md\n")
+            stale = home / "rules" / "retired.md"
+            stale.parent.mkdir()
+            stale.symlink_to(root / "rules" / "retired.md")
+            (home / "CLAUDE.md").write_text("personal\n")
+            with patched(root, home, backups):
+                with self.assertRaisesRegex(manage.Problem, "package validation failed"):
+                    quiet(manage.cmd_install, None)
+            self.assertIn("Read ~/.claude/unknown.md", (root / "agents" / "rendered" / "controller.md").read_text())
+            self.assertEqual((home / "CLAUDE.md").read_text(), "personal\n")
+            self.assertTrue(stale.is_symlink())
+            self.assertFalse((home / "agents").exists())
+            self.assertFalse(backups.exists())
+
+    def test_agent_prompt_references_are_validated(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            prompt = root / "agents" / "prompts" / "controller.md"
+            for rel, diagnostic in (
+                ("unknown.md", "unmanaged ~/.claude/unknown.md"),
+                ("skills/engineering/references/missing.md", "which does not exist in the repository"),
+            ):
+                with self.subTest(rel=rel):
+                    prompt.write_text(f"Read ~/.claude/{rel}\n")
+                    with patched(root, home, Path(tmp) / "backups"):
+                        quiet(manage.cmd_render, None)
+                        problems = manage.package_problems()
+                    self.assertEqual(len(problems), 1, problems)
+                    self.assertIn("agents/prompts/controller.md references", problems[0])
+                    self.assertIn(diagnostic, problems[0])
+
+    def test_agent_copies_back_up_foreign_links_and_directories(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            backups = Path(tmp) / "backups"
+            target = home / "agents"
+            target.mkdir()
+            foreign = Path(tmp) / "foreign.md"
+            foreign.write_text("foreign\n")
+            (target / "controller.md").symlink_to(foreign)
+            (target / "Explore.md").mkdir()
+            (target / "Explore.md" / "personal.md").write_text("personal\n")
+            with patched(root, home, backups):
+                code, output = quiet(manage.cmd_install, None)
+            self.assertEqual(code, 0, output)
+            self.assertIn("backed up 2 replaced path(s)", output)
+            for name in ("controller.md", "Explore.md"):
+                self.assertFalse((target / name).is_symlink())
+                self.assertEqual((target / name).read_bytes(), (root / "agents" / "rendered" / name).read_bytes())
+            self.assertEqual(os.readlink(next(backups.rglob("controller.md"))), str(foreign))
+            self.assertEqual(next(backups.rglob("personal.md")).read_text(), "personal\n")
+            self.assertEqual(foreign.read_text(), "foreign\n")
+
+    def test_uninstall_preserves_modified_copies_links_and_directories(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            with patched(root, home, Path(tmp) / "backups"):
+                quiet(manage.cmd_install, None)
+                agents = home / "agents"
+                (agents / "controller.md").write_text("edited\n")
+                (agents / "Explore.md").unlink()
+                (agents / "Explore.md").symlink_to(root / "agents" / "rendered" / "Explore.md")
+                (agents / "gate.md").unlink()
+                (agents / "gate.md").mkdir()
+                (agents / "gate.md" / "personal.md").write_text("personal\n")
+                quiet(manage.cmd_uninstall, None)
+            self.assertEqual((agents / "controller.md").read_text(), "edited\n")
+            self.assertTrue((agents / "Explore.md").is_symlink())
+            self.assertEqual((agents / "gate.md" / "personal.md").read_text(), "personal\n")
+            for name in ("alan-wake.md", "task-analyst.md", "mr-review-fixer.md"):
+                self.assertFalse((agents / name).exists())
+            self.assertFalse((home / "CLAUDE.md").is_symlink())
+
+    def test_status_reports_missing_modified_and_linked_agent_copies(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            with patched(root, home, Path(tmp) / "backups"):
+                quiet(manage.cmd_install, None)
+                agents = home / "agents"
+                (agents / "controller.md").write_text("edited\n")
+                (agents / "Explore.md").unlink()
+                (agents / "gate.md").unlink()
+                (agents / "gate.md").symlink_to(root / "agents" / "rendered" / "gate.md")
+                (home / "chrome-cdp.md").unlink()
+                code, output = quiet(manage.cmd_status, None)
+            self.assertEqual(code, 1)
+            for name in ("controller.md", "Explore.md", "gate.md"):
+                self.assertIn(f"{agents / name}: missing, stale, or not a regular-file copy", output)
+            self.assertIn(f"{home / 'chrome-cdp.md'}: missing, expected symlink", output)
+
+    def test_render_check_detects_changed_and_stale_files_without_writing(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            changed = [root / "agents" / "rendered" / "controller.md", root / "agents" / "codex" / "agents" / "task_analyst.toml"]
+            stale = [path.with_name("retired" + path.suffix) for path in changed]
+            for path in changed + stale:
+                path.write_text("drift\n")
+            command = [sys.executable, str(root / "scripts" / "render.py"), "--check"]
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            for path in changed + stale:
+                self.assertIn(str(path.relative_to(root / "agents")), result.stdout)
+                self.assertEqual(path.read_text(), "drift\n")
+            with patched(root, home, Path(tmp) / "backups"):
+                quiet(manage.cmd_render, None)
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for path in stale:
+                self.assertFalse(path.exists())
+            for path in changed:
+                self.assertEqual(path.read_bytes(), (ROOT / path.relative_to(root)).read_bytes())
+
+    def test_second_install_preserves_link_copy_and_backup_mtimes(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            backups = Path(tmp) / "backups"
+            (home / "CLAUDE.md").write_text("personal core\n")
+            (home / "agents").mkdir()
+            (home / "agents" / "controller.md").write_text("personal controller\n")
+            with patched(root, home, backups):
+                code, output = quiet(manage.cmd_install, None)
+                self.assertEqual(code, 0, output)
+                runtime = home / "skills" / "mr-preflight" / "failure-modes-archive.md"
+                runtime.write_text("retired rows\n")
+                paths = [target for _, target in manage.managed_links()]
+                paths.extend(home / "agents" / source.name for source in manage.claude_agent_sources())
+                paths.extend(path for path in backups.rglob("*") if path.is_file())
+                before = {path: path.lstat().st_mtime_ns for path in paths}
+                code, output = quiet(manage.cmd_install, None)
+                self.assertEqual(code, 0, output)
+                self.assertEqual(before, {path: path.lstat().st_mtime_ns for path in paths})
+                self.assertIn("unchanged 9 link(s)", output)
+                self.assertIn("unchanged 6 agent file(s)", output)
+                self.assertNotIn("backed up", output)
+                self.assertEqual(len([path for path in backups.rglob("*") if path.is_file()]), 2)
+            self.assertEqual((root / "skills" / "mr-preflight" / runtime.name).read_text(), "retired rows\n")
+
+    def test_reference_edges_resolve_managed_agent_copies(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            (root / "CLAUDE.md").write_text("Read ~/.claude/agents/controller.md and ~/.claude/agents/\n")
+            with patched(root, home, Path(tmp) / "backups"):
+                self.assertEqual(manage.package_problems(), [])
+                code, output = quiet(manage.cmd_install, None)
+                self.assertEqual(code, 0, output)
+                self.assertEqual(manage.live_problems(), [])
 
 
 if __name__ == "__main__":

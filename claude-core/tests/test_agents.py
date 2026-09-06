@@ -24,8 +24,8 @@ if sys.version_info < (3, 11):
 
 import tomllib
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
+ROOT = Path(__file__).resolve().parents[1] / "agents"
+sys.path.insert(0, str(ROOT.parent / "scripts"))
 
 import manage  # noqa: E402
 import render  # noqa: E402
@@ -40,7 +40,7 @@ class Rendering(unittest.TestCase):
         controller = next(agent for agent in catalog if agent["id"] == "controller")
         self.assertEqual(controller["claude"]["model"], "fable")
         self.assertEqual(controller["claude"]["effort"], "medium")
-        rendered = (ROOT / "claude" / "agents" / "controller.md").read_text(
+        rendered = (ROOT / "rendered" / "controller.md").read_text(
             encoding="utf-8"
         )
         self.assertIn("\neffort: medium\n", rendered)
@@ -124,18 +124,18 @@ class Rendering(unittest.TestCase):
         self.assertIn("active shared-agents controller", profile["developer_instructions"])
 
     def test_alan_wake_renders_plan_mode_with_mutators_denied(self) -> None:
-        text = (ROOT / "claude" / "agents" / "alan-wake.md").read_text(encoding="utf-8")
+        text = (ROOT / "rendered" / "alan-wake.md").read_text(encoding="utf-8")
         frontmatter = text.split("---")[1]
         self.assertIn("\nmaxTurns: 8\n", frontmatter)
         self.assertIn("\npermissionMode: plan\n", frontmatter)
         self.assertIn("\ndisallowedTools: Write, Edit, NotebookEdit, Agent\n", frontmatter)
         self.assertNotIn("\ntools:", frontmatter)
-        for path in (ROOT / "claude" / "agents").glob("*.md"):
+        for path in (ROOT / "rendered").glob("*.md"):
             if path.name != "alan-wake.md":
                 self.assertNotIn("permissionMode:", path.read_text(encoding="utf-8"), str(path))
 
     def test_renderer_emits_optional_scalars_for_the_mr_fixer(self) -> None:
-        text = (ROOT / "claude" / "agents" / "mr-review-fixer.md").read_text(encoding="utf-8")
+        text = (ROOT / "rendered" / "mr-review-fixer.md").read_text(encoding="utf-8")
         frontmatter = text.split("---")[1]
         self.assertIn("\nmaxTurns: 100\n", frontmatter)
         self.assertIn("\nmemory: project\n", frontmatter)
@@ -146,22 +146,22 @@ class Rendering(unittest.TestCase):
     def test_rendered_agents_stay_within_size_budgets(self) -> None:
         budgets = {"controller.md": 2800, "mr-review-fixer.md": 6000, "alan-wake.md": 14500, "gate.md": 1000}
         for name, limit in budgets.items():
-            self.assertLessEqual((ROOT / "claude" / "agents" / name).stat().st_size, limit, name)
+            self.assertLessEqual((ROOT / "rendered" / name).stat().st_size, limit, name)
 
     def test_rendered_agents_do_not_restate_core_rules(self) -> None:
         sentinels = ("never claim", "smallest coherent", "ticket key", "sibling", "session link", "superpowers")
-        for path in (ROOT / "claude" / "agents").glob("*.md"):
+        for path in (ROOT / "rendered").glob("*.md"):
             text = path.read_text(encoding="utf-8").lower()
             for sentinel in sentinels:
                 self.assertNotIn(sentinel, text, f"{path.name}: {sentinel!r}")
 
     def test_claude_agents_render_to_standalone_source_directory(self) -> None:
         expected = {"controller.md", "task-analyst.md", "Explore.md", "alan-wake.md", "mr-review-fixer.md", "gate.md"}
-        actual = {path.name for path in (ROOT / "claude" / "agents").glob("*.md")}
+        actual = {path.name for path in (ROOT / "rendered").glob("*.md")}
         self.assertEqual(actual, expected)
 
     def test_explore_overrides_the_builtin_with_a_pinned_model(self) -> None:
-        text = (ROOT / "claude" / "agents" / "Explore.md").read_text(encoding="utf-8")
+        text = (ROOT / "rendered" / "Explore.md").read_text(encoding="utf-8")
         self.assertIn("\nname: Explore\n", text)
         self.assertIn("\nmodel: sonnet\n", text)
         self.assertIn("\neffort: medium\n", text)
@@ -191,13 +191,13 @@ class Rendering(unittest.TestCase):
         catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
         gate = next(agent for agent in catalog if agent["id"] == "gate")
         self.assertNotIn("codex", gate)
-        skill = (ROOT.parent / "claude-core" / "skills" / "mr-preflight" / "SKILL.md").read_text(encoding="utf-8")
+        skill = (ROOT.parent / "skills" / "mr-preflight" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("\nagent: gate\n", skill.split("---")[1])
         self.assertIn("\ncontext: fork\n", skill.split("---")[1])
         controller = (ROOT / "prompts" / "controller.md").read_text(encoding="utf-8")
         self.assertNotIn("`gate`", controller)
         self.assertNotIn("gate on Sonnet", controller)
-        rendered = (ROOT / "claude" / "agents" / "gate.md").read_text(encoding="utf-8")
+        rendered = (ROOT / "rendered" / "gate.md").read_text(encoding="utf-8")
         self.assertIn("\nmodel: sonnet\n", rendered)
         self.assertIn("\neffort: medium\n", rendered)
         self.assertIn("\nmaxTurns: 40\n", rendered)
@@ -385,6 +385,7 @@ class StandaloneCopies(unittest.TestCase):
                     BACKUP_ROOT=root / "backups",
                 ),
                 mock.patch.object(manage, "run"),
+                mock.patch.object(manage, "managed_links", return_value=[]),
                 mock.patch.object(manage, "package_problems", return_value=[]),
                 mock.patch.object(manage, "cmd_status", return_value=0),
                 redirect_stdout(output),
@@ -400,6 +401,9 @@ class StandaloneCopies(unittest.TestCase):
                     settings_path.write_text(json.dumps(value), encoding="utf-8")
                     with (
                         mock.patch.object(manage, "CLAUDE_SETTINGS", settings_path),
+                        mock.patch.object(manage, "managed_links", return_value=[]),
+                        mock.patch.object(manage, "reference_edges", return_value=[]),
+                        mock.patch.object(manage, "external_caller_files", return_value=[]),
                         mock.patch.object(manage, "claude_agent_sources", return_value=[]),
                         mock.patch.object(manage, "package_problems", return_value=[]),
                     ):
@@ -443,11 +447,10 @@ class Package(unittest.TestCase):
         self.assertEqual(manage.package_problems(), [])
 
     def test_package_has_no_fish_integration(self) -> None:
-        self.assertFalse((ROOT / "shell" / "fish" / "shared-agents.fish").exists())
+        self.assertFalse((ROOT.parent / "shell" / "fish" / "shared-agents.fish").exists())
         for relative_path in (
-            "scripts/manage.py",
-            "README.md",
-            "ARCHITECTURE.md",
+            "../scripts/manage.py",
+            "../README.md",
             "policy/codex-global.md",
             "codex/controller.config.toml",
         ):
@@ -460,10 +463,10 @@ class Package(unittest.TestCase):
         self.assertIn('fork_turns = "none"', policy)
 
     def test_shared_agents_is_not_a_workspace_plugin(self) -> None:
-        catalog = json.loads((ROOT.parent / "plugins.json").read_text(encoding="utf-8"))
+        catalog = json.loads((ROOT.parents[1] / "plugins.json").read_text(encoding="utf-8"))
         names = {entry["name"] for entry in catalog["plugins"]}
         self.assertNotIn("shared-agents", names)
-        self.assertFalse((ROOT / "plugins" / "shared-agents").exists())
+        self.assertFalse((ROOT.parent / "plugins" / "shared-agents").exists())
 
     def test_claude_routing_has_one_canonical_surface(self) -> None:
         self.assertFalse((ROOT / "policy" / "claude-global.md").exists())
@@ -677,11 +680,11 @@ class Package(unittest.TestCase):
         self.assertIn("already `alan_wake`", policy)
 
     def test_check_command_runs_unit_suite(self) -> None:
-        if os.environ.get("SHARED_AGENTS_CHECK_CHILD") == "1":
+        if os.environ.get("CLAUDE_CORE_CHECK_CHILD") == "1":
             return
-        env = {**os.environ, "SHARED_AGENTS_CHECK_CHILD": "1"}
+        env = {**os.environ, "CLAUDE_CORE_CHECK_CHILD": "1"}
         result = subprocess.run(
-            [sys.executable, str(ROOT / "scripts" / "manage.py"), "check"],
+            [sys.executable, str(ROOT.parent / "scripts" / "manage.py"), "check"],
             capture_output=True,
             text=True,
             check=False,
