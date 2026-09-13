@@ -42,7 +42,7 @@ After Qwen finishes:
 python3 "$QGS_ROOT/scripts/qwen_usage.py" --session <session-id>
 ```
 
-This reads Qwen Code's own usage records and sums correction rounds for the
+This reads Qwen Code's own usage records and keeps the latest cumulative snapshot for each
 session. Compare similar slices using `fresh_plus_output`, and also report total
 tokens, requests, tool calls/failures, model latency, and changed-line counts.
 
@@ -51,3 +51,5 @@ double cost even when the second run looks small. Investigate threshold
 warnings before starting another slice. Read-heavy tool histograms usually mean
 the brief cited too little of the real flow; high tool failures indicate a
 broken or overly broad brief.
+
+Model fallback events are reported as attempted switches. The final selected model is shown alongside a warning; selection alone does not prove a successful response. Resumed result token usage is cumulative and is compared directly with the session warning threshold.

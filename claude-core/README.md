@@ -12,6 +12,7 @@ validation, rendering, installation, verification, and removal under `~/.claude`
 | `CLAUDE.md`, `chrome-cdp.md` | same name | file symlink |
 | `rules/{waiting,code-style}.md` | `rules/<name>` | file symlink |
 | `hooks/f17-{ticket-keys,comment-count}.sh`, `hooks/guard-red-write.py` | `hooks/<name>` | file symlink |
+| `scripts/verify-run.py`, `scripts/test-quality-scan.py` | `scripts/<name>` | file symlink |
 | `skills/engineering/`, `skills/mr-preflight/`, `skills/review-retro/` | `skills/<name>` | directory symlink |
 | `agents/rendered/*.md` | `agents/<name>.md` | regular-file copy |
 
@@ -140,7 +141,7 @@ and subagent birth context and cost. Baseline snapshots live in `metrics/`.
 
 ## Verification evidence
 
-`scripts/verify-run.py --scope <name> -- <command>` runs a verification command
+`python3 ~/.claude/scripts/verify-run.py --scope <name> -- <command>` runs a verification command
 and appends one JSON line to `<git-common-dir>/guard-verify.jsonl`: the tracked
 tree it ran against, the full worktree tree, whether the worktree was dirty, the
 untracked paths that were present, a digest of the lockfiles, the interpreter

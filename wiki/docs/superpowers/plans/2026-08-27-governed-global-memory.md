@@ -833,7 +833,7 @@ git commit -m "feat(memory): enforce agent guidance parity"
 
 ### Task 6: Migrate the single existing global record in the vault
 
-**Files in the separate vault repository `/Users/david.david/Documents/Obsidian Vault`:**
+**Files in the separate vault repository `<configured-vault>`:**
 
 - Create: `wiki/global/README.md`
 - Create: `wiki/global/records/project-registry/agent-toolkit.md`
@@ -849,8 +849,8 @@ git commit -m "feat(memory): enforce agent guidance parity"
 ```bash
 git status --short
 git rev-parse HEAD
-git -C "/Users/david.david/Documents/Obsidian Vault" status --short
-git -C "/Users/david.david/Documents/Obsidian Vault" rev-parse HEAD
+git -C "<configured-vault>" status --short
+git -C "<configured-vault>" rev-parse HEAD
 ```
 
 Expected: the implementation worktree is clean after Task 5; the vault is clean at its captured starting revision. Stop and preserve unrelated changes if either target path overlaps human work.
@@ -887,7 +887,7 @@ Keep `id: global.project_registry.agent_toolkit`, `scope: global`, `status: veri
 Replace every `wiki/entities/ai-workspace-marketplace` target with `wiki/global/records/project-registry/agent-toolkit`, preserving existing aliases. Verify there are no old paths or duplicate IDs:
 
 ```bash
-rg -n "wiki/entities/ai-workspace-marketplace|global\.project_registry\.agent_toolkit" "/Users/david.david/Documents/Obsidian Vault" --glob '*.md'
+rg -n "wiki/entities/ai-workspace-marketplace|global\.project_registry\.agent_toolkit" "<configured-vault>" --glob '*.md'
 ```
 
 Expected: one ID occurrence at the new record and no old link target.
@@ -911,8 +911,8 @@ Expected: results include `wiki/global/records/project-registry/agent-toolkit.md
 - [ ] **Step 7: Commit only the vault migration**
 
 ```bash
-git -C "/Users/david.david/Documents/Obsidian Vault" add wiki/global wiki/entities/ai-workspace-marketplace.md wiki/index.md wiki/tasks.md wiki/comparisons/agent-kanban-boards-for-claude-and-codex.md projects/agent-toolkit/README.md projects/claude-obsidian-setup/README.md
-git -C "/Users/david.david/Documents/Obsidian Vault" commit -m "wiki: establish governed global namespace"
+git -C "<configured-vault>" add wiki/global wiki/entities/ai-workspace-marketplace.md wiki/index.md wiki/tasks.md wiki/comparisons/agent-kanban-boards-for-claude-and-codex.md projects/agent-toolkit/README.md projects/claude-obsidian-setup/README.md
+git -C "<configured-vault>" commit -m "wiki: establish governed global namespace"
 ```
 
 Record the new vault commit in the final report.
@@ -1018,8 +1018,8 @@ If any live check exposes a defect, add a failing regression test first, make th
 ```bash
 git status --short
 git log --oneline --decorate -8
-git -C "/Users/david.david/Documents/Obsidian Vault" status --short
-git -C "/Users/david.david/Documents/Obsidian Vault" log --oneline -3
+git -C "<configured-vault>" status --short
+git -C "<configured-vault>" log --oneline -3
 python3 scripts/plugins.py status
 ```
 

@@ -54,7 +54,7 @@ can live inside a structured result despite shell success. `result=MISSING`
 means the run aborted or was killed.
 
 Budget exhaustion exits 55 and leaves already-applied edits on disk. SIGINT and
-SIGTERM are recorded as interrupted runs. Inspect the diff before any resume or
+SIGTERM are forwarded to the Qwen process group, with forced shutdown after a bounded grace period, and recorded as interrupted runs. Inspect the diff before any resume or
 repair.
 
 On resume, the wrapper retrieves the session's first observed authoring model

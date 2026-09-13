@@ -60,11 +60,12 @@ public struct ProcessInspector: Sendable {
         self.argumentData = argumentData
     }
 
-    public func inspect() throws -> [ProcessObservation] {
+    public func inspect(executableURL: URL = LauncherConfiguration.production().chromeExecutableURL) throws -> [ProcessObservation] {
         var observations: [ProcessObservation] = []
         for pid in try candidatePIDs() {
             do {
                 let path = try executablePath(pid)
+                guard path == executableURL.path else { continue }
                 let arguments = try Self.parseKernelProcArgs2(argumentData(pid))
                 observations.append(ProcessObservation(pid: pid, executablePath: path, arguments: arguments))
             } catch let error as ProcessInspectorError where error == .malformedArguments {

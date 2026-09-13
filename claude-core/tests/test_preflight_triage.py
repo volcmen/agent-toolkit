@@ -254,5 +254,27 @@ class PreflightTriage(unittest.TestCase):
         self.assertIn("mech_fail=1", self.dirty)
 
 
+class ScannerCache(unittest.TestCase):
+    def test_scanner_installation_and_content_changes_invalidate_cached_rows(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo, shims = build_repo(root / "fixture")
+            home = root / "home"
+            home.mkdir()
+            scanner = home / ".claude/scripts/test-quality-scan.py"
+            first = triage(repo, shims, HOME=str(home))
+            cached = triage(repo, shims, HOME=str(home))
+            self.assertIn("== CACHED", cached)
+            write(scanner, "print('BLOCK pinned-seed tests/test_load.py:1 fixture')\n")
+            installed = triage(repo, shims, HOME=str(home))
+            self.assertNotIn("== CACHED", installed)
+            self.assertIn("FAIL F19 pinned seed on the default exploration path", installed)
+            write(scanner, "print('scanned: no findings')\n")
+            changed = triage(repo, shims, HOME=str(home))
+            self.assertNotIn("== CACHED", changed)
+            self.assertIn("PASS F19-seed", changed)
+            self.assertNotIn("FAIL F19", first)
+
+
 if __name__ == "__main__":
     unittest.main()

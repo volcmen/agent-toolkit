@@ -52,6 +52,9 @@ Prerequisites are macOS 13 or newer, Google Chrome in `/Applications`, Swift 6.x
 From this directory:
 
 ```bash
+python3 scripts/check.py
+
+# Individual Swift checks:
 /usr/bin/swift run chrome-cdp-tests
 /usr/bin/swift build -c release -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors
 ./scripts/build.sh
@@ -79,3 +82,5 @@ Rollback replaces only `/Applications/Chrome CDP.app`; it does not stop Chrome o
 - **`--auto-connect` finds nothing:** use `agent-browser --cdp 9222 ...`.
 
 See [validation-2026-08-09.md](docs/validation-2026-08-09.md) for the redacted live result and [review-2026-08-09.md](docs/review-2026-08-09.md) for the implementation review record.
+
+Chrome profiles must use absolute paths. The launcher refuses an existing Chrome process with a relative `--user-data-dir`, because its working directory is not available in the observation and profile ownership cannot be verified.

@@ -146,7 +146,7 @@ def mask_strings(path: str, source: str) -> str:
             return source
         lines = source.splitlines(keepends=True)
         for token in tokens:
-            if token.type not in (tokenize.STRING, getattr(tokenize, "FSTRING_MIDDLE", -1)):
+            if token.type not in (tokenize.STRING, tokenize.COMMENT, getattr(tokenize, "FSTRING_MIDDLE", -1)):
                 continue
             (start_row, start_col), (end_row, end_col) = token.start, token.end
             for row in range(start_row, end_row + 1):
@@ -159,9 +159,9 @@ def mask_strings(path: str, source: str) -> str:
         return "".join(lines)
 
     def blank(match: re.Match) -> str:
-        return match.group(0)[0] + " " * (len(match.group(0)) - 2) + match.group(0)[-1]
+        return re.sub(r"[^\n]", " ", match.group(0))
 
-    return re.sub(r"'(?:\\.|[^'\\\n])*'|\"(?:\\.|[^\"\\\n])*\"", blank, source)
+    return re.sub(r"'(?:\\.|[^'\\\n])*'|\"(?:\\.|[^\"\\\n])*\"|`(?:\\.|[^`\\])*`|//[^\n]*|/\*[\s\S]*?\*/", blank, source)
 
 
 def named_profile_lines(source: str) -> set:
@@ -172,8 +172,19 @@ def named_profile_lines(source: str) -> set:
     exploration path is the defect.
     """
     inside: set = set()
+    active = {"", "default"}
+    try:
+        tree = ast.parse(source)
+        for node in tree.body:
+            if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+                continue
+            call = node.value
+            if isinstance(call.func, ast.Attribute) and call.func.attr == "load_profile" and call.args:
+                active.update(profile_defaults(call.args[0]))
+    except SyntaxError:
+        pass
     for match in re.finditer(r"register_profile\s*\(\s*(['\"])(?P<name>[^'\"]*)\1", source):
-        if match.group("name") in ("", "default"):
+        if match.group("name") in active:
             continue
         depth, index = 0, source.index("(", match.start())
         while index < len(source):
@@ -190,25 +201,32 @@ def named_profile_lines(source: str) -> set:
     return inside
 
 
+def profile_defaults(expression: ast.AST) -> set[str]:
+    if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+        return {expression.value}
+    if isinstance(expression, ast.BoolOp) and isinstance(expression.op, ast.Or):
+        return set().union(*(profile_defaults(value) for value in expression.values))
+    if isinstance(expression, ast.Call) and isinstance(expression.func, ast.Attribute):
+        if expression.func.attr in ("getenv", "get"):
+            defaults = expression.args[1:2] + [keyword.value for keyword in expression.keywords if keyword.arg == "default"]
+            return set().union(*(profile_defaults(value) for value in defaults))
+    return set()
+
+
 def scan_text(path: str, source: str) -> list[dict]:
     """Language-agnostic textual checks: seeds and retry policies."""
     findings: list[dict] = []
-    lines = mask_strings(path, source).splitlines()
+    masked = mask_strings(path, source)
     replay_profile = named_profile_lines(source)
-    for index, line in enumerate(lines, start=1):
-        stripped = line.strip()
-        if stripped.startswith("#") or stripped.startswith("//"):
-            continue
-        for pattern, detail in SEED_PATTERNS:
-            if re.search(pattern, line):
+    for patterns, check in ((SEED_PATTERNS, "pinned-seed"), (RETRY_PATTERNS, "retry-masks-flake")):
+        for pattern, detail in patterns:
+            for match in re.finditer(pattern, masked):
+                index = masked.count("\n", 0, match.start()) + 1
                 named = index in replay_profile
-                findings.append({"check": "pinned-seed", "file": path, "line": index,
-                                 "detail": detail + (" (named profile, advisory)" if named else ""),
-                                 "blocking": not named})
-        for pattern, detail in RETRY_PATTERNS:
-            if re.search(pattern, line):
-                findings.append({"check": "retry-masks-flake", "file": path, "line": index,
-                                 "detail": detail, "blocking": True})
+                advisory = check == "pinned-seed" and named
+                findings.append({"check": check, "file": path, "line": index,
+                                 "detail": detail + (" (named profile, advisory)" if advisory else ""),
+                                 "blocking": not advisory})
     return findings
 
 

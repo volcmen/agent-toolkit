@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -51,6 +52,11 @@ class ParseCounts(unittest.TestCase):
 
 
 class Vacuity(unittest.TestCase):
+    def test_all_skipped_unittest_and_bun_runs_are_vacuous(self) -> None:
+        for output in ("Ran 3 tests in 0.1s\nOK (skipped=3)", " 0 pass\n 3 skip\n"):
+            self.assertTrue(verify.looks_empty(verify.parse_counts(output)), output)
+        self.assertFalse(verify.looks_empty(verify.parse_counts("Ran 3 tests in 0.1s\nOK (skipped=2)")))
+
     def test_a_run_that_counted_nothing_is_vacuous(self) -> None:
         self.assertTrue(verify.looks_empty({}))
         self.assertTrue(verify.looks_empty({"skipped": 9}))
@@ -62,6 +68,15 @@ class Vacuity(unittest.TestCase):
 
 
 class LedgerChain(unittest.TestCase):
+    def test_concurrent_writers_preserve_every_entry_and_chain(self) -> None:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ledger.jsonl"
+            with ThreadPoolExecutor(max_workers=12) as pool:
+                list(pool.map(lambda i: verify.append(path, {"run": i}), range(48)))
+            entries = verify.read_ledger(path)
+            self.assertEqual({entry["run"] for entry in entries}, set(range(48)))
+            self.assertEqual(verify.chain_breaks(entries), [])
+
     def test_appending_chains_each_entry_onto_the_previous(self) -> None:
         with TemporaryDirectory() as tmp:
             path = Path(tmp) / "ledger.jsonl"
@@ -266,6 +281,37 @@ class EndToEnd(unittest.TestCase):
 
 
 class Gate(unittest.TestCase):
+    def test_untracked_dependency_cannot_verify_a_commit_that_omits_it(self) -> None:
+        with TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            git_repo(repo)
+            (repo / "helper.py").write_text("value = 42\n")
+            result = self.verify_run(repo, sys.executable, "-c", "import helper; assert helper.value == 42; print('1 passed')")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("MISSING", self.gate(repo, "HEAD").stdout)
+            subprocess.run(["git", "add", "helper.py"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "include tested dependency"], cwd=repo, check=True)
+            self.assertEqual(self.gate(repo, "HEAD").returncode, 0)
+
+    def test_staged_additions_are_part_of_the_recorded_tree(self) -> None:
+        with TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            git_repo(repo)
+            (repo / "new.py").write_text("value = 42\n")
+            subprocess.run(["git", "add", "new.py"], cwd=repo, check=True)
+            self.verify_run(repo, sys.executable, "-B", "-c", "import new; assert new.value == 42; print('1 passed')")
+            self.assertEqual(verify.tracked_tree(repo), verify.worktree_tree(repo))
+            self.assertIn("MISSING", self.gate(repo, "HEAD").stdout)
+            subprocess.run(["git", "commit", "-qm", "include staged addition"], cwd=repo, check=True)
+            self.assertEqual(self.gate(repo, "HEAD").returncode, 0)
+
+    def test_child_argument_separators_survive(self) -> None:
+        with TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            git_repo(repo)
+            result = self.verify_run(repo, sys.executable, "-c", "import sys; assert sys.argv[1:] == ['--', '-x']; print('1 passed')", "--", "-x")
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def gate(self, cwd: Path, treeish: str):
         return subprocess.run(
             [sys.executable, str(ROOT / "scripts" / "verify-run.py"), "--gate", treeish],

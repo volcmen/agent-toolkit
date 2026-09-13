@@ -8,6 +8,9 @@ import json
 import os
 import re
 import stat
+import signal
+import time
+from unittest import mock
 import subprocess
 import sys
 import unittest
@@ -20,8 +23,12 @@ SKILL = PROJECT / "plugins" / "qwen-gsd" / "skills" / "qwen-gsd-slice"
 SCRIPTS = SKILL / "scripts"
 
 
+def clean_environment() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if not key.startswith(("QWEN_GSD_", "QGS_"))}
+
+
 def run_script(name: str, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    merged = os.environ.copy()
+    merged = clean_environment()
     merged["PYTHONDONTWRITEBYTECODE"] = "1"
     if env:
         merged.update(env)
@@ -77,7 +84,7 @@ class Configuration(unittest.TestCase):
             literal = f"$(touch {marker})"
             config = root / "config.json"
             config.write_text(json.dumps({"state_dir": literal}), encoding="utf-8")
-            env = os.environ.copy()
+            env = clean_environment()
             env.update({"QWEN_GSD_CONFIG": str(config), "PYTHONDONTWRITEBYTECODE": "1"})
             command = f'eval "$({sys.executable} {SCRIPTS / "qwen_config.py"} env)"; printf "%s" "$QGS_STATE_DIR"'
             result = subprocess.run(
@@ -306,7 +313,7 @@ class LedgerClassification(unittest.TestCase):
             state = root / "state"
             config = root / "config.json"
             config.write_text(json.dumps({"state_dir": str(state)}), encoding="utf-8")
-            env = os.environ.copy()
+            env = clean_environment()
             env.update(
                 {
                     "PYTHONDONTWRITEBYTECODE": "1",
@@ -338,7 +345,7 @@ class LedgerClassification(unittest.TestCase):
 
 
 class UsageSummary(unittest.TestCase):
-    def test_sums_all_records_for_requested_session(self) -> None:
+    def test_uses_latest_cumulative_snapshot_for_requested_session(self) -> None:
         records = [
             {
                 "sessionId": "slice-1",
@@ -360,17 +367,17 @@ class UsageSummary(unittest.TestCase):
             {
                 "sessionId": "slice-1",
                 "durationMs": 2000,
-                "tools": {"totalCalls": 1, "totalFail": 1},
-                "files": {"linesAdded": 1, "linesRemoved": 0},
+                "tools": {"totalCalls": 3, "totalFail": 1},
+                "files": {"linesAdded": 4, "linesRemoved": 1},
                 "models": {
                     "qwen-fast": {
-                        "requests": 1,
-                        "inputTokens": 80,
-                        "cachedTokens": 20,
-                        "outputTokens": 5,
-                        "thoughtsTokens": 2,
-                        "totalTokens": 87,
-                        "totalLatencyMs": 250,
+                        "requests": 2,
+                        "inputTokens": 200,
+                        "cachedTokens": 80,
+                        "outputTokens": 20,
+                        "thoughtsTokens": 10,
+                        "totalTokens": 230,
+                        "totalLatencyMs": 750,
                     }
                 },
             },
@@ -391,8 +398,8 @@ class UsageSummary(unittest.TestCase):
             )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("records=2 sessions=1 requests=2", result.stdout)
-        self.assertIn("fresh_input=120 output=15 fresh_plus_output=135", result.stdout)
+        self.assertIn("records=1 sessions=1 requests=2", result.stdout)
+        self.assertIn("fresh_input=120 output=20 fresh_plus_output=140", result.stdout)
         self.assertIn("tool_calls=3 tool_failures=1", result.stdout)
 
 
@@ -415,7 +422,7 @@ class Wrapper(unittest.TestCase):
             uuidgen = fake_bin / "uuidgen"
             uuidgen.write_text("#!/bin/sh\nexit 77\n", encoding="utf-8")
             uuidgen.chmod(0o755)
-            env = os.environ.copy()
+            env = clean_environment()
             env.update(
                 {
                     "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
@@ -485,7 +492,7 @@ class Wrapper(unittest.TestCase):
                 encoding="utf-8",
             )
             qwen.chmod(0o755)
-            env = os.environ.copy()
+            env = clean_environment()
             env.update(
                 {
                     "HOME": str(root),
@@ -568,7 +575,7 @@ class Wrapper(unittest.TestCase):
             qwen = fake_bin / "qwen"
             qwen.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
             qwen.chmod(0o755)
-            env = os.environ.copy()
+            env = clean_environment()
             env.update(
                 {
                     "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
@@ -634,7 +641,7 @@ class Wrapper(unittest.TestCase):
                 encoding="utf-8",
             )
             qwen.chmod(0o755)
-            env = os.environ.copy()
+            env = clean_environment()
             env.update(
                 {
                     "HOME": str(root),
@@ -702,7 +709,7 @@ class Wrapper(unittest.TestCase):
             qwen = fake_bin / "qwen"
             qwen.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
             qwen.chmod(0o755)
-            env = os.environ.copy()
+            env = clean_environment()
             env.update(
                 {
                     "HOME": str(root),
@@ -773,7 +780,7 @@ class Wrapper(unittest.TestCase):
             qwen = fake_bin / "qwen"
             qwen.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 99\n", encoding="utf-8")
             qwen.chmod(0o755)
-            env = os.environ.copy()
+            env = clean_environment()
             env.update(
                 {
                     "HOME": str(root),
@@ -800,6 +807,128 @@ class Wrapper(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("model check failed for 'removed-model'", result.stderr)
             self.assertFalse(marker.exists(), "Qwen ran before the restored model was validated")
+
+
+
+class ReviewRegressions(unittest.TestCase):
+    def test_fallback_selection_is_visible_in_summary_and_ledger(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / 'config.json'
+            config.write_text(json.dumps({'state_dir': str(root / 'state')}))
+            log = root / 'run.jsonl'
+            events = [
+                {'type': 'system', 'subtype': 'init', 'model': 'fast', 'session_id': 's'},
+                {'type': 'system', 'subtype': 'model_fallback', 'data': {'fromModel': 'fast', 'toModel': 'deep', 'statusCode': 429, 'fallbackIndex': 0}},
+                {'type': 'assistant', 'message': {'model': 'fast', 'content': []}},
+                {'type': 'result', 'subtype': 'success', 'is_error': False},
+            ]
+            log.write_text(''.join(json.dumps(e) + '\n' for e in events))
+            summary = run_script('qwen_result.py', str(log))
+            self.assertIn('model=deep', summary.stdout)
+            self.assertIn('fallback attempted: fast -> deep', summary.stdout)
+            result = run_script('qwen_log.py', 'record', '--log', str(log), '--exit-code', '0', env={'QWEN_GSD_CONFIG': str(config)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            record = json.loads((root / 'state/runs.jsonl').read_text())
+            self.assertEqual(record['model_actual'], '')
+            self.assertEqual(record['model_selected'], 'deep')
+            self.assertIn('model fallback attempted: fast -> deep', record['warnings'])
+
+    def test_model_settings_accept_jsonc_without_damaging_urls(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'settings.json'
+            path.write_text('''{
+  // user configuration
+  "modelProviders": {"test": [{"id": "fast", /* note */ "name": "Fast", "baseUrl": "https://example.com/v1?x=//"}]}
+}''')
+            result = run_script('qwen_model_check.py', 'fast', '--settings', str(path))
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_ambiguous_provider_diagnostic_omits_url_credentials(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'settings.json'
+            path.write_text(json.dumps({'modelProviders': {'test': [
+                {'id': 'fast', 'baseUrl': 'https://alice:password-value@example.com/v1?key=secret-value'},
+                {'id': 'fast', 'baseUrl': 'https://second.example.com/v1'},
+            ]}}))
+            result = run_script('qwen_model_check.py', 'fast', '--settings', str(path))
+            self.assertEqual(result.returncode, 4)
+            self.assertIn('example.com', result.stdout)
+            for secret in ('alice', 'password-value', 'secret-value'):
+                self.assertNotIn(secret, result.stdout + result.stderr)
+
+    def test_resume_ledger_uses_cumulative_usage_without_adding_prior_snapshot(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / 'config.json'
+            config.write_text(json.dumps({'state_dir': str(root / 'state'), 'warn_fresh_plus_output': 250}))
+            log = root / 'run.jsonl'
+            for tokens in (110, 220):
+                events = [
+                    {'type': 'system', 'subtype': 'init', 'model': 'fast', 'session_id': 'session'},
+                    {'type': 'result', 'subtype': 'success', 'is_error': False, 'usage': {'input_tokens': tokens}},
+                ]
+                log.write_text(''.join(json.dumps(e) + '\n' for e in events))
+                result = run_script('qwen_log.py', 'record', '--log', str(log), '--exit-code', '0', env={'QWEN_GSD_CONFIG': str(config)})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn('warning=', result.stdout)
+            records = [json.loads(line) for line in (root / 'state/runs.jsonl').read_text().splitlines()]
+            self.assertEqual(records[-1]['fresh_plus_output'], 220)
+
+    def test_subprocess_environment_does_not_inherit_live_qwen_overrides(self):
+        with mock.patch.dict(os.environ, {'QWEN_GSD_STATE_DIR': '/do-not-write-here', 'QWEN_GSD_MODEL': 'live-model'}):
+            self.assertNotIn('QWEN_GSD_STATE_DIR', clean_environment())
+            self.assertNotIn('QWEN_GSD_MODEL', clean_environment())
+
+    def test_interrupting_wrapper_stops_qwen_and_its_descendant(self):
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            with self.subTest(signum=signum), TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                fake_bin = root / 'bin'
+                fake_bin.mkdir()
+                heartbeat = root / 'heartbeat'
+                child_code = (
+                    'import signal,time,pathlib; '
+                    'signal.signal(signal.SIGTERM, signal.SIG_IGN); signal.signal(signal.SIGINT, signal.SIG_IGN); '
+                    f'p=pathlib.Path({str(heartbeat)!r}); '
+                    '\nwhile True: p.write_text(str(time.time_ns())); time.sleep(0.02)\n'
+                )
+                qwen = fake_bin / 'qwen'
+                qwen.write_text(f'#!{sys.executable}\nimport os,signal,subprocess,sys,time,pathlib\n'
+                    'signal.signal(signal.SIGTERM, signal.SIG_IGN)\nsignal.signal(signal.SIGINT, signal.SIG_IGN)\n'
+                    f'pathlib.Path({str(root / "pid")!r}).write_text(str(os.getpid()))\n'
+                    f'subprocess.Popen([sys.executable, "-c", {child_code!r}], start_new_session=True)\n'
+                    'time.sleep(30)\n')
+                qwen.chmod(0o755)
+                prompt = root / 'prompt.md'
+                prompt.write_text('fixture only')
+                config = root / 'config.json'
+                config.write_text(json.dumps({'state_dir': str(root / 'state'), 'model': ''}))
+                env = {**clean_environment(), 'QWEN_GSD_CONFIG': str(config), 'PATH': f'{fake_bin}:{os.environ["PATH"]}'}
+                process = subprocess.Popen(['bash', str(SCRIPTS / 'qwen_slice.sh'), '--prompt-file', str(prompt), '--no-model-check'],
+                                           env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    deadline = time.monotonic() + 8
+                    while not heartbeat.exists() and process.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    self.assertTrue(heartbeat.exists())
+                    process.send_signal(signum)
+                    stdout, stderr = process.communicate(timeout=8)
+                    self.assertEqual(process.returncode, 128 + signum, stdout + stderr)
+                    final = heartbeat.read_text()
+                    time.sleep(0.1)
+                    self.assertEqual(heartbeat.read_text(), final, 'descendant is still running')
+                    records = [json.loads(line) for line in (root / 'state/runs.jsonl').read_text().splitlines()]
+                    self.assertEqual([r['reason'] for r in records if r['kind'] == 'run'], ['killed'])
+                finally:
+                    if (root / 'pid').exists():
+                        try:
+                            os.killpg(int((root / 'pid').read_text()), signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate()
 
 
 if __name__ == "__main__":

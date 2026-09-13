@@ -39,7 +39,7 @@ Project instructions override defaults except under `~/notraffic/`.
 ## Delivery and memory
 
 - `mr-preflight` owns readiness; `review-retro` handles human review findings.
-- Record tests with `claude-core/scripts/verify-run.py --scope <n> -- <cmd>`.
+- Record tests with `python3 ~/.claude/scripts/verify-run.py --scope <n> -- <cmd>`.
 - Worker briefs name requirements and relevant risks; load risk rows as needed.
 - Under `~/notraffic/`, repository rules become preflight R-rows; pushes use
   author "David David" and the clone's `@notraffic.tech` committer identity.

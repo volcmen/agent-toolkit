@@ -72,10 +72,11 @@ branch=$(git branch --show-current)
 mr_json=${PREFLIGHT_MR_JSON-$(perl -e 'alarm 10; exec @ARGV' glab mr view --output json 2>/dev/null || true)}
 mr_title=$(printf '%s' "$mr_json" | jq -r '.title // empty' 2>/dev/null)
 mr_desc=$(printf '%s' "$mr_json" | jq -r '.description // empty' 2>/dev/null | perl -0pe 's/<!--.*?-->//gs')
-tools_present="ruff=$(command -v ruff >/dev/null && echo 1)|npx=$(command -v npx >/dev/null && echo 1)"
+scanner="$HOME/.claude/scripts/test-quality-scan.py"
+tools_present="ruff=$(command -v ruff >/dev/null && echo 1)|npx=$(command -v npx >/dev/null && echo 1)|python3=$(command -v python3)|scanner=$([ -f "$scanner" ] && echo 1)"
 ident=$(printf '%s|%s|%s|%s|%s|%s' \
   "$(git rev-parse "$target")" "$(git rev-parse HEAD)" \
-  "$(cat "$0" "$HOME/.claude/skills/mr-preflight/harness-delta.py" 2>/dev/null | shasum | cut -d' ' -f1)" \
+  "$(cat "$0" "$HOME/.claude/skills/mr-preflight/harness-delta.py" "$scanner" 2>/dev/null | shasum | cut -d' ' -f1)" \
   "$(git ls-tree -r "$target" --name-only -- .claude/rules CLAUDE.md 2>/dev/null | xargs -I{} git rev-parse "$target:{}" 2>/dev/null | shasum | cut -d' ' -f1)" \
   "$(printf '%s\n%s' "$mr_title" "$mr_desc" | shasum | cut -d' ' -f1)" "$tools_present")
 cache="$out_dir/cache-$(printf '%s' "$ident" | shasum | cut -c1-16).txt"
@@ -234,7 +235,6 @@ payload=$(git log "$target..HEAD" --format=%B | grep -vE '^(Signed-off-by|Change
 sl=$(printf '%s\n' "$payload" | grep -nE 'claude\.ai/code/session_|Claude-Session:|Generated with \[?Claude|Co-Authored-By: Claude')
 if [ -n "$sl" ]; then mech_fail=1; echo "FAIL F21 session-link-leak (commit bodies + MR description) [total=$(printf '%s\n' "$sl" | grep -c .)]"; printf '%s\n' "$sl" | show; else echo "PASS F21 — 0 session links"; fi
 
-scanner="$HOME/Personal/ai/claude-core/scripts/test-quality-scan.py"
 changed_tests=$(printf '%s\n' "$files" | rg -N -e "($test_re)" || true)
 if [ -n "$changed_tests" ] && [ -f "$scanner" ] && command -v python3 >/dev/null; then
   seeds=$(python3 "$scanner" $changed_tests 2>/dev/null | rg -N -e 'pinned-seed' | rg -N -v -e 'advisory' || true)

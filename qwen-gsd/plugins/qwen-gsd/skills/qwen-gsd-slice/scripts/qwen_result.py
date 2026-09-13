@@ -55,6 +55,21 @@ def validate(events: list[dict], requested_model: str = "") -> tuple[int, str]:
     return (0, "")
 
 
+def observed_model(events: list[dict]) -> tuple[str, list[str]]:
+    selected = ""
+    warnings = []
+    for event in events:
+        if event.get("type") == "system" and event.get("subtype") == "init":
+            selected = event.get("model") or selected
+        elif event.get("type") == "system" and event.get("subtype") == "model_fallback":
+            data = event.get("data") or {}
+            target = data.get("toModel")
+            if target:
+                warnings.append(f"model fallback attempted: {data.get('fromModel') or selected} -> {target}")
+                selected = target
+    return selected, warnings
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("log", type=Path)
@@ -89,7 +104,12 @@ def main() -> None:
                 tools[block.get("name", "?")] = tools.get(block.get("name", "?"), 0) + 1
 
     print(f"session_id={init.get('session_id') or (result or {}).get('session_id', '?')}")
-    print(f"model={init.get('model', '?')} permission_mode={init.get('permission_mode', '?')} cli={init.get('qwen_code_version', '?')}")
+    selected, warnings = observed_model(events)
+    print(f"model={selected or '?'} permission_mode={init.get('permission_mode', '?')} cli={init.get('qwen_code_version', '?')}")
+    for warning in warnings:
+        print(f"warning={warning}")
+    if warnings:
+        print("model_source=fallback_selection authoring_model=unconfirmed")
 
     if result is None:
         print("result=MISSING  # run aborted before completion (budget abort, crash, or kill)")

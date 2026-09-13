@@ -28,23 +28,29 @@ public struct LauncherClassifier: Sendable {
         }
 
         let processDetails = snapshot.processes.map { ($0, ParsedProcessArguments(arguments: $0.arguments)) }
+        if let unresolved = processDetails.first(where: {
+            $0.0.executablePath == configuration.chromeExecutableURL.path
+                && $0.1.userDataDirectory.values.contains(where: { !$0.hasPrefix("/") })
+        }) {
+            return .fail(.profileConflict(pid: unresolved.0.pid, profilePath: configuration.profileURL.path))
+        }
         let dedicatedProfileProcesses = processDetails.filter {
             $0.0.executablePath == configuration.chromeExecutableURL.path
-                && $0.1.userDataDirectory.values.contains(configuration.profileURL.path)
+                && $0.1.userDataDirectory.values.contains(configuration.profileURL.standardizedFileURL.resolvingSymlinksInPath().path)
         }
         if let conflict = dedicatedProfileProcesses.first(where: { !isExpected($0.0, arguments: $0.1) }) {
-            return .fail(.profileConflict(pid: conflict.0.pid, profilePath: configuration.profileURL.path))
+            return .fail(.profileConflict(pid: conflict.0.pid, profilePath: configuration.profileURL.standardizedFileURL.resolvingSymlinksInPath().path))
         }
 
         let expectedProcesses = processDetails.filter { isExpected($0.0, arguments: $0.1) }
         if expectedProcesses.count > 1 {
-            return .fail(.profileConflict(pid: nil, profilePath: configuration.profileURL.path))
+            return .fail(.profileConflict(pid: nil, profilePath: configuration.profileURL.standardizedFileURL.resolvingSymlinksInPath().path))
         }
 
         if let wrongProfileProcess = processDetails.first(where: { process, arguments in
             process.executablePath == configuration.chromeExecutableURL.path
                 && isOwnedByListener(process, listeners: snapshot.listeners)
-                && arguments.userDataDirectory.hasSingleDistinctValueDifferent(from: configuration.profileURL.path)
+                && arguments.userDataDirectory.hasSingleDistinctValueDifferent(from: configuration.profileURL.standardizedFileURL.resolvingSymlinksInPath().path)
         }) {
             return .fail(
                 .wrongProfileChrome(
@@ -90,11 +96,16 @@ public struct LauncherClassifier: Sendable {
 
     private func isExpected(_ process: ProcessObservation, arguments: ParsedProcessArguments) -> Bool {
         process.executablePath == configuration.chromeExecutableURL.path
-            && arguments.userDataDirectory.isExactly(configuration.profileURL.path)
+            && arguments.userDataDirectory.isExactly(configuration.profileURL.standardizedFileURL.resolvingSymlinksInPath().path)
             && arguments.remoteDebuggingAddress.isExactly(configuration.host)
             && arguments.remoteDebuggingPort.isExactly(String(configuration.port))
             && process.arguments.contains("--no-first-run")
             && process.arguments.contains("--no-default-browser-check")
+            && !process.arguments.contains { argument in
+                let flag = argument.split(separator: "=", maxSplits: 1).first.map(String.init) ?? argument
+                return ["--headless", "--remote-allow-origins", "--remote-debugging-pipe",
+                        "--no-sandbox", "--disable-web-security", "--incognito", "--guest"].contains(flag)
+            }
     }
 
     private func isOwnedByListener(_ process: ProcessObservation, listeners: [ListenerBinding]) -> Bool {
@@ -123,7 +134,7 @@ private struct ParsedProcessArguments {
     let remoteDebuggingPort: ParsedArgumentValues
 
     init(arguments: [String]) {
-        userDataDirectory = ParsedArgumentValues(arguments: arguments, name: "--user-data-dir")
+        userDataDirectory = ParsedArgumentValues(arguments: arguments, name: "--user-data-dir", pathValues: true)
         remoteDebuggingAddress = ParsedArgumentValues(arguments: arguments, name: "--remote-debugging-address")
         remoteDebuggingPort = ParsedArgumentValues(arguments: arguments, name: "--remote-debugging-port")
     }
@@ -132,7 +143,7 @@ private struct ParsedProcessArguments {
 private struct ParsedArgumentValues {
     let values: [String]
 
-    init(arguments: [String], name: String) {
+    init(arguments: [String], name: String, pathValues: Bool = false) {
         var parsed: [String] = []
         var index = 0
         while index < arguments.count {
@@ -149,7 +160,9 @@ private struct ParsedArgumentValues {
             }
             index += 1
         }
-        values = parsed
+        values = pathValues ? parsed.map { value in
+            value.hasPrefix("/") ? URL(fileURLWithPath: value).standardizedFileURL.resolvingSymlinksInPath().path : value
+        } : parsed
     }
 
     func isExactly(_ expected: String) -> Bool {

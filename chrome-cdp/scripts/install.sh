@@ -29,6 +29,28 @@ build_installer_path() {
   echo "$bin_root/chrome-cdp-installer"
 }
 
+canonical_backup() {
+  local candidate="$1" root resolved
+  [[ -d "$candidate" && ! -L "$candidate" && -d "$BACKUP_ROOT" && ! -L "$BACKUP_ROOT" ]] || return 1
+  root="$(cd "$BACKUP_ROOT" && /bin/pwd -P)" || return 1
+  resolved="$(cd "$candidate" && /bin/pwd -P)" || return 1
+  [[ "$resolved" == "$root"/* ]] || return 1
+  printf '%s\n' "$resolved"
+}
+
+restore_previous_app() {
+  local stage="$1" installer="$2" manifest="$3" recovered_manifest="$4"
+  if [[ ! -d "$stage" || -L "$stage" ]] || ! "$installer" publish --staged "$stage" --installed "$INSTALLED_APP"; then
+    echo "recovery failed: previous app could not be republished; inspect $stage and $INSTALLED_APP" >&2
+    return 1
+  fi
+  if ! strict_signature "$INSTALLED_APP" || ! "$PROJECT_ROOT/scripts/bundle-manifest.sh" "$INSTALLED_APP" > "$recovered_manifest" || ! /usr/bin/cmp "$manifest" "$recovered_manifest"; then
+    echo "recovery failed: restored app did not pass signature and content verification" >&2
+    return 1
+  fi
+  echo "previous app restored and verified" >&2
+}
+
 install_app() {
   "$PROJECT_ROOT/scripts/build.sh"
   "$PROJECT_ROOT/scripts/verify.sh" --app "$PROJECT_ROOT/dist/Chrome CDP.app" --staged
@@ -61,11 +83,15 @@ install_app() {
   "$installer" publish --staged "$stage" --installed "$INSTALLED_APP"
 
   if ! "$PROJECT_ROOT/scripts/verify.sh" --app "$INSTALLED_APP" --installed; then
-    if [[ -e "$stage" ]]; then
-      "$installer" publish --staged "$stage" --installed "$INSTALLED_APP" || true
+    echo "installed verification failed" >&2
+    if [[ -f "$backup_dir/installed.manifest" ]]; then
+      restore_previous_app "$stage" "$installer" "$backup_dir/installed.manifest" "$backup_dir/recovered.manifest" || return 1
+    elif /bin/mv "$INSTALLED_APP" "$backup_dir/failed-new-Chrome CDP.app" && [[ ! -e "$INSTALLED_APP" && ! -L "$INSTALLED_APP" ]]; then
+      echo "failed new app preserved in $backup_dir; no previous installation existed" >&2
+    else
+      echo "recovery failed: could not remove the failed first installation" >&2
     fi
-    echo "installed verification failed; previous app restored" >&2
-    exit 1
+    return 1
   fi
 
   if [[ -e "$stage" ]]; then
@@ -79,8 +105,8 @@ install_app() {
 
 rollback_app() {
   [[ $# -eq 1 ]] || usage
-  local backup_dir="$1" backup_app stage installer
-  [[ "$backup_dir" == "$BACKUP_ROOT"/* && -d "$backup_dir" && ! -L "$backup_dir" ]] || { echo "invalid backup directory" >&2; exit 1; }
+  local backup_dir backup_app stage installer current_manifest
+  backup_dir="$(canonical_backup "$1")" || { echo "invalid backup directory" >&2; return 1; }
   backup_app="$backup_dir/Chrome CDP.app"
   [[ -d "$backup_app" && ! -L "$backup_app" ]] || { echo "backup app is missing" >&2; exit 1; }
   strict_signature "$backup_app"
@@ -88,17 +114,21 @@ rollback_app() {
   [[ ! -e "$stage" && ! -L "$stage" ]] || { echo "rollback stage already exists" >&2; exit 1; }
   /usr/bin/ditto --rsrc --extattr "$backup_app" "$stage"
   installer="$(build_installer_path)"
+  [[ -d "$INSTALLED_APP" && ! -L "$INSTALLED_APP" ]] || { echo "current app is missing or unsafe" >&2; return 1; }
+  current_manifest="$backup_dir/before-rollback-$$.manifest"
+  "$PROJECT_ROOT/scripts/bundle-manifest.sh" "$INSTALLED_APP" > "$current_manifest"
   "$installer" publish --staged "$stage" --installed "$INSTALLED_APP"
   if ! strict_signature "$INSTALLED_APP"; then
-    "$installer" publish --staged "$stage" --installed "$INSTALLED_APP" || true
-    echo "rollback verification failed; current app restored" >&2
-    exit 1
+    echo "rollback verification failed" >&2
+    restore_previous_app "$stage" "$installer" "$current_manifest" "$backup_dir/recovered-rollback-$$.manifest" || return 1
+    return 1
   fi
   /bin/mkdir -p "$backup_dir/rollback-displaced"
   /bin/mv "$stage" "$backup_dir/rollback-displaced/Chrome CDP.app"
   echo "rolled back from $backup_dir"
 }
 
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 case "${1:-}" in
   install)
     [[ $# -eq 1 ]] || usage
@@ -110,3 +140,4 @@ case "${1:-}" in
     ;;
   *) usage ;;
 esac
+fi

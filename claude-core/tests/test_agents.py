@@ -445,13 +445,13 @@ class StandaloneCopies(unittest.TestCase):
 class Package(unittest.TestCase):
     def test_shared_writer_reference_resolves_with_a_small_total_context(self) -> None:
         prompt = ROOT / "prompts/alan-wake.md"
-        contract = ROOT.parent / "claude-core/skills/engineering/references/writing.md"
+        contract = ROOT.parent / "skills/engineering/references/writing.md"
         self.assertIn("~/.claude/skills/engineering/references/writing.md", prompt.read_text())
         self.assertTrue(contract.is_file())
         self.assertLessEqual(prompt.stat().st_size + contract.stat().st_size, 5500)
 
     def test_risk_reviewer_reference_resolves_without_preloading_a_fork(self) -> None:
-        skill = ROOT.parent / "claude-core/skills/mr-preflight/SKILL.md"
+        skill = ROOT.parent / "skills/mr-preflight/SKILL.md"
         self.assertTrue(skill.is_file())
         self.assertIn("~/.claude/skills/mr-preflight/SKILL.md", (ROOT / "prompts/gate.md").read_text())
         self.assertLessEqual(skill.stat().st_size, 5000)

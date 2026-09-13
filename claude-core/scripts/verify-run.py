@@ -26,8 +26,10 @@ boundary and it does not establish that the tests are any good.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -46,6 +48,9 @@ COUNT_PATTERNS = (
     (r"Ran (?P<ran>\d+) tests?", "ran"),
     # vitest / jest: "Tests  1428 passed (1430)"
     (r"Tests?\s+(?P<vitest>\d+) passed", "vitest_passed"),
+    (r"(?m)^\s*(?P<passed>\d+) pass\s*$", "passed"),
+    (r"(?m)^\s*(?P<skipped>\d+) skip\s*$", "skipped"),
+    (r"skipped=(?P<skipped>\d+)", "skipped"),
 )
 
 
@@ -63,10 +68,12 @@ def parse_counts(output: str) -> dict:
 
 def looks_empty(counts: dict) -> bool:
     """True when nothing actually ran, so a zero exit means nothing. Pure."""
-    ran = (counts.get("passed", 0) + counts.get("failed", 0)
-           + counts.get("errors", 0) + counts.get("ran", 0)
-           + counts.get("vitest_passed", 0))
-    return ran == 0
+    executed = max(
+        counts.get("passed", 0) + counts.get("failed", 0) + counts.get("errors", 0),
+        counts.get("ran", 0) - counts.get("skipped", 0),
+        counts.get("vitest_passed", 0),
+    )
+    return executed <= 0
 
 
 def chain(previous_hash: str, entry: dict) -> str:
@@ -78,8 +85,14 @@ def chain(previous_hash: str, entry: dict) -> str:
 def read_ledger(path: Path) -> list[dict]:
     if not path.exists():
         return []
+    with path.open(encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_SH)
+        return parse_ledger(handle.read())
+
+
+def parse_ledger(content: str) -> list[dict]:
     entries = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in content.splitlines():
         line = line.strip()
         if not line:
             continue
@@ -90,15 +103,24 @@ def read_ledger(path: Path) -> list[dict]:
     return entries
 
 
+def tested_tree(entry: dict) -> str | None:
+    if entry.get("tree_all"):
+        return entry["tree_all"]
+    if entry.get("untracked"):
+        return None
+    return entry.get("tree")
+
+
 def verified_trees(entries: list[dict], require_nonempty: bool = True) -> set:
     """Tree hashes with a green, non-vacuous run. Pure."""
     trees = set()
     for entry in entries:
-        if entry.get("exit") != 0 or not entry.get("tree"):
+        tree = tested_tree(entry)
+        if entry.get("exit") != 0 or not tree:
             continue
         if require_nonempty and entry.get("empty"):
             continue
-        trees.add(entry["tree"])
+        trees.add(tree)
     return trees
 
 
@@ -125,7 +147,7 @@ def tree_status(entries: list[dict], tree: str, deps: str = "") -> tuple[str, st
     after failing is FLAKY, a green run that counted no tests is VACUOUS, and
     a pass taken under different resolved dependencies is STALE.
     """
-    relevant = [e for e in entries if e.get("tree") == tree]
+    relevant = [e for e in entries if tested_tree(e) == tree]
     if not relevant:
         return MISSING, f"no run recorded against tree {tree[:12]}"
 
@@ -207,8 +229,9 @@ def _tree_with(add_args: tuple, cwd: Path | None = None) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         env = dict(os.environ, GIT_INDEX_FILE=str(Path(tmp) / "index"))
         root = Path(git("rev-parse", "--show-toplevel", cwd=cwd))
-        subprocess.run(("git", "read-tree", "HEAD"), cwd=root, env=env,
-                       capture_output=True, text=True, check=False)
+        index_tree = git("write-tree", cwd=root)
+        subprocess.run(("git", "read-tree", index_tree), cwd=root, env=env,
+                       capture_output=True, text=True, check=True)
         subprocess.run(("git", "add") + add_args, cwd=root, env=env,
                        capture_output=True, text=True, check=True)
         return subprocess.run(("git", "write-tree"), cwd=root, env=env,
@@ -241,12 +264,16 @@ def ledger_path(cwd: Path | None = None) -> Path:
 
 
 def append(path: Path, entry: dict) -> dict:
-    entries = read_ledger(path)
-    previous = entries[-1].get("chain", "") if entries else ""
-    entry = dict(entry)
-    entry["chain"] = chain(previous, entry)
-    with path.open("a", encoding="utf-8") as handle:
+    with path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        handle.seek(0)
+        entries = parse_ledger(handle.read())
+        previous = entries[-1].get("chain", "") if entries else ""
+        entry = dict(entry)
+        entry["chain"] = chain(previous, entry)
         handle.write(json.dumps(entry, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
     return entry
 
 
@@ -286,7 +313,7 @@ def main(argv: list[str]) -> int:
                 counts=entry.get("counts"), cmd=" ".join(entry.get("cmd", []))[:60]))
         return 1 if breaks else 0
 
-    command = [a for a in args.command if a != "--"]
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         parser.error("nothing to run: verify-run.py [--scope NAME] -- <command>")
 

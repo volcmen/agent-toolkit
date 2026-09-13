@@ -73,8 +73,6 @@ plugins.json                            ← edit catalog metadata here
 ├── wiki/plugins/obsidian-memory/
 │   ├── .claude-plugin/plugin.json      ← generated
 │   └── .codex-plugin/plugin.json       ← generated
-│   ├── .claude-plugin/plugin.json      ← generated
-│   └── .codex-plugin/plugin.json       ← generated
 ├── codex-pair/plugins/codex-pair/
 │   ├── .claude-plugin/plugin.json      ← generated
 │   └── .codex-plugin/plugin.json       ← generated
@@ -141,12 +139,13 @@ validation commands above.
 ├── bun-global-tools/
 ├── chatgpt-consult/
 ├── claude-core/
+├── chrome-cdp/
 ├── codex-pair/
 ├── qwen-gsd/
 └── wiki/
 ```
 
-Generated boards, local vault configuration, logs, caches, temporary data,
+Local vault configuration, logs, caches, temporary data,
 dependency directories, and build output are intentionally excluded from source
 control.
 

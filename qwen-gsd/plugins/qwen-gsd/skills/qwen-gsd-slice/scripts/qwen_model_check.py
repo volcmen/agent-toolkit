@@ -13,7 +13,22 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
+from urllib.parse import urlsplit
+
+
+def parse_settings(source: str) -> dict:
+    pattern = r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*[\s\S]*?\*/'
+    cleaned = re.sub(pattern, lambda match: match[0] if match[0].startswith('"') else re.sub(r'[^\n]', ' ', match[0]), source)
+    return json.loads(cleaned)
+
+
+def provider_host(value: str) -> str:
+    try:
+        return urlsplit(value).hostname or "unknown host"
+    except ValueError:
+        return "invalid host"
 
 
 def providers(settings: dict) -> list[dict]:
@@ -34,7 +49,7 @@ def main() -> None:
     if not args.settings.is_file():
         raise SystemExit(f"settings not found: {args.settings}")
     try:
-        settings = json.loads(args.settings.read_text(encoding="utf-8"))
+        settings = parse_settings(args.settings.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, ValueError) as error:
         raise SystemExit(f"settings not parseable: {error}")
 
@@ -77,7 +92,7 @@ def main() -> None:
     if len(matches) > 1:
         print(f"ambiguous model id: {args.model} matches {len(matches)} provider entries:")
         for entry in matches:
-            print(f"  {entry.get('name', '?')} -> {entry.get('baseUrl', '?')}")
+            print(f"  {entry.get('name', '?')} -> {provider_host(str(entry.get('baseUrl', '')))}")
         raise SystemExit(4)
 
     entry = matches[0]

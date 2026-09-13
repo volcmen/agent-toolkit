@@ -10,10 +10,12 @@ public enum ListenerInspectorError: Error, Equatable, Sendable {
 public struct LsofCommandResult: Sendable {
     public let status: Int32
     public let output: Data
+    public let diagnostics: Data
 
-    public init(status: Int32, output: Data) {
+    public init(status: Int32, output: Data, diagnostics: Data = Data()) {
         self.status = status
         self.output = output
+        self.diagnostics = diagnostics
     }
 }
 
@@ -40,7 +42,7 @@ public struct ListenerInspector: Sendable {
             throw ListenerInspectorError.commandFailed
         }
         if result.status != 0 {
-            guard result.output.isEmpty else {
+            guard result.status == 1, result.output.isEmpty, result.diagnostics.isEmpty else {
                 throw ListenerInspectorError.commandFailed
             }
             return []
@@ -97,7 +99,7 @@ public struct ListenerInspector: Sendable {
                 executableURL: URL(fileURLWithPath: "/usr/sbin/lsof"),
                 arguments: ["-nP", "-a", "-iTCP:\(port)", "-sTCP:LISTEN", "-Fpn"]
             )
-            return LsofCommandResult(status: result.status, output: result.standardOutput)
+            return LsofCommandResult(status: result.status, output: result.standardOutput, diagnostics: result.standardError)
         } catch {
             throw ListenerInspectorError.commandFailed
         }

@@ -37,6 +37,12 @@ def main() -> None:
                 continue
             records.append(record)
 
+    latest = {}
+    for index, record in enumerate(records):
+        key = record.get("sessionId") or f"missing-session-{index}"
+        latest.pop(key, None)
+        latest[key] = record
+    records = list(latest.values())
     if not args.session:
         records = records[-max(1, args.latest) :]
     if not records:

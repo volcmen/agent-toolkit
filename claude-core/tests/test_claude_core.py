@@ -41,7 +41,7 @@ def build_fixture(tmp: Path) -> tuple[Path, Path]:
     for rel in manage.EXECUTABLES:
         (root / rel).chmod(0o755)
     shutil.copytree(ROOT / "agents", root / "agents")
-    (root / "scripts").mkdir()
+    (root / "scripts").mkdir(exist_ok=True)
     shutil.copy2(ROOT / "scripts" / "render.py", root / "scripts" / "render.py")
     return root, home
 
@@ -489,7 +489,7 @@ class MergedLifecycle(unittest.TestCase):
                 code, output = quiet(manage.cmd_install, None)
                 self.assertEqual(code, 0, output)
                 self.assertEqual(before, {path: path.lstat().st_mtime_ns for path in paths})
-                self.assertIn("unchanged 10 link(s)", output)
+                self.assertIn("unchanged 12 link(s)", output)
                 self.assertIn("unchanged 6 agent file(s)", output)
                 self.assertNotIn("backed up", output)
                 self.assertEqual(len([path for path in backups.rglob("*") if path.is_file()]), 2)

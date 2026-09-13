@@ -79,7 +79,19 @@ func listenerInspectorTests() throws {
     try listenerInspectorRejectsNonemptyNonzeroLsofOutputTest()
 }
 
+func listenerInspectorRejectsErrorsWithNoRecordsTest() throws {
+    for result in [LsofCommandResult(status: 2, output: Data()), LsofCommandResult(status: 1, output: Data(), diagnostics: Data("permission denied".utf8))] {
+        do {
+            _ = try ListenerInspector { _ in result }.inspect(configuration: .production())
+        } catch ListenerInspectorError.commandFailed {
+            continue
+        }
+        throw TestAssertionFailure("lsof error was mistaken for no listener")
+    }
+}
+
 func registerListenerInspectorTests(_ runner: inout TestRunner) {
+    runner.register("ListenerInspectorTests.ErrorsWithoutRecords", listenerInspectorRejectsErrorsWithNoRecordsTest)
     runner.register("ListenerInspectorTests", listenerInspectorTests)
     runner.register("ListenerInspectorTests.ParsesMachineRecordsWithoutNormalizingAddresses", listenerInspectorParsesMachineRecordsWithoutNormalizingAddressesTest)
     runner.register("ListenerInspectorTests.RetainsOnlyExactConfiguredPort", listenerInspectorRetainsOnlyExactConfiguredPortTest)

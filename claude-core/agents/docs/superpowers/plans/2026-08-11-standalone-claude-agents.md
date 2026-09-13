@@ -795,10 +795,10 @@ Expected: the plugin list has no `shared-agents@ai-workspace`; the active Claude
 
 **Files:**
 
-- Modify: `/Users/david.david/Documents/Obsidian Vault/projects/shared-agents/README.md`
-- Create: `/Users/david.david/Documents/Obsidian Vault/projects/shared-agents/decisions/0004-standalone-claude-agents.md`
-- Modify: `/Users/david.david/Documents/Obsidian Vault/daily/2026-08-11.md`
-- Modify when cross-session context materially changes: `/Users/david.david/Documents/Obsidian Vault/wiki/hot.md`
+- Modify: `<configured-vault>/projects/shared-agents/README.md`
+- Create: `<configured-vault>/projects/shared-agents/decisions/0004-standalone-claude-agents.md`
+- Modify: `<configured-vault>/daily/2026-08-11.md`
+- Modify when cross-session context materially changes: `<configured-vault>/wiki/hot.md`
 
 **Interfaces:**
 

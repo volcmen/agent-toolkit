@@ -424,7 +424,28 @@ func launcherClassifierTests() throws {
     try launcherClassifierHealthyWrongPortWebSocketFailsTest()
 }
 
+func launcherClassifierRejectsConflictingFlagsAndNormalizesProfileTest() throws {
+    let relativeArguments = chrome().arguments.map { $0.hasPrefix("--user-data-dir=") ? "--user-data-dir=chrome-cdp-profile" : $0 }
+    try expectEqual(classify(processes: [chrome(arguments: relativeArguments)]), .fail(.profileConflict(pid: 41, profilePath: classifierConfiguration.profileURL.path)))
+    try expectEqual(classify(processes: [chrome(arguments: relativeArguments), chrome(pid: 42)], listeners: [listener(pid: 42)], endpoint: healthyEndpoint()), .fail(.profileConflict(pid: 41, profilePath: classifierConfiguration.profileURL.path)))
+    let sensitiveArguments = chrome().arguments.map { $0.hasPrefix("--user-data-dir=") ? "--user-data-dir=profile?token=secret-value" : $0 }
+    try expectEqual(classify(processes: [chrome(arguments: sensitiveArguments)]), .fail(.profileConflict(pid: 41, profilePath: classifierConfiguration.profileURL.path)))
+    for flag in ["--headless=new", "--remote-allow-origins=*", "--incognito"] {
+        try expectEqual(
+            classify(processes: [chrome(arguments: chrome().arguments + [flag])], listeners: [listener()], endpoint: healthyEndpoint(pages: 0)),
+            .fail(.profileConflict(pid: 41, profilePath: classifierConfiguration.profileURL.path))
+        )
+    }
+    for suffix in ["/", "/."] {
+        let arguments = chrome().arguments.map { $0.hasPrefix("--user-data-dir=") ? $0 + suffix : $0 }
+        try expectEqual(classify(processes: [chrome(arguments: arguments)]), .waitForReadiness(pid: 41, lastFailure: .unavailable))
+        try expectEqual(classify(processes: [chrome(arguments: arguments)], listeners: [listener()], endpoint: healthyEndpoint()), .reuse(pid: 41, createBlankTarget: false))
+    }
+    try expectEqual(classify(processes: [chrome(arguments: chrome().arguments + ["--enable-features=SomeBenignFeature"])], listeners: [listener()], endpoint: healthyEndpoint()), .reuse(pid: 41, createBlankTarget: false))
+}
+
 func registerLauncherClassifierTests(_ runner: inout TestRunner) {
+    runner.register("LauncherClassifierTests.ConflictingFlagsAndEquivalentProfiles", launcherClassifierRejectsConflictingFlagsAndNormalizesProfileTest)
     runner.register("LauncherClassifierTests", launcherClassifierTests)
     runner.register("LauncherClassifierTests.ProfileMissingCreatesProfile", launcherClassifierProfileMissingCreatesProfileTest)
     runner.register("LauncherClassifierTests.ProfileModeRequestsRepair", launcherClassifierProfileModeRequestsRepairTest)

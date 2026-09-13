@@ -1,72 +1,148 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash): deny command shapes that route around the local git guard,
-forge commit identity, or delete remote refs.
-
-Heredoc bodies are stripped before matching, so writing *about* these commands
-(rule text, documentation, a test fixture) is not a match - only an actual
-invocation is.
-"""
+"""PreToolUse(Bash): catch accidental git guard, identity, and remote-ref changes."""
 import json
 import re
+import shlex
 import sys
 
 
-def strip_heredocs(cmd):
-    out, i = [], 0
-    for m in re.finditer(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", cmd):
-        tag = m.group(2)
-        rest = cmd[m.end():]
-        body = re.search(r"(^|\s)" + re.escape(tag) + r"(\s|$)", rest)
-        end = m.end() + (body.end() if body else len(rest))
-        if m.start() < i:
+def tokens(command):
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>\n")
+    lexer.whitespace = " \t\r"
+    lexer.whitespace_split = True
+    return list(lexer)
+
+
+def strip_heredocs(command):
+    output, pending = [], []
+    for line in command.splitlines(keepends=True):
+        if pending:
+            tag, tabs = pending[0]
+            candidate = line.rstrip("\r\n")
+            if (candidate.lstrip("\t") if tabs else candidate) == tag:
+                pending.pop(0)
+            output.append("\n")
             continue
-        out.append(cmd[i:m.end()])
-        i = end
-    out.append(cmd[i:])
-    return "".join(out)
+        output.append(line)
+        try:
+            words = tokens(line)
+        except ValueError:
+            continue
+        for index, word in enumerate(words[:-1]):
+            if word == "<<":
+                tag = words[index + 1]
+                tabs = tag.startswith("-")
+                if tag == "-":
+                    if index + 2 >= len(words):
+                        continue
+                    tag = words[index + 2]
+                elif tabs:
+                    tag = tag[1:]
+                pending.append((tag, tabs))
+    return "".join(output)
 
 
-RULES = [
-    (r"\bgit\b[^;&|]*\bpush\b[^;&|]*(--no-verify|\s-n(\s|$))",
-     "a push that skips the pre-push guard. Fix the guard or get explicit "
-     "authorization; never route around it."),
-    (r"\bgit\b[^;&|]*(-c\s+core\.hooksPath|config[^;&|]*core\.hooksPath)",
-     "relocating the hooks path, which disables the installed git guard."),
-    (r"\b(rm|mv|chmod|truncate)\b[^;&|]*\.git/hooks/",
-     "deleting or disabling a git hook. The guard stays installed; report what "
-     "it blocked instead."),
-    (r"\bgit\s+send-pack\b|\bgit\b[^;&|]*\bpush\b[^;&|]*--mirror",
-     "a raw transport push that bypasses pre-push entirely."),
-    (r"\bgit\b[^;&|]*\bpush\b[^;&|]*(--delete\b|\s:[A-Za-z0-9_./-]+)",
-     "deleting a remote ref - a RED WRITE that needs the user's explicit "
-     "authorization naming that ref."),
-    (r"(^|[;&|]\s*|\s)GIT_(COMMITTER|AUTHOR)_(EMAIL|NAME)=",
-     "overriding git author/committer identity. Publishing under another "
-     "person's identity is forgery; hiding my own defeats a review control."),
-    (r"(^|[;&|]\s*|\s)(GIT_GUARD_OFF|GIT_ALLOW_FOREIGN_HISTORY)=",
-     "turning off the git guard. Report what it blocked and why."),
-    (r"\bgit\s+config\b(?![^;&|]*--(get|list|get-all|get-regexp))[^;&|]*"
-     r"\buser\.(email|name)\b\s+\S",
-     "rewriting a clone's git identity. Ask the user first - this is how a "
-     "colleague's commits end up committed under their name."),
-]
+def command_reason(words):
+    while words and words[0].rsplit("/", 1)[-1] in ("env", "command", "exec", "sudo"):
+        wrapper = words[0].rsplit("/", 1)[-1]
+        words = words[1:]
+        while words and words[0].startswith("-"):
+            option = words[0]
+            if wrapper == "command" and option in ("-v", "-V"):
+                return None
+            if wrapper == "env" and option in ("-S", "--split-string") and len(words) > 1:
+                try:
+                    words = tokens(words[1]) + words[2:]
+                except ValueError:
+                    return None
+                break
+            takes_value = (wrapper == "env" and option in ("-u", "--unset", "-C", "--chdir")) or (wrapper == "sudo" and option in ("-u", "-g", "-h", "-C", "-T")) or (wrapper == "exec" and option == "-a")
+            words = words[2:] if takes_value else words[1:]
+            if option == "--":
+                break
+    while words and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", words[0]):
+        key = words[0].split("=", 1)[0]
+        if re.fullmatch(r"GIT_(COMMITTER|AUTHOR)_(EMAIL|NAME)", key):
+            return "overriding git author/committer identity. Ask the user first."
+        if key in ("GIT_GUARD_OFF", "GIT_ALLOW_FOREIGN_HISTORY"):
+            return "turning off the git guard. Report what it blocked and why."
+        words = words[1:]
+    if not words:
+        return None
+    program = words[0].rsplit("/", 1)[-1]
+    args = words[1:]
+    if program in ("bash", "sh", "zsh"):
+        for index, option in enumerate(args):
+            if option.startswith("-") and not option.startswith("--") and "c" in option[1:]:
+                return reason(args[index + 1]) if index + 1 < len(args) else None
+    if program in ("rm", "mv", "chmod", "truncate") and any(".git/hooks/" in arg for arg in args):
+        return "deleting or disabling a git hook. Report what the guard blocked."
+    if program != "git":
+        return None
+    index = 0
+    while index < len(args) and args[index].startswith("-"):
+        option = args[index]
+        if option in ("-c", "--config-env") and index + 1 < len(args):
+            key = args[index + 1].split("=", 1)[0].lower()
+            if key == "core.hookspath" or key in ("user.email", "user.name"):
+                return "overriding git hooks or commit identity. Ask the user first."
+        if option in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"):
+            index += 2
+        else:
+            if option.startswith("-c") and option[2:].split("=", 1)[0].lower() in ("core.hookspath", "user.name", "user.email"):
+                return "overriding git hooks or commit identity. Ask the user first."
+            index += 1
+    if index >= len(args):
+        return None
+    subcommand, args = args[index], args[index + 1:]
+    if subcommand == "send-pack" or (subcommand == "push" and "--mirror" in args):
+        return "a raw transport push that bypasses pre-push entirely."
+    if subcommand == "push":
+        if "--no-verify" in args:
+            return "a push that skips the pre-push guard. Fix the guard or get explicit authorization."
+        if any(arg == "--delete" or (arg.startswith("-") and not arg.startswith("--") and "d" in arg[1:]) or re.fullmatch(r":[A-Za-z0-9_./-]+", arg) for arg in args):
+            return "deleting a remote ref requires the user's explicit authorization naming that ref."
+    if subcommand == "config":
+        if any(arg in ("--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "-l", "get", "list") for arg in args):
+            return None
+        for position, arg in enumerate(args):
+            if arg.lower() in ("user.email", "user.name", "core.hookspath"):
+                if position + 1 < len(args) or any(a.startswith("--unset") for a in args) or "unset" in args:
+                    return "rewriting git identity or hooks configuration. Ask the user first."
+    return None
+
+
+def reason(command):
+    try:
+        words = tokens(strip_heredocs(command))
+    except ValueError:
+        return None
+    segment = []
+    for word in words + [";"]:
+        if word and all(char in ";&|()\n" for char in word):
+            why = command_reason(segment)
+            if why:
+                return why
+            segment = []
+        else:
+            segment.append(word)
+    return None
 
 
 def main():
     try:
-        cmd = json.load(sys.stdin).get("tool_input", {}).get("command", "") or ""
-    except Exception:
+        command = json.load(sys.stdin).get("tool_input", {}).get("command", "") or ""
+    except (ValueError, AttributeError):
         return 0
-    text = strip_heredocs(cmd.replace("\n", " "))
-    for pattern, why in RULES:
-        if re.search(pattern, text):
-            print(json.dumps({"hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": "Blocked by guard-red-write: " + why,
-            }}))
-            return 0
+    why = reason(command)
+    if why:
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "Blocked by guard-red-write: " + why,
+        }}))
     return 0
 
 
-sys.exit(main())
+if __name__ == "__main__":
+    sys.exit(main())

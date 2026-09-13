@@ -33,6 +33,8 @@ MANAGED_FILES = (
     "hooks/f17-ticket-keys.sh",
     "hooks/f17-comment-count.sh",
     "hooks/guard-red-write.py",
+    "scripts/verify-run.py",
+    "scripts/test-quality-scan.py",
 )
 MANAGED_DIRECTORIES = (
     "skills/engineering",

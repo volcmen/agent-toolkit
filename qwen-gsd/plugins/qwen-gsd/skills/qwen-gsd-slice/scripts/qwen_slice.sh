@@ -159,36 +159,5 @@ if [ -n "$resume_id" ]; then common_args+=(--resumed); fi
 # `qwen_log.py list` reports an unpaired start as killed_unrecorded.
 python3 "$here/qwen_log.py" start "${common_args[@]}" || true
 
-recorded=0
-record_run() {
-  if [ "$recorded" -eq 1 ]; then return 0; fi
-  recorded=1
-  python3 "$here/qwen_log.py" record "${common_args[@]}" \
-    --exit-code "$1" --stderr "$stderr_log" || true
-}
-trap 'record_run 130; exit 130' INT
-trap 'record_run 143; exit 143' TERM
-
-# Redirection preserves the mode of existing files. Create and tighten both
-# artifacts explicitly so a caller-supplied log path cannot remain world-readable.
-: >"$log"
-: >"$stderr_log"
-chmod 600 "$log" "$stderr_log"
-
-set +e
-QWEN_CODE_SUPPRESS_YOLO_WARNING=1 qwen "${args[@]}" <"$prompt_file" >"$log" 2>"$stderr_log"
-code=$?
-set -e
-
-validation_code=0
-python3 "$here/qwen_result.py" "$log" --validate --model "$model" || validation_code=$?
-if [ "$code" -eq 0 ] && [ "$validation_code" -ne 0 ]; then
-  code="$validation_code"
-fi
-
-python3 "$here/qwen_result.py" "$log" --exit-code "$code" || true
-printf 'stderr_log=%s\n' "$stderr_log"
-
-record_run "$code"
-
-exit "$code"
+exec python3 "$here/qwen_supervise.py" --prompt-file "$prompt_file" --stderr "$stderr_log" \
+  "${common_args[@]}" -- qwen "${args[@]}"

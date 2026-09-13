@@ -177,7 +177,7 @@ func processInspectorSkipsVanishedPIDButRejectsAccessibleMalformedArgumentsTest(
         argumentData: { _ in Data([1, 0, 0, 0, 47, 98, 105, 110]) }
     )
 
-    try expectProcessArgumentParseFailure { _ = try inspector.inspect() }
+    try expectProcessArgumentParseFailure { _ = try inspector.inspect(executableURL: URL(fileURLWithPath: "/bin/example")) }
 }
 
 func processInspectorReadsCurrentExecutablePathTest() throws {
@@ -212,7 +212,7 @@ func processInspectorSkipsProcessWhoseExecutablePathIsUnresolvableTest() throws 
     )
 
     try expectEqual(
-        try inspector.inspect(),
+        try inspector.inspect(executableURL: URL(fileURLWithPath: "/bin/example")),
         [ProcessObservation(pid: 42, executablePath: "/bin/example", arguments: ["example"])]
     )
 }
@@ -247,7 +247,21 @@ func processInspectorTests() throws {
     try processInspectorSkipsProcessWhoseExecutablePathIsUnresolvableTest()
 }
 
+func processInspectorSkipsUnrelatedMalformedArgumentsTest() throws {
+    let chromePath = LauncherConfiguration.production().chromeExecutableURL.path
+    let inspector = ProcessInspector(
+        candidatePIDs: { [41, 42] },
+        executablePath: { $0 == 41 ? "/bin/sleep" : chromePath },
+        argumentData: { pid in
+            if pid == 41 { throw ProcessInspectorError.malformedArguments }
+            return kernelArgumentsFixture(executable: chromePath, arguments: [chromePath])
+        }
+    )
+    try expectEqual(try inspector.inspect().map(\.pid), [42])
+}
+
 func registerProcessInspectorTests(_ runner: inout TestRunner) {
+    runner.register("ProcessInspectorTests.SkipsUnrelatedMalformedArguments", processInspectorSkipsUnrelatedMalformedArgumentsTest)
     runner.register("ProcessInspectorTests", processInspectorTests)
     runner.register("ProcessInspectorTests.ParsesExactNULDelimitedArguments", processInspectorParsesExactNULDelimitedArgumentsTest)
     runner.register("ProcessInspectorTests.PreservesEmptyArgumentAfterArgumentZero", processInspectorPreservesEmptyArgumentAfterArgumentZeroTest)

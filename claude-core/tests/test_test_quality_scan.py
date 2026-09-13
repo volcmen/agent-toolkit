@@ -85,6 +85,24 @@ class MockOnly(unittest.TestCase):
 
 
 class Seeds(unittest.TestCase):
+    def test_multiline_fast_check_seed_is_blocking(self) -> None:
+        findings = scan.scan_text("a.test.ts", "fc.configureGlobal({\n  numRuns: 20,\n  seed: 42\n});\n")
+        self.assertEqual([(f["check"], f["line"], f["blocking"]) for f in findings], [("pinned-seed", 1, True)])
+
+    def test_unconditionally_loaded_named_profile_is_blocking(self) -> None:
+        source = "settings.register_profile('ci',\n  derandomize=True)\nsettings.load_profile('ci')\n"
+        self.assertTrue(scan.scan_text("conftest.py", source)[0]["blocking"])
+        replay = source.replace("settings.load_profile('ci')", "if os.getenv('REPLAY'):\n  settings.load_profile('ci')")
+        self.assertFalse(scan.scan_text("conftest.py", replay)[0]["blocking"])
+        for selection in ('os.getenv("HYPOTHESIS_PROFILE", "ci")', 'os.environ.get("HYPOTHESIS_PROFILE", "ci")', 'os.getenv("HYPOTHESIS_PROFILE") or "ci"'):
+            with self.subTest(selection=selection):
+                default = source.replace("settings.load_profile('ci')", f"settings.load_profile({selection})")
+                self.assertTrue(scan.scan_text("conftest.py", default)[0]["blocking"])
+
+    def test_multiline_comments_and_templates_do_not_pin_execution(self) -> None:
+        source = "/* fc.configureGlobal({\nseed: 42 }); */\nconst example = `fc.configureGlobal({\n seed: 42 });`;\n"
+        self.assertEqual(scan.scan_text("a.test.ts", source), [])
+
     def test_a_literal_random_seed_is_flagged(self) -> None:
         self.assertIn("pinned-seed", checks("tests/test_a.py",
                                             "import random\ndef test_x():\n    random.seed(1234)\n    assert 1\n"))

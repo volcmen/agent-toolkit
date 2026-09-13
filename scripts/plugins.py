@@ -281,6 +281,7 @@ PROJECT_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ("chatgpt-consult", ["bun", "run", "check"]),
     ("claude-core", [sys.executable, "scripts/manage.py", "check"]),
     ("qwen-gsd", [sys.executable, "scripts/check.py"]),
+    ("chrome-cdp", [sys.executable, "scripts/check.py"]),
 )
 
 

@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qwen_config import resolve  # noqa: E402
-from qwen_result import load  # noqa: E402
+from qwen_result import load, observed_model  # noqa: E402
 
 # stderr / result substring -> (reason, hint)
 SIGNATURES = (
@@ -152,8 +152,9 @@ def cmd_model_for(args: argparse.Namespace) -> None:
     """Print the model that authored the session: its first observed model, not
     the latest, so an earlier drift is not propagated into further rounds."""
     for record in session_history(args.session):
-        if record.get("model_actual"):
-            print(record["model_actual"])
+        model = record.get("model_initial") or record.get("model_actual")
+        if model:
+            print(model)
             return
     print("")
 
@@ -181,7 +182,8 @@ def cmd_record(args: argparse.Namespace) -> None:
                 name = block.get("name", "?")
                 tools[name] = tools.get(name, 0) + 1
 
-    warnings = []
+    selected, warnings = observed_model(events)
+    actual = "" if warnings else selected
     hit = signature(result, stderr_text)
     if status == "ok" and hit:
         warnings.append(f"stderr signature: {hit[0]} (run still reported success)")
@@ -190,12 +192,11 @@ def cmd_record(args: argparse.Namespace) -> None:
     prior = session_history(session)
     # A correction replays the whole session, so the session total is the real
     # economics unit; a per-run threshold hides a cheap-looking second round.
-    session_fpo = fresh + output + sum(int(r.get("fresh_plus_output") or 0) for r in prior)
+    session_fpo = fresh + output
     if session_fpo > int(values["warn_fresh_plus_output"]):
         warnings.append(f"session fresh_plus_output={session_fpo}>{values['warn_fresh_plus_output']}")
 
     prior_models = {r.get("model_actual") for r in prior if r.get("model_actual")}
-    actual = init.get("model", "")
     if actual and prior_models and actual not in prior_models:
         warnings.append(
             f"model changed mid-session: {'/'.join(sorted(prior_models))} -> {actual}"
@@ -219,7 +220,9 @@ def cmd_record(args: argparse.Namespace) -> None:
         "resumed": bool(args.resumed),
         "cwd": args.cwd or os.getcwd(),
         "model_requested": args.model or "",
-        "model_actual": init.get("model", ""),
+        "model_actual": actual,
+        "model_selected": selected,
+        "model_initial": init.get("model", ""),
         "cli": init.get("qwen_code_version", ""),
         "budgets": {
             "wall_time": args.wall_time or values["wall_time"],
