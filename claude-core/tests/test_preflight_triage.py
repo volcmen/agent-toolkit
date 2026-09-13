@@ -97,7 +97,17 @@ def build_js_repo(tmp: Path) -> tuple[Path, Path]:
 
 
 def triage(repo: Path, shims: Path, **env: str) -> str:
-    merged = {**os.environ, "PATH": f"{shims}:{os.environ['PATH']}", **env}
+    fixture_home = Path(env.get("HOME", str(shims.parent / "home")))
+    helpers = ["skills/mr-preflight/harness-delta.py", "hooks/f17-comment-count.sh"]
+    if "HOME" not in env:
+        helpers.append("scripts/test-quality-scan.py")
+    for relative in helpers:
+        source = ROOT / relative
+        destination = fixture_home / ".claude" / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    inherited = {key: value for key, value in os.environ.items() if not key.startswith("PREFLIGHT_")}
+    merged = {**inherited, "HOME": str(fixture_home), "PATH": f"{shims}:{os.environ['PATH']}", **env}
     result = subprocess.run(["bash", str(SCRIPT), str(repo), "main"], capture_output=True, text=True, env=merged, timeout=120)
     return result.stdout + result.stderr
 

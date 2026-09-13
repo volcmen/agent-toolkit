@@ -49,6 +49,10 @@ is user-managed.
 
 Run from the workspace root with Python 3.11 or newer:
 
+The preflight behavior tests also require Bash, Git, Perl, jq, and ripgrep.
+They install helper fixtures in a temporary home and do not require an existing
+Claude Code installation.
+
 ```bash
 python3 claude-core/scripts/manage.py render
 python3 claude-core/scripts/manage.py check
