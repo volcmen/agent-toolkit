@@ -152,7 +152,7 @@ prerequisite for browser-backed acceptance, and none is started automatically.
   were changed.
 - Scoped push branch validation: **PASS**. The branch contains Consult and its
   unpublished prerequisites on the remote main baseline. The catalog,
-  workspace, wiki, agent-board, codex-pair, ChatGPT Consult, and shared-agents
+  workspace, wiki, codex-pair, ChatGPT Consult, and shared-agents
   checks all pass. Its Consult implementation matches the reviewed checkout.
 
 ## Acceptance record — 2026-09-01

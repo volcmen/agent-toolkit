@@ -129,7 +129,6 @@
     }
   ],
   "renames": {
-    "personal-wiki": "ai-workspace",
-    "agent-board": "ai-workspace"
+    "personal-wiki": "ai-workspace"
   }
 }

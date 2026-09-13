@@ -323,14 +323,14 @@ class StatusParsing(unittest.TestCase):
         )
 
     def test_an_absent_plugin_reads_dash_even_when_another_is_installed(self) -> None:
-        self.assertEqual(self.state_for("agent-board@ai-workspace", self.LISTING), "-")
+        self.assertEqual(self.state_for("absent-plugin@ai-workspace", self.LISTING), "-")
 
     def test_the_real_status_command_agrees(self) -> None:
         """Guards the production parser against whole-output substring matches."""
         states = pl.codex_plugin_states(self.LISTING, "ai-workspace")
         self.assertTrue(states["obsidian-memory@ai-workspace"]["installed"])
         self.assertTrue(states["obsidian-memory@ai-workspace"]["enabled"])
-        self.assertNotIn("agent-board@ai-workspace", states)
+        self.assertNotIn("absent-plugin@ai-workspace", states)
 
 
 class MarketplaceReconnection(unittest.TestCase):
