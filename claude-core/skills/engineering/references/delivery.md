@@ -10,9 +10,9 @@ changes you did not make; read overlapping edits before touching them.
 
 ## Tracking
 
-Reuse the existing issue when the work is tracked. Create one before
-implementation only when the user asked for issue-first delivery, repository
-policy requires it, or durable cross-session coordination needs it.
+Use [personal work tracking](tracking.md) for ongoing tasks and handoffs.
+Reuse the official issue when work is already tracked; repository policy or
+an explicit issue-first request determines whether to create an upstream issue.
 
 ## Commits and MRs
 
@@ -24,9 +24,10 @@ route.
 
 ## Gates
 
-- Ready for review: run `mr-preflight` on the branch and include its verdict
-  table; any `FAIL` is `NOT READY`. Re-run after every push to an MR already
-  under review.
+- Ready for review: run `mr-preflight` and give its short verdict. Reuse valid
+  review/test evidence; after changes check the delta and affected interactions.
+  A push alone does not require repeating local checks. Refresh relevant MR/CI
+  state when making a new remote-readiness claim.
 - Human review returned findings: run `review-retro` before or right after
   applying the fixes — the fixes repair the code, the retro repairs the gate.
 - Before pushing a batch of MRs, before merging, before posting a root-cause

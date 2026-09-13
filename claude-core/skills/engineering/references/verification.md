@@ -1,44 +1,32 @@
 # Verification
 
-Evidence before assertions. A statement of success that was not observed in
-this turn is a false statement, whatever the wording — "should pass",
-"looks correct", "done", or an emoji.
+Tie each claim to observed evidence for the relevant state. Name the command,
+its result, and any limit; a tool exiting cleanly proves only what it checked.
 
-## The gate
+## Reuse before rerunning
 
-Before any claim of status or satisfaction:
+Reuse a result when the source, tests, configuration, dependencies, environment,
+and command still match what ran. Inspect the evidence, not just a worker's
+"passed" summary. A push or repeated status question alone changes none of
+those inputs. After edits, rerun affected checks; if provenance is unknown,
+mark it unverified and run the needed check. A commit SHA alone does not prove
+an unchanged dirty checkout or environment.
 
-1. Name the command that proves the claim.
-2. Run it — fresh and complete, not a remembered or partial run.
-3. Read the whole output: exit code, failure count, warnings.
-4. Only then state the claim, with the evidence beside it. If the output does
-   not support it, state the actual status.
+## Match the proof to the claim
 
-| Claim | Requires | Not sufficient |
-|---|---|---|
-| Tests pass | test command output: 0 failures | a previous run, "should pass" |
-| Linter clean | linter output: 0 errors | a partial check |
-| Build succeeds | build command exit 0 | linter passing, logs look fine |
-| Bug fixed | the original symptom re-tested and gone | code changed |
-| Regression test works | red → green → red on revert | passes once |
-| Worker finished | the diff on disk shows the change | the worker says so |
-| Requirements met | each acceptance item checked off | tests passing |
+- Tests/lint/build: command output and exit status for that check and scope.
+- Bug fixed: the original reproduction fails before and passes after the fix.
+  Reuse that result; another mutation run needs a concrete unresolved doubt.
+- Requirements met: observable acceptance criteria checked, not just green tests.
+- Worker finished: inspect the resulting diff and verification artifacts.
+- External action completed: the service result or read-back confirms it.
 
-## Order of checks
+Start with the narrowest relevant check. Broaden only for changed contracts,
+configuration, integrations, repository requirements, a failure, or an unresolved
+risk. Use existing commands and harnesses. Inspect UI changes in the rendered
+product when available. Distinguish baseline failures using actual evidence.
 
-Run the narrowest relevant check first, then broader tests, lint, types, and a
-build in proportion to the change's scope and risk. Use the repository's own
-commands, scripts, package manager, and task runner; do not invent a parallel
-workflow. For UI behavior inspect the rendered result when browser tooling is
-available. Distinguish failures your change introduced from failures already on
-the target branch — with evidence, not by assumption.
-
-## Before handoff
-
-- Inspect the complete diff and the working tree for accidental changes,
-  debug code, dead code, and edits outside the request.
-- Re-run the affected checks after any corrective edit.
-- For a bug fix, the regression test must fail without the fix; for a
-  subjective symptom, the observable proxy chosen while shaping must move.
-- A check that failed or could not run is reported by name with the command
-  attempted and what remains uncertain. Silence is not success.
+Before handoff, inspect the complete change for accidental edits and gaps; an
+existing review covers unchanged code. Name required checks that failed or
+could not run and what remains uncertain. Never convert missing coverage into
+a pass or hide it behind an overall success claim.

@@ -11,7 +11,7 @@ delegate only bounded specialist work, integrate all results, verify the final
 state, and communicate the result clearly.
 
 Apply the complete shared controller contract from the loaded global AGENTS.md,
-including its automatic alan_wake writing route and native Codex worker-model
+including its proportional alan_wake writing route and native Codex worker-model
 routing. Never spawn or delegate to another controller. Keep controller judgment,
 synthesis, final verification, and delivery in this primary thread.
 """

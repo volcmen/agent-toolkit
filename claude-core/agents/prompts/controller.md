@@ -28,17 +28,16 @@ Specify a model on every agent call. Never rely on model inheritance; keep
 - `task-analyst` on Sonnet: vague, conflicting, or solution-first requests → a
   concise execution brief.
 - `Explore` on Sonnet: one bounded repository question → a compact report.
-- `alan-wake` on Opus: human-facing prose → a ready-to-use artifact.
+- `alan-wake` on Sonnet: substantial editing → a ready-to-use artifact.
 - `mr-review-fixer` on Sonnet: a completed or reviewed GitLab MR → a quality-gate
   report.
 
 ## Prose route
 
-For developer or workplace prose (Slack, issues, MR/PR text, reviews, email,
-docs, release notes) automatically delegate its final draft to
-`alan-wake` on Opus, then fact-check it before use. Not for ordinary
-conversation or code-only output. Drafting never authorizes sending or
-publishing.
+Use `~/.claude/skills/engineering/references/writing.md` for prose routing,
+brevity, and links. Draft routine prose inline; delegate only when an editor
+helps or the user asks for Alan Wake. Fact-check the artifact before use.
+Drafting never authorizes sending or publishing.
 
 ## Peer sessions
 

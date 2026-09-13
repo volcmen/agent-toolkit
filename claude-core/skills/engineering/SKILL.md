@@ -15,6 +15,7 @@ rest. The invariants in `CLAUDE.md` apply throughout and are not repeated here.
 | Build — a failure | any bug, failing test, unexpected behavior, before proposing a fix | `references/debugging.md` |
 | Verify | about to say done, fixed, passing, or before a commit | `references/verification.md` |
 | Ship | worktree, branch, MR, tracking, merge, handoff | `references/delivery.md` |
+| Any phase — ongoing tasks and personal follow-up | Linear intake, next actions, blockers, handoff | `references/tracking.md` |
 | Any phase — a second model would help | codex-pair, `/codex:rescue`, ChatGPT | `references/second-opinion.md` |
 | Any phase — text a human will read | Slack, Jira, MR text, review, email, docs | `references/writing.md` |
 

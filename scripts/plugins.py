@@ -280,6 +280,7 @@ PROJECT_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ("codex-pair", ["bash", "scripts/check.sh"]),
     ("chatgpt-consult", ["bun", "run", "check"]),
     ("claude-core", [sys.executable, "scripts/manage.py", "check"]),
+    ("qwen-gsd", [sys.executable, "scripts/check.py"]),
 )
 
 

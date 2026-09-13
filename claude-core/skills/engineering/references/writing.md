@@ -1,59 +1,75 @@
-# Writing
+# Workplace writing
 
-Human-facing prose — Slack, Jira, MR/PR titles and descriptions, review
-comments, Confluence, email, release notes, status updates, decisions,
-handoffs — is drafted by the `alan-wake` agent on Opus. Ordinary conversation,
-exact transcription, and code-only output are not.
+One finished draft. Main point first: result, decision, issue, or ask. Then
+only the evidence and next action the reader needs. Plain words, active verbs,
+natural contractions; each fact once. Match the user's language and certainty.
+No preamble, edit commentary, repeated summary, or empty template sections.
 
-## Brief Alan Wake with
+## Size and shape
 
-- The verified facts only: what changed, what was observed, what failed, the
-  IDs and URLs as they are. Nothing inferred, nothing promised.
-- Audience, destination, and transport (manual paste, API, Block Kit, GLFM).
-- The repository template when one exists (`.gitlab/merge_request_templates/`,
-  issue templates).
-- The requested action from the reader, if any.
-- Length and tone constraints the destination imposes.
+- Chat, reply, review comment: usually 1–3 sentences, at most about 60 words.
+- Status or handoff: one short paragraph or up to 3 bullets, about 90 words.
+- Small MR: 1–2 sentences explaining the problem and change, plus verification;
+  usually under 120 words. Honor required repository templates.
+- Longer document: a short opening summary, then useful sections. Keep needed
+  detail; these defaults never truncate facts, warnings, or requested content.
 
-## Afterwards
+A short source stays short. Use bullets for parallel points, headings only
+when they help navigation. Optional emoji should convey status or intent
+(✅ done, 👀 review, ⚠️ blocker); usually zero or one. No decorative emoji in
+sensitive messages. Never add an owner, deadline, cause, promise, successful
+test, or deployment state that the evidence does not establish.
 
-Fact-check the returned artifact against your evidence: no invented numbers,
-owners, dates, causes, rollout state, or test results; every supplied URL still
-present and clickable; no placeholder left. Resolve any contradiction before
-returning or applying it. The draft is the terminal writing contract — do not
-rewrite it in your own voice.
+## Links: choose the surface actually receiving the text
 
-Drafting never authorizes sending. Posting, commenting, or publishing needs the
-user's authorization for that act, and the payload is checked for the
-attribution invariant in `CLAUDE.md` immediately before it leaves.
+If returning a draft in this chat, use rendered Markdown links by default,
+even when its eventual audience is on Slack or Jira. Naming a destination
+alone does not request its raw API syntax. No code fence around ordinary prose.
 
-## Links
+| Actual output surface | Link representation |
+|---|---|
+| This chat, Markdown, GitLab/GitHub description or comment | `[MR !123](verified-url)` |
+| Explicit Slack API / raw `mrkdwn` payload | `<verified-url\|MR !123>`; Slack `*bold*` |
+| Jira ADF API | Text node with a `link` mark and `attrs.href`; never Markdown inside a text node |
+| Notion/Confluence API or rich editor | The tool's native rich-text link field; use its documented schema |
+| Explicit plain text / clipboard without rich formatting | `MR !123 — verified-url` |
 
-Every URL that leaves this machine is copied verbatim from the field the owning
-tool returned for that object — GitLab `web_url`, GitHub `html_url`, Jira
-`webUrl`, Slack `message_link` or `permalink`. Never assemble one from an
-identifier plus a remembered namespace: holding only an id (`!1498`, `NTD-8062`,
-a build number) means the link is unresolved, and a plausible-looking guess is an
-invented URL.
+Preserve each supplied relevant URL behind a short descriptive label at its
+first useful mention. Do not downgrade known URLs to bare IDs, put links in
+backticks, or append a raw URL beside an already linked label. Escape labels
+and payload strings for the selected syntax; preserve URL query parameters.
+Never include credentials or secret-bearing URLs in a draft.
 
-Resolve it before drafting. From inside the clone, `git remote -v` gives the real
-project path (`notraffic/notraffic-core/devoperations`, not `notraffic/...`), and
-`glab api projects/<url-encoded path>/merge_requests/<iid>` returns the `web_url`
-to paste; `glab mr view <iid> --output json`, `gh pr view`, and the Jira/Slack
-read tools return the same field for their objects. When the id came from a
-listing, keep that listing's URL rather than rebuilding it.
+Rich copy/paste support varies. When writing into an editor, create a native
+link and inspect the rendered result. If only a plain-text transport is
+available, preserve the URL and disclose that limit briefly; do not claim
+literal Markdown or Slack markup will render. Only produce JSON/raw markup
+when requested or required by the active tool schema.
 
-An anonymous fetch does not verify a private URL — GitLab answers 403 both for a
-wrong project path and for a real object the fetcher cannot read — so the owning
-tool's link field is the only proof, and a wrong group stays invisible until the
-reader clicks. Re-resolve rather than re-type when the same object is linked in a
-second message.
+Use supplied facts and URLs without searching again. If a necessary link is
+missing, the parent may do one targeted read-only lookup in a known source;
+otherwise retain the exact ID. Do not invent a URL or stall a draft for it.
+Consult official format docs only when the transport is actually uncertain.
 
-## Shape of good workplace text
+## Resolve missing links
 
-Lead with the outcome or decision, then only the reasoning, evidence, risk, and
-next action the reader needs. One fact once. An issue records problem, scope,
-acceptance criteria, and verification plan. An MR explains why, what changed,
-how it was verified, and the remaining risk. A tracker update records decisions
-and evidence, not tool-use narration. Cite precisely: file and line, command
-and result, issue key with its URL.
+Keep supplied URLs verbatim. When resolving a missing link, copy the owning
+tool's URL field: GitLab `web_url`, GitHub `html_url`, Jira `webUrl`, or Slack
+`message_link`/`permalink`. An identifier alone does not establish its namespace.
+Read the clone's actual remote and query that project; never assemble a URL from
+a remembered path. An anonymous 403 cannot distinguish a wrong private URL
+from missing access. Retain the exact ID when a required lookup is unavailable.
+
+## Routing and handoff
+
+Draft routine messages, small MR descriptions, and short rewrites directly.
+Use `alan-wake` on Sonnet for an explicit request to use that agent, substantial
+restructuring, delicate wording, or a long document where an editor helps.
+Use Opus only when the writing judgment warrants it. Brief with verified facts,
+URLs, audience, actual output surface, required template, and intended ask.
+Do not send the writer an entire coding transcript or ask it to re-investigate.
+
+Before returning or using any draft, verify facts and uncertainty, supplied
+links, required fields, brevity, and rendering syntax. Fix omissions or broken
+links directly; no second writing round for a mechanical correction.
+Drafting never authorizes sending or publishing.

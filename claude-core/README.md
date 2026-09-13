@@ -11,7 +11,7 @@ validation, rendering, installation, verification, and removal under `~/.claude`
 | --- | --- | --- |
 | `CLAUDE.md`, `chrome-cdp.md` | same name | file symlink |
 | `rules/{waiting,code-style}.md` | `rules/<name>` | file symlink |
-| `hooks/f17-{ticket-keys,comment-count}.sh` | `hooks/<name>` | file symlink |
+| `hooks/f17-{ticket-keys,comment-count}.sh`, `hooks/guard-red-write.py` | `hooks/<name>` | file symlink |
 | `skills/engineering/`, `skills/mr-preflight/`, `skills/review-retro/` | `skills/<name>` | directory symlink |
 | `agents/rendered/*.md` | `agents/<name>.md` | regular-file copy |
 
@@ -92,23 +92,20 @@ policy. The Codex controller is the primary thread, not a spawnable worker.
 | Controller | Fable `controller`, medium effort; primary thread only |
 | Task analyst | Sonnet `task-analyst`; concise execution brief |
 | Repository explorer | Sonnet `Explore`; compact report; overrides the built-in Explore agent |
-| Writing specialist | Opus `alan-wake`, medium effort, plan permission mode, eight turns; ready-to-use artifact |
+| Writing specialist | Sonnet `alan-wake`, medium effort, plan permission mode, eight turns; Read/Grep/Glob only |
 | MR quality gate and fixer | Sonnet `mr-review-fixer`, high effort, project memory; quality-gate report |
-| Gate fork target | Sonnet `gate`, medium effort, 40 turns, Bash/Read/Grep/Glob; fork target of `mr-preflight`, never dispatched by the controller |
+| Independent reviewer | Sonnet `gate`, medium effort, 20 turns, Bash/Read/Grep/Glob; optional independent preflight review |
 
 The controller prompt owns delegation, model selection, specialist routing,
 prose routing, and peer sessions. `CLAUDE.md` owns invariants; the `engineering`
 skill owns procedure. `mr-review-fixer` points at the preflight failure-modes
 ledger and engineering references instead of restating them.
 
-Requested Slack messages, work-item text, PR/MR titles and descriptions, review
-comments, emails, docs, release notes, status updates, decisions, requests, and
-handoffs route automatically to Alan Wake. The controller establishes the
-artifact, audience, destination format, and desired action; gathers verified
-facts; delegates drafting; and checks the result for unsupported claims or
-commitments. Alan Wake stays read-only, has mutating tools denied, retains
-connected read tools, and never publishes. Ordinary conversation, code-only
-output, exact transcription, and explicit opt-out bypass this route.
+Routine workplace messages and small descriptions stay in the primary thread.
+Alan Wake handles explicit requests, substantial rewrites, delicate wording,
+and long documents using the shared engineering writing reference. The parent
+supplies verified facts, checks the returned draft, and fixes mechanical
+formatting directly. Neither drafting nor review authorizes publication.
 
 Routing and writing evaluations live in `agents/evals/`. Official design
 references are in [agents/docs/sources.md](agents/docs/sources.md).
@@ -119,7 +116,9 @@ README is the current installation contract.
 
 Within `CLAUDE.md`, `rules/code-style.md`, `rules/waiting.md`, and
 `skills/engineering/`, each rule lives in exactly one place: the core states it,
-and a rule file or engineering reference elaborates it. Tests enforce the
+and a rule file or engineering reference elaborates it. Corporate-system detail
+lives in `skills/engineering/references/corporate-systems.md`, loaded by the core
+route when shared systems or publishing are involved. Tests enforce the
 always-on budget: core at most 3.5 KB; core, waiting, and the plugin-owned
 Obsidian rule at most 9.5 KB; with code style at most 16 KB. Sentinel phrases
 cannot repeat across corpus files. Gate and retro skills keep their own
@@ -178,3 +177,39 @@ authorization boundary, and it says nothing about whether the tests are good.
 tests, mock-only assertions, retry policies that hide a flake, and seeds pinned
 on the default exploration path. A seed inside a named `register_profile` or
 read from `FC_SEED` is replay machinery and is reported as advisory.
+
+## Personal work tracking
+
+The shared [tracking guide](skills/engineering/references/tracking.md) routes
+ongoing work in Claude Code and Codex to a verified personal Linear workspace.
+The Claude core and the personal Codex `AGENTS.md` point to the same file;
+the latter is a local addition outside the Obsidian-managed block. Repository
+policy still owns official Jira/GitHub/GitLab tracking. Linear keeps personal
+actions, and migrated Obsidian tasks become locators rather than duplicate state.
+
+The `linear-personal` MCP connection is configured separately in each client.
+Account and workspace IDs live locally in `~/.config/work-tracking/linear.json`;
+credentials remain in the clients' authentication stores. See the
+[setup record](docs/2026-09-06-personal-work-tracking.md) for installation,
+verification, and remaining setup. The existing whole-directory engineering
+link exposes the guide without a new plugin or background dispatcher.
+
+## Preflight and writing defaults
+
+`mr-preflight` runs in the current conversation. `preflight-snapshot.py` provides
+an offline, read-only inventory of committed HEAD, merge base, target, excluded
+local edits, paths, and whitespace evidence; it never returns readiness.
+Known review and test results can be reused for unchanged inputs. The optional
+`gate` reviewer covers high-risk or unfamiliar changes; a completed independent
+`mr-review-fixer` pass can satisfy it. Mutation testing is reserved for a
+specific unresolved doubt about test discrimination. Results distinguish
+READY, CHANGES NEEDED, and INCOMPLETE, with short exception-focused output.
+
+The old `preflight-triage.sh`, runner probes, and `mr-doctor.sh` remain opt-in
+diagnostics for their existing callers. Their caches and heuristic classifications
+are not reusable readiness evidence. The default path does not run them.
+
+Routine workplace drafts stay inline. `engineering/references/writing.md` is
+the shared contract for the primary thread and Alan Wake: concise prose, named
+links in the actual output format, and no automatic publishing. See
+[the refresh record](docs/2026-09-06-agent-refresh.md) for evidence and limits.
