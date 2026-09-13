@@ -3,7 +3,7 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod/v4";
 import { MAX_STATUS_WAIT_SECONDS } from "../core/service";
 import type { ConsultationService, WaitStatusResult } from "../core/service";
-import { resolveRequestedProfile } from "../core/schema";
+import { ChatModeSchema, ChatThreadSchema, resolveRequestedProfile } from "../core/schema";
 import {
   browserRecoveryInstruction,
   compactText,
@@ -13,7 +13,7 @@ import {
   successResult,
 } from "./results";
 
-const INSTRUCTIONS = "Consultations are asynchronous: call consult_status with wait_seconds to block until the state is actionable, and call it again only after the bound elapses. On needs_login run setup browser. Within needs_manual, only reason submission_uncertain, submission certainty uncertain, and workerActive true may wait again. Every other recovery tuple uses manual handoff/import-result and must never be resubmitted. Use consult_show after completion; publication requires explicit user intent.";
+const INSTRUCTIONS = "Project chats share login. Consultations are asynchronous: call consult_status with wait_seconds; repeat after the bound elapses. On needs_login run setup browser. For needs_manual, only submission_uncertain, submission certainty uncertain, and workerActive true may wait again. Every other recovery tuple uses manual handoff/import-result; never resubmit. Use consult_show after completion; publication requires explicit user intent. Use consult_start for new topics.";
 
 const ProfileSchema = z.enum(["lean", "research", "analysis", "connected"]);
 const StateSchema = z.enum(["pending", "claimed", "completed", "cancelled", "expired"]);
@@ -31,7 +31,7 @@ const BrowserStatusSchema = z.object({
     "needs_login", "needs_manual", "completed", "cancelled", "expired",
   ]),
   reason: z.enum([
-    "login_required", "human_challenge", "browser_unavailable", "ui_changed",
+    "login_required", "human_challenge", "rate_limited", "browser_unavailable", "ui_changed",
     "upload_failed", "timed_out", "invalid_response", "submission_uncertain",
   ]).nullable(),
   attempt: z.number().int().nonnegative(),
@@ -55,6 +55,7 @@ const StartInputSchema = z.object({
 
 const FollowupInputSchema = z.object({
   parent_id: IdentifierSchema,
+  chat_mode: ChatModeSchema.default("auto"),
   goal: GoalSchema,
   profile: ProfileSchema.optional(),
   files: z.array(ProjectPathSchema).max(100).default([]),
@@ -83,6 +84,7 @@ const StartOutputSchema = z.object({
   revision: z.number().int().nonnegative(),
   claimToken: z.string().min(1),
   handoff: z.string().min(1),
+  thread: ChatThreadSchema.optional(),
   browser: BrowserStatusSchema.optional(),
 }).strict();
 
@@ -93,6 +95,7 @@ const StatusOutputSchema = z.object({
   goal: z.string().min(1),
   profile: ProfileSchema,
   parentId: IdentifierSchema.nullable(),
+  thread: ChatThreadSchema.optional(),
   createdAt: z.string().datetime({ offset: true }),
   updatedAt: z.string().datetime({ offset: true }),
   expiresAt: z.string().datetime({ offset: true }),
@@ -131,6 +134,7 @@ const isActiveSubmissionConfirmation = (
 const hasUnsafeUncertainMismatch = (
   browser: z.output<typeof BrowserStatusSchema> | undefined,
 ): boolean => browser !== undefined
+  && !(browser.phase === "needs_manual" && browser.reason === "rate_limited")
   && (browser.reason === "submission_uncertain"
     || browser.submissionCertainty === "uncertain");
 
@@ -141,7 +145,10 @@ const progressText = (
   kind: "Consultation" | "Follow-up",
   result: z.output<typeof StartOutputSchema>,
 ): string => {
-  const prefix = `${kind} ${result.requestId} is ${result.state}.`;
+  const routing = result.thread
+    ? ` ${result.thread.mode === "new" ? "Fresh chat" : "Continuing chat"} in ${result.thread.projectUrl} (${result.thread.reason}, exchange ${result.thread.turn}).`
+    : "";
+  const prefix = `${kind} ${result.requestId} is ${result.state}.${routing}`;
   if (result.state === "completed") return `${prefix} Use consult_show to review the validated result.`;
   if (isTerminal(result.state)) return `${prefix} It cannot be resumed; start a new consultation if the work is still needed.`;
   if (isActiveSubmissionConfirmation(result.browser)) {
@@ -150,7 +157,7 @@ const progressText = (
   if (hasUnsafeUncertainMismatch(result.browser)) {
     return `${prefix} Use manual handoff/import-result for recovery; never resubmit uncertain work.`;
   }
-  const recovery = browserRecoveryInstruction(result.browser?.phase, result.browser?.submissionCertainty);
+  const recovery = browserRecoveryInstruction(result.browser?.phase, result.browser?.submissionCertainty, result.browser?.reason);
   if (recovery) return `${prefix} ${recovery}`;
   if (result.browser && !result.browser.workerActive) {
     return `${prefix} Automatic browser work is ${result.browser.phase} but no worker is running; waiting will not advance it. Run open to resume, or use manual handoff/import-result.`;
@@ -178,7 +185,7 @@ const statusText = (result: z.output<typeof StatusOutputSchema>): string => {
   if (hasUnsafeUncertainMismatch(result.browser)) {
     return `${prefix} Use manual handoff/import-result for recovery; never resubmit uncertain work.`;
   }
-  const recovery = browserRecoveryInstruction(result.browser?.phase, result.browser?.submissionCertainty);
+  const recovery = browserRecoveryInstruction(result.browser?.phase, result.browser?.submissionCertainty, result.browser?.reason);
   if (recovery) return `${prefix} ${recovery}`;
   if (result.browser && !result.browser.workerActive) {
     return `${prefix} Browser work is ${result.browser.phase} but no worker is running; waiting will not advance it. Run open to resume, or use manual handoff/import-result.`;
@@ -276,7 +283,7 @@ export const createLocalMcp = (
 
   server.registerTool("consult_followup", {
     title: "Follow up consultation",
-    description: "Create a bounded child consultation in the same topic.",
+    description: "Continue related work in its ChatGPT Project. chat_mode auto starts fresh after six recorded exchanges; new starts a fresh Project chat with a bounded summary; continue explicitly keeps the conversation. Use consult_start for unrelated topics.",
     inputSchema: followupInput,
     outputSchema: StartOutputSchema,
     annotations: {
@@ -290,6 +297,7 @@ export const createLocalMcp = (
     const resolvedProfile = resolveRequestedProfile(input.profile, input);
     const value = await service.followup({
       parentId: input.parent_id,
+      chatMode: input.chat_mode,
       goal: input.goal,
       ...(resolvedProfile ? { profile: resolvedProfile } : {}),
       files: input.files,

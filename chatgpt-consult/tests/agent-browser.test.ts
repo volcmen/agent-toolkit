@@ -7,6 +7,7 @@ import {
   AgentBrowserSubmitter,
   AGENT_BROWSER_POLICY,
   type CdpPageClientFactory,
+  type AgentBrowserAutomationOptions,
   type CommandRunner,
   type WorkspaceFactory,
   type WorkspaceCleanup,
@@ -18,7 +19,7 @@ import type {
   BrowserSubmitInput,
 } from "../src/browser/handoff";
 import type { ChromeSession } from "../src/browser/chrome";
-import { BROWSER_RESULT_BEGIN, BROWSER_RESULT_END } from "../src/browser/protocol";
+import { BROWSER_RESULT_BEGIN, BROWSER_RESULT_END, formatBrowserPrompt } from "../src/browser/protocol";
 import { CdpPageClient, type MinimalSocket } from "../src/browser/cdp-page";
 
 const SESSION: ChromeSession = {
@@ -348,7 +349,7 @@ describe("argv and environment", () => {
     expect(fake.calls).toHaveLength(7);
 
     const GLOBAL_FLAGS = [
-      "--session", "chatgpt-consult",
+      "--session", fake.calls[0]!.argv[fake.calls[0]!.argv.indexOf("--session") + 1]!,
       "--cdp", "9222",
       "--pin-tab",
       "--content-boundaries",
@@ -527,7 +528,7 @@ describe("argv and environment", () => {
     }
   });
 
-  test("fixed session and port from ChromeSession", async () => {
+  test("one isolated session per submission and port from ChromeSession", async () => {
     const ws = createFakeWorkspace();
     const fake = createFakeRunner(sevenStepSuccessResults());
     const sub = new AgentBrowserSubmitter({
@@ -546,7 +547,8 @@ describe("argv and environment", () => {
 
       const sIdx = call.argv.indexOf("--session");
       expect(sIdx).toBeGreaterThan(-1);
-      expect(call.argv[sIdx + 1]).toBe("chatgpt-consult");
+      expect(call.argv[sIdx + 1]).toMatch(/^consult-[a-f0-9]{24}$/);
+      expect(call.argv[sIdx + 1]).toBe(fake.calls[0]!.argv[sIdx + 1]);
     }
   });
 });
@@ -2036,9 +2038,11 @@ function commandArgs(argv: readonly string[]): readonly string[] {
   return argv.slice(index + 1);
 }
 
-function createScriptedRunner(entries: readonly ScriptEntry[], events: string[] = []): FakeRunner {
+function createScriptedRunner(entries: readonly ScriptEntry[], events: string[] = [],
+  proof: { userTurnText?: () => string; sendReady?: () => number } = {}): FakeRunner {
   const calls: RunnerCall[] = [];
   let index = 0;
+  let prompt = "";
   return {
     calls,
     runner: async (argv, options) => {
@@ -2046,6 +2050,14 @@ function createScriptedRunner(entries: readonly ScriptEntry[], events: string[] 
       calls.push(call);
       const args = commandArgs(argv);
       events.push(`command:${args.join(" ")}`);
+      if (args[0] === "fill") prompt = args[2]!;
+      if (args[0] === "find" && args[2] === '[data-message-author-role="user"]') {
+        const output = textJson(proof.userTurnText?.() ?? prompt);
+        return Buffer.byteLength(output) > options.maxBytes ? { status: 1, output: "" } : { status: 0, output };
+      }
+      if (args[0] === "get" && args[2] === 'button[data-testid="send-button"]:enabled') {
+        return { status: 0, output: countJson(proof.sendReady?.() ?? 1) };
+      }
       const entry = entries[index++];
       if (entry === undefined) throw new Error(`Unexpected command: ${args.join(" ")}`);
       return typeof entry === "function" ? await entry(call) : entry;
@@ -2085,10 +2097,13 @@ function createAutomationHarness(
       env: Record<string, string>;
     }) => Promise<void>;
     cdpPageClientFactory?: CdpPageClientFactory;
+    userTurnText?: () => string;
+    sendReady?: () => number;
+    rateLimitGate?: AgentBrowserAutomationOptions["rateLimitGate"];
   } = {},
 ): AutomationHarness {
   const events: string[] = [];
-  const fake = createScriptedRunner(entries, events);
+  const fake = createScriptedRunner(entries, events, options);
   const ws = createFakeWorkspace("/tmp/fake-ab-automation");
   let clock = 0;
   const hookCalls = {
@@ -2136,6 +2151,7 @@ function createAutomationHarness(
       commandRunner: fake.runner,
       workspaceFactory: ws.factory,
       workspaceCleanup: ws.cleanup,
+      ...(options.rateLimitGate === undefined ? {} : { rateLimitGate: options.rateLimitGate }),
       ...(options.ownedTabCleanup === undefined
         ? {}
         : { ownedTabCleanup: options.ownedTabCleanup }),
@@ -2227,6 +2243,21 @@ function browserCompletionEnvelope(requestId: string, answer = "current response
 }
 
 describe("AgentBrowserAutomation", () => {
+  test("completes within the bound Project and records only its nested conversation", async () => {
+    const conversationUrl = "https://chatgpt.com/g/projects-test/c/project-conversation";
+    const projectUrl = "https://chatgpt.com/g/projects-test/project";
+    const script = rootSuccessScript("Project answer").map((result) => ({
+      ...result, output: result.output.replaceAll(CONVERSATION_URL, conversationUrl).replaceAll(PROJECT_URL, projectUrl),
+    }));
+    const harness = createAutomationHarness(script);
+    const result = await harness.automation.run(await createAutomationInput({
+      targetUrl: projectUrl, projectUrl,
+    }), harness.hooks);
+    expect(result).toEqual({ kind: "completed", conversationUrl, responseText: ownEnvelope("Project answer") });
+    expect(harness.hookCalls.confirmed).toEqual([conversationUrl]);
+    expect(commandArgs(harness.fake.calls[0]!.argv)).toEqual(["open", projectUrl]);
+  });
+
   test("submits a fresh Project chat and collects two byte-identical final reads", async () => {
     const harness = createAutomationHarness(rootSuccessScript());
     const result = await harness.automation.run(await createAutomationInput(), harness.hooks);
@@ -2399,6 +2430,7 @@ describe("AgentBrowserAutomation", () => {
     await writeFile(first, "pdf");
     await writeFile(second, "log");
     const uploadedRefs = { e7: { role: "textbox", name: "Message ChatGPT" } };
+    let readyReads = 0;
     const harness = createAutomationHarness([
       { status: 0, output: automationJson() },
       { status: 0, output: urlJson(PROJECT_URL) },
@@ -2419,7 +2451,7 @@ describe("AgentBrowserAutomation", () => {
       { status: 0, output: textJson(ownEnvelope("uploaded")) },
       { status: 0, output: urlJson(CONVERSATION_URL) },
       { status: 0, output: textJson(ownEnvelope("uploaded")) },
-    ]);
+    ], { sendReady: () => ++readyReads >= 3 ? 1 : 0 });
 
     const result = await harness.automation.run({
       ...input,
@@ -2427,13 +2459,121 @@ describe("AgentBrowserAutomation", () => {
     }, harness.hooks);
 
     expect(result.kind).toBe("completed");
+    expect(readyReads).toBe(3);
+    const commands = harness.fake.calls.map((call) => commandArgs(call.argv));
+    expect(commands.filter((args) => args[0] === "click")).toEqual([["click", 'button[data-testid="send-button"]:enabled']]);
+    expect(commands.some((args) => args[0] === "press")).toBeFalse();
     expect(commandArgs(harness.fake.calls[5]!.argv)).toEqual([
-      "upload", "input[type=file]", first, second,
+      "upload", "input#upload-files[type=file]", first, second,
     ]);
     expect(commandArgs(harness.fake.calls[6]!.argv)).toEqual(["snapshot", "-i"]);
     expect(commandArgs(harness.fake.calls[8]!.argv)).toEqual([
       "fill", "@e7", AUTOMATION_PROMPT,
     ]);
+  });
+
+  test("an unchanged follow-up URL cannot confirm an Enter key that sent no message", async () => {
+    const prior = browserCompletionEnvelope("b".repeat(32), "previous answer");
+    const harness = createAutomationHarness([
+      { status: 0, output: automationJson() },
+      { status: 0, output: urlJson(CONVERSATION_URL) },
+      { status: 0, output: snapshotJson(COMPOSER_SNAPSHOT) },
+      { status: 0, output: countJson(1) },
+      { status: 0, output: countJson(1) },
+      { status: 0, output: textJson(prior) },
+      { status: 0, output: countJson(1) },
+      { status: 0, output: textJson(prior) },
+      { status: 0, output: urlJson(CONVERSATION_URL) },
+      { status: 0, output: automationJson() },
+      { status: 0, output: urlJson(CONVERSATION_URL) },
+      { status: 0, output: automationJson() },
+      ...Array.from({ length: 20 }, () => ({ status: 0, output: urlJson(CONVERSATION_URL) })),
+    ], { userTurnText: () => "The previous user message", deadlineMs: 6000 });
+    const result = await harness.automation.run(await createAutomationInput({
+      targetKind: "conversation", targetUrl: CONVERSATION_URL,
+    }), harness.hooks);
+    expect(result).toMatchObject({ kind: "recovery", reason: "submission_uncertain", certainty: "uncertain" });
+    expect(harness.hookCalls.before).toBe(1);
+    expect(harness.hookCalls.confirmed).toEqual([]);
+    expect(harness.fake.calls.filter((call) => commandArgs(call.argv)[0] === "press")).toHaveLength(1);
+  });
+
+  test("an unfinished upload never attempts to send the prompt", async () => {
+    const input = await createAutomationInput();
+    const attachment = join(input.stagingDirectory, "attachment.txt");
+    await writeFile(attachment, "synthetic attachment");
+    const harness = createAutomationHarness([
+      { status: 0, output: automationJson() },
+      { status: 0, output: urlJson(PROJECT_URL) },
+      { status: 0, output: snapshotJson(COMPOSER_SNAPSHOT) },
+      { status: 0, output: countJson(0) },
+      { status: 0, output: urlJson(PROJECT_URL) },
+      { status: 0, output: automationJson() },
+      { status: 0, output: snapshotJson(COMPOSER_SNAPSHOT) },
+      { status: 0, output: urlJson(PROJECT_URL) },
+      { status: 0, output: automationJson() },
+    ], { sendReady: () => 0, deadlineMs: 3000 });
+    const result = await harness.automation.run({ ...input, uploadPaths: [attachment] }, harness.hooks);
+    expect(result).toMatchObject({ kind: "recovery", reason: "upload_failed", certainty: "not_submitted" });
+    expect(harness.hookCalls.before).toBe(0);
+    expect(harness.fake.calls.some((call) => ["press", "click"].includes(commandArgs(call.argv)[0]!))).toBeFalse();
+  });
+
+  test("a rate-limit dialog pauses peer workers before they open another tab", async () => {
+    let paused = false;
+    const gate = {
+      isBlocked: async () => paused,
+      pause: async (port: number) => { expect(port).toBe(9222); paused = true; },
+    };
+    const harness = createAutomationHarness([
+      { status: 0, output: automationJson() },
+      { status: 0, output: urlJson(PROJECT_URL) },
+      { status: 0, output: snapshotJson({
+        e1: { role: "dialog", name: "Too many requests" },
+        e2: { role: "button", name: "Got it" },
+      }) },
+    ], { rateLimitGate: gate });
+    const result = await harness.automation.run(await createAutomationInput(), harness.hooks);
+    expect(result).toMatchObject({ reason: "rate_limited", certainty: "not_submitted", phase: "needs_manual" });
+    expect(harness.hookCalls.before).toBe(0);
+    expect(paused).toBeTrue();
+    const peer = createAutomationHarness([], { rateLimitGate: gate });
+    const resumed = await peer.automation.run(await createAutomationInput({
+      mode: "collect_only", targetUrl: CONVERSATION_URL, targetKind: "conversation",
+    }), peer.hooks);
+    expect(resumed).toMatchObject({ reason: "rate_limited", certainty: "submitted", conversationUrl: CONVERSATION_URL });
+    expect(peer.fake.calls).toHaveLength(0);
+  });
+
+  test("Project-bound requests reject an ordinary chat redirect after sending without a second send", async () => {
+    const harness = createAutomationHarness(rootSuccessScript());
+    const result = await harness.automation.run(await createAutomationInput({ projectUrl: PROJECT_URL }), harness.hooks);
+    expect(result).toMatchObject({ reason: "submission_uncertain", certainty: "uncertain" });
+    expect(harness.hookCalls.before).toBe(1);
+    expect(harness.hookCalls.confirmed).toEqual([]);
+    expect(harness.fake.calls.filter((call) => commandArgs(call.argv)[0] === "press")).toHaveLength(1);
+  });
+
+  test("Project-bound follow-ups refuse a conversation outside their Project before opening", async () => {
+    const harness = createAutomationHarness([]);
+    const result = await harness.automation.run(await createAutomationInput({
+      projectUrl: PROJECT_URL, targetKind: "conversation", targetUrl: CONVERSATION_URL,
+    }), harness.hooks);
+    expect(result).toMatchObject({ reason: "ui_changed", certainty: "not_submitted" });
+    expect(harness.fake.calls).toHaveLength(0);
+  });
+
+  test("recognizes a rate-limit warning when the interactive snapshot omits its heading", async () => {
+    const harness = createAutomationHarness([
+      { status: 0, output: automationJson() },
+      { status: 0, output: urlJson(PROJECT_URL) },
+      { status: 0, output: snapshotJson({ e1: { role: "button", name: "Got it" } }) },
+      { status: 0, output: textJson("Too many requests\nYou're making requests too quickly.\nPlease wait a few minutes before trying again.\nGot it") },
+    ]);
+    const result = await harness.automation.run(await createAutomationInput(), harness.hooks);
+    expect(result).toMatchObject({ reason: "rate_limited", certainty: "not_submitted" });
+    expect(harness.hookCalls.before).toBe(0);
+    expect(harness.fake.calls.some((call) => commandArgs(call.argv)[0] === "click")).toBeFalse();
   });
 
   test("recovers a root request from one existing Project conversation via one scoped new-chat control", async () => {
@@ -2500,8 +2640,12 @@ describe("AgentBrowserAutomation", () => {
     ]);
   });
 
-  test("requires an exact stored conversation and settles its prior answer before a follow-up", async () => {
+  test.each(["Markdown", "escaped newlines"])("proves a follow-up's new message with %s rendering", async (rendering) => {
     const prior = browserCompletionEnvelope("b".repeat(32), "earlier answer");
+    const prompt = formatBrowserPrompt(AUTOMATION_REQUEST_ID, 0,
+      rendering === "Markdown" ? "Review this:\n```json\n{\"limit\": 3}\n```" : "a\n".repeat(30_000), "lean");
+    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(65_536);
+    if (rendering === "escaped newlines") expect(Buffer.byteLength(textJson(prompt))).toBeGreaterThan(81_920);
     const harness = createAutomationHarness([
       { status: 0, output: automationJson() },
       { status: 0, output: urlJson(`${CONVERSATION_URL}?model=auto`) },
@@ -2523,10 +2667,11 @@ describe("AgentBrowserAutomation", () => {
       { status: 0, output: textJson(ownEnvelope("same chat")) },
       { status: 0, output: urlJson(CONVERSATION_URL) },
       { status: 0, output: textJson(ownEnvelope("same chat")) },
-    ]);
+    ], { userTurnText: () => prompt.replaceAll("```", "").replaceAll(" ", "\u00a0") + "\nShow more" });
     const input = await createAutomationInput({
       targetUrl: CONVERSATION_URL,
       targetKind: "conversation",
+      prompt,
     });
 
     const result = await harness.automation.run(input, harness.hooks);
@@ -2539,7 +2684,7 @@ describe("AgentBrowserAutomation", () => {
     expect(commandArgs(harness.fake.calls[3]!.argv)).toEqual([
       "get", "count", ASSISTANT_SELECTOR,
     ]);
-    expect(commandArgs(harness.fake.calls[15]!.argv)).toEqual([
+    expect(commandArgs(harness.fake.calls[16]!.argv)).toEqual([
       "get", "count", ASSISTANT_SELECTOR,
     ]);
   });
@@ -2634,7 +2779,7 @@ describe("AgentBrowserAutomation", () => {
     });
     const texts = harness.fake.calls
       .map((call) => commandArgs(call.argv))
-      .filter((argv) => argv[0] === "find");
+      .filter((argv) => argv[0] === "find" && argv[2] === ASSISTANT_SELECTOR);
     expect(texts).toHaveLength(6);
   });
 
@@ -2740,10 +2885,11 @@ describe("AgentBrowserAutomation", () => {
       kind: "recovery",
       phase: "needs_manual",
       reason: "invalid_response",
+      rejectedText: "Internal Server Error",
       certainty: "submitted",
       conversationUrl: CONVERSATION_URL,
     });
-    expect(harness.fake.calls).toHaveLength(13 + 3 * 7);
+    expect(harness.fake.calls).toHaveLength(14 + 3 * 7);
   });
 
   test("treats any control whose name starts with stop as active generation", async () => {
@@ -2788,6 +2934,7 @@ describe("AgentBrowserAutomation", () => {
       kind: "recovery",
       phase: "needs_manual",
       reason: "invalid_response",
+      rejectedText: broken,
       certainty: "submitted",
       conversationUrl: CONVERSATION_URL,
     });
@@ -3683,6 +3830,49 @@ function eventPreSubmissionScript(targetId = EVENT_TARGET_ID): ScriptEntry[] {
 }
 
 describe("AgentBrowserAutomation event-driven collection", () => {
+  test("a rate limit that prevents navigation preserves uncertainty and pauses peers", async () => {
+    let paused = false;
+    const harness = createAutomationHarness([
+      ...eventPreSubmissionScript(),
+      ...Array.from({ length: 40 }, (): ScriptEntry => (call) => ({
+        status: 0,
+        output: commandArgs(call.argv)[0] === "snapshot"
+          ? snapshotJson({ e8: { role: "dialog", name: "Too many requests" } }) : urlJson(PROJECT_URL),
+      })),
+    ], { deadlineMs: 60_000, rateLimitGate: { isBlocked: async () => paused, pause: async () => { paused = true; } } });
+    const result = await harness.automation.run(await createAutomationInput(), harness.hooks);
+    expect(result).toMatchObject({ reason: "rate_limited", certainty: "uncertain" });
+    expect(paused).toBeTrue();
+    expect(harness.hookCalls.before).toBe(1);
+    expect(harness.hookCalls.confirmed).toEqual([]);
+    expect(harness.fake.calls.filter((call) => commandArgs(call.argv)[0] === "press")).toHaveLength(1);
+  });
+
+  test("a rate limit after Send stops event collection and pauses other clients", async () => {
+    const { factory, sockets } = createCdpFactory();
+    let paused = false;
+    const gate = { isBlocked: async () => paused, pause: async () => { paused = true; } };
+    const harness = createAutomationHarness([
+      ...eventPreSubmissionScript(),
+      { status: 0, output: urlJson(CONVERSATION_URL) },
+      { status: 0, output: urlJson(CONVERSATION_URL) },
+      { status: 0, output: snapshotJson({ e8: { role: "dialog", name: "Too many requests" } }) },
+    ], {
+      cdpPageClientFactory: factory, rateLimitGate: gate,
+      deadlineMs: 30_000, commandWaitStepMs: 10_000, onCommandWait: () => {},
+    });
+    const result = await harness.automation.run(await createAutomationInput(), harness.hooks);
+    expect(result).toMatchObject({ reason: "rate_limited", certainty: "submitted", collectionPath: "event" });
+    expect(harness.hookCalls.before).toBe(1);
+    expect(harness.hookCalls.confirmed).toEqual([CONVERSATION_URL]);
+    expect(harness.now()).toBe(10_000);
+    expect(paused).toBeTrue();
+    expect(sockets[0]?.closeCalls).toBe(1);
+    const peer = createAutomationHarness([], { rateLimitGate: gate });
+    expect(await peer.automation.run(await createAutomationInput(), peer.hooks)).toMatchObject({ reason: "rate_limited" });
+    expect(peer.fake.calls).toHaveLength(0);
+  });
+
   test("buffers a done frame that arrives before the conversation id is known and still completes the turn", async () => {
     const { factory, sockets } = createCdpFactory();
     const response = ownEnvelope("late id race answer");
@@ -3754,6 +3944,8 @@ describe("AgentBrowserAutomation event-driven collection", () => {
     const script: ScriptEntry[] = [
       ...eventPreSubmissionScript(),
       { status: 0, output: urlJson(CONVERSATION_URL) },
+      { status: 0, output: urlJson(CONVERSATION_URL) },
+      { status: 0, output: snapshotJson(COMPOSER_SNAPSHOT) },
       { status: 0, output: urlJson(CONVERSATION_URL) },
       { status: 0, output: textJson(response) },
     ];
@@ -3841,6 +4033,8 @@ describe("AgentBrowserAutomation event-driven collection", () => {
       ...eventPreSubmissionScript(),
       { status: 0, output: urlJson(CONVERSATION_URL) },
       { status: 0, output: urlJson(CONVERSATION_URL) },
+      { status: 0, output: snapshotJson(COMPOSER_SNAPSHOT) },
+      { status: 0, output: urlJson(CONVERSATION_URL) },
       { status: 0, output: textJson(response) },
     ];
     const harness = createAutomationHarness(script, {
@@ -3866,6 +4060,8 @@ describe("AgentBrowserAutomation event-driven collection", () => {
     const script: ScriptEntry[] = [
       ...eventPreSubmissionScript(),
       { status: 0, output: urlJson(CONVERSATION_URL) },
+      { status: 0, output: urlJson(CONVERSATION_URL) },
+      { status: 0, output: snapshotJson(COMPOSER_SNAPSHOT) },
       { status: 0, output: urlJson(CONVERSATION_URL) },
       { status: 0, output: textJson(foreign) },
     ];
@@ -4065,6 +4261,8 @@ describe("AgentBrowserAutomation event-driven collection", () => {
       ...eventPreSubmissionScript(),
       { status: 0, output: urlJson(CONVERSATION_URL) },
       { status: 0, output: urlJson(CONVERSATION_URL) },
+      { status: 0, output: snapshotJson(COMPOSER_SNAPSHOT) },
+      { status: 0, output: urlJson(CONVERSATION_URL) },
       { status: 0, output: textJson(response) },
     ];
     const harness = createAutomationHarness(script, {
@@ -4134,9 +4332,10 @@ describe("AgentBrowserAutomation event-driven collection", () => {
     const placeholder = "still generating, no envelope yet";
     const trailingPolls: ScriptEntry[] = Array.from({ length: 200 }, () => [
       (): ScriptResult => ({ status: 0, output: urlJson(CONVERSATION_URL) }),
-      (): ScriptResult => ({
+      (call: RunnerCall): ScriptResult => ({
         status: 0,
-        output: textJson(clock >= FRESH_AT ? finalAnswer : placeholder),
+        output: commandArgs(call.argv)[0] === "snapshot" ? snapshotJson(COMPOSER_SNAPSHOT)
+          : textJson(clock >= FRESH_AT ? finalAnswer : placeholder),
       }),
     ]).flat();
     const script: ScriptEntry[] = [
@@ -4299,6 +4498,8 @@ describe("AgentBrowserAutomation event-driven collection", () => {
       { status: 0, output: urlJson(CONVERSATION_URL) },
       { status: 0, output: textJson("no envelope in the page yet") },
       { status: 0, output: urlJson(CONVERSATION_URL) },
+      { status: 0, output: snapshotJson(COMPOSER_SNAPSHOT) },
+      { status: 0, output: urlJson(CONVERSATION_URL) },
       { status: 0, output: textJson("still no envelope at the deadline") },
     ];
     const harness = createAutomationHarness(script, {
@@ -4318,7 +4519,7 @@ describe("AgentBrowserAutomation event-driven collection", () => {
       conversationUrl: CONVERSATION_URL,
       collectionPath: "event",
     });
-    expect(harness.fake.calls).toHaveLength(13);
+    expect(harness.fake.calls).toHaveLength(15);
   });
 
   test("repeated unauthenticated done hints in quick succession trigger only one validated read", async () => {
@@ -4334,6 +4535,8 @@ describe("AgentBrowserAutomation event-driven collection", () => {
       { status: 0, output: urlJson(CONVERSATION_URL) },
       { status: 0, output: textJson("no envelope in the page yet") },
       { status: 0, output: urlJson(CONVERSATION_URL) },
+      { status: 0, output: snapshotJson(COMPOSER_SNAPSHOT) },
+      { status: 0, output: urlJson(CONVERSATION_URL) },
       { status: 0, output: textJson("still no envelope at the deadline") },
     ];
     const harness = createAutomationHarness(script, {
@@ -4353,7 +4556,7 @@ describe("AgentBrowserAutomation event-driven collection", () => {
       conversationUrl: CONVERSATION_URL,
       collectionPath: "event",
     });
-    expect(harness.fake.calls).toHaveLength(13);
+    expect(harness.fake.calls).toHaveLength(15);
   });
 
   test("a conversations-topic frame never triggers a hint read nor completes the request", async () => {

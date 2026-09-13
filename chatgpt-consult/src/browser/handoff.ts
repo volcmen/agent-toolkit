@@ -69,17 +69,25 @@ export function sanitizeChatgptUrl(value: unknown, purpose: SanitizePurpose): st
   const pathname = parsed.pathname;
 
   if (purpose === "conversation") {
-    if (pathname === "/" || pathname === "") return null;
-    if (isAuthOrLoginPath(pathname)) return null;
+    if (!/^\/(?:g\/[A-Za-z0-9_-]+\/)?c\/[A-Za-z0-9_-]+$/.test(pathname)) return null;
     return `https://${CHATGPT_HOST}${pathname}`;
   }
 
-  // configured: reject fragment, strip query, reject auth/login paths
   if (parsed.hash !== "") return null;
-  if (pathname === "" || pathname === "/") return null;
-  if (isAuthOrLoginPath(pathname)) return null;
+  if (!/^\/g\/(?:[A-Za-z0-9_-]+\/project|projects\/[A-Za-z0-9_-]+)$/.test(pathname)) return null;
   return `https://${CHATGPT_HOST}${pathname}`;
 }
+
+export const conversationBelongsToProject = (conversationUrl: string, projectUrl: string): boolean => {
+  const project = sanitizeChatgptUrl(projectUrl, "configured");
+  const conversation = sanitizeChatgptUrl(conversationUrl, "conversation");
+  if (project === null || conversation === null) return false;
+  const parts = new URL(project).pathname.split("/");
+  const projectSegment = parts[2] === "projects" ? parts[3] : parts[2];
+  const conversationSegment = /^\/g\/([^/]+)\/c\//.exec(new URL(conversation).pathname)?.[1];
+  const identity = (segment: string | undefined) => segment?.match(/^(g-p-[a-f0-9]{32})(?:-|$)/)?.[1] ?? segment;
+  return conversationSegment !== undefined && identity(conversationSegment) === identity(projectSegment);
+};
 
 export interface BrowserSubmitInput {
   readonly session: ChromeSession;
@@ -95,6 +103,7 @@ export interface BrowserAutomationInput {
   readonly requestId: string;
   readonly targetUrl: string;
   readonly targetKind: "configured" | "conversation";
+  readonly projectUrl?: string;
   readonly prompt: string;
   readonly uploadPaths: readonly string[];
   readonly stagingDirectory: string;

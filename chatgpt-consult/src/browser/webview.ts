@@ -91,7 +91,7 @@ export class WebViewSubmitter implements BrowserSubmitter {
       return { kind: "unavailable", message: MSG_UNAVAILABLE_RUNTIME };
     }
 
-    const canonicalUrl = sanitizeChatgptUrl(input.targetUrl, "configured");
+    const canonicalUrl = sanitizeChatgptUrl(input.targetUrl, input.targetKind);
     if (canonicalUrl === null) {
       return { kind: "unavailable", message: MSG_UNAVAILABLE_TARGET };
     }
@@ -286,7 +286,7 @@ export class WebViewSubmitter implements BrowserSubmitter {
       };
       const rawUrl = result?.frameTree?.frame?.url;
       if (typeof rawUrl !== "string") return null;
-      const sanitized = sanitizeChatgptUrl(rawUrl, "conversation");
+      const sanitized = sanitizeChatgptUrl(rawUrl, "conversation") ?? sanitizeChatgptUrl(rawUrl, "configured");
       if (sanitized === null) return null;
       return sanitized;
     } catch {

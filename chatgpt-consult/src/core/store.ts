@@ -25,7 +25,7 @@ import {
   initialBrowserExecution,
 } from "./browser-execution";
 import { inspectCompletionClaimMaterial, redactTextClaimMaterial } from "./claim-material";
-import { ConsultError } from "./errors";
+import { ConsultError, ConversationBusyError } from "./errors";
 import {
   BrowserExecutionSchema,
   CompletionSchema,
@@ -68,6 +68,7 @@ export interface CreateRequestInput {
   profile: CapabilityProfile;
   parentId: string | null;
   conversationUrl: string | null;
+  thread?: ConsultationRequest["thread"];
   idempotencyKey: string;
   budget: ContextBudget;
   contextManifest: ContextManifest;
@@ -153,6 +154,7 @@ const fingerprintCreation = (
   profile: input.profile,
   parentId: input.parentId,
   conversationUrl: input.conversationUrl,
+  ...(input.thread === undefined ? {} : { thread: input.thread }),
   budget,
   contextManifest: input.contextManifest,
   diff: input.diff,
@@ -272,6 +274,7 @@ export class RequestStore {
         profile: input.profile,
         parentId: input.parentId,
         conversationUrl: input.conversationUrl,
+        ...(input.thread === undefined ? {} : { thread: input.thread }),
         state: "pending",
         revision: 0,
         createdAt: timestamp,
@@ -941,6 +944,56 @@ export class RequestStore {
     return this.readResult(id, true);
   }
 
+  async withBrowserConversation<T>(
+    conversationUrl: string | null,
+    current: { requestId?: string; idempotencyKey?: string; allowBusy?: boolean },
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (conversationUrl === null) return operation();
+    const canonicalUrl = sanitizeChatgptUrl(conversationUrl, "conversation");
+    if (canonicalUrl === null) throw new ConsultError("INVALID_INPUT", "Conversation URL is invalid");
+    await this.init();
+    return this.withLock(`conversation-${digest(canonicalUrl).slice(0, 32)}`, async () => {
+      if (!current.allowBusy) await this.assertBrowserConversationAvailable(canonicalUrl, current);
+      return operation();
+    });
+  }
+
+  async assertBrowserConversationAvailable(
+    conversationUrl: string,
+    current: { requestId?: string; idempotencyKey?: string },
+  ): Promise<void> {
+    const entries = await readdir(join(this.project.stateDir, "requests"));
+    for (const entry of entries) {
+      if (!entry.endsWith(".json")) continue;
+      const request = await this.get(entry.slice(0, -5));
+      if (request.id === current.requestId || request.idempotencyKey === current.idempotencyKey
+        || request.conversationUrl !== conversationUrl || request.state === "completed"
+        || request.state === "cancelled" || request.state === "expired") continue;
+      const execution = request.browserExecution;
+      if (execution === null) continue;
+      const active = execution.lease !== null
+        && new Date(execution.lease.expiresAt).getTime() > this.now().getTime();
+      if (!active && execution.submission.certainty === "not_submitted"
+        && (execution.phase === "needs_manual" || execution.phase === "needs_login")) continue;
+      throw new ConversationBusyError(request.id);
+    }
+  }
+
+  async countConversationRequests(conversationUrl: string): Promise<number> {
+    await this.init();
+    let count = 0;
+    for (const entry of await readdir(join(this.project.stateDir, "requests"))) {
+      if (!entry.endsWith(".json")) continue;
+      const request = await this.get(entry.slice(0, -5));
+      if (request.conversationUrl !== conversationUrl) continue;
+      const certainty = request.browserExecution?.submission.certainty;
+      if ((request.state !== "cancelled" && request.state !== "expired")
+        || certainty === "submitted" || certainty === "uncertain") count += 1;
+    }
+    return count;
+  }
+
   async listRecent(limit = 20): Promise<ConsultationRequest[]> {
     await this.init();
     if (!Number.isInteger(limit) || limit <= 0) invalidInput("Recent request limit must be positive");
@@ -1192,7 +1245,8 @@ export class RequestStore {
     }
   }
 
-  private async findByIdempotencyKey(key: string): Promise<ConsultationRequest | null> {
+  async findByIdempotencyKey(key: string): Promise<ConsultationRequest | null> {
+    await this.init();
     const entries = await readdir(join(this.project.stateDir, "requests"));
     for (const entry of entries) {
       if (!entry.endsWith(".json")) continue;

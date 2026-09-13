@@ -1,7 +1,6 @@
-import { chmod, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { lstat, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { AGENT_BROWSER_POLICY, type CommandRunner } from "../browser/agent-browser";
+import { createAutomationWorkspace, createAutomationSessionId, type CommandRunner } from "../browser/agent-browser";
 import { resolveChromePaths } from "../browser/cdp";
 import { runBoundedDiagnosticResult } from "../browser/chrome";
 import { classifyObservedChatgptUrl } from "../browser/handoff";
@@ -67,7 +66,6 @@ const REQUIRED = new Set<DoctorProbeName>([
 ]);
 const SUBPROCESS_TIMEOUT_MS = 5_000;
 const NETWORK_TIMEOUT_MS = 2_000;
-export const PROJECT_PAGE_PROBE_SESSION = "cgpt-doctor";
 const PROJECT_PAGE_PROBE_DEADLINE_MS = 15_000;
 const PROJECT_PAGE_SNAPSHOT_MAX_ATTEMPTS = 8;
 const PROJECT_PAGE_SNAPSHOT_RETRY_MS = 1_500;
@@ -320,24 +318,6 @@ const buildProjectPageEnv = (workspaceDir: string): Record<string, string> => {
   return env;
 };
 
-const createProjectPageWorkspace = async (): Promise<ProjectPageWorkspace> => {
-  const dir = await mkdtemp(join(tmpdir(), "cgpt-doctor-"));
-  try {
-    await chmod(dir, 0o700);
-    const policyPath = join(dir, "action-policy.json");
-    const configPath = join(dir, "agent-browser.json");
-    await writeFile(policyPath, `${JSON.stringify(AGENT_BROWSER_POLICY, null, 2)}\n`, { mode: 0o600 });
-    await writeFile(configPath, "{}\n", { mode: 0o600 });
-    return { dir, policyPath, configPath };
-  } catch (error) {
-    try {
-      await rm(dir, { recursive: true, force: true });
-    } catch {
-    }
-    throw error;
-  }
-};
-
 const cleanupProjectPageWorkspace = async (dir: string): Promise<void> => {
   await rm(dir, { recursive: true, force: true });
 };
@@ -394,7 +374,7 @@ export const probeProjectPage = async (
     ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   const deadline = now() + (deps.deadlineMs ?? PROJECT_PAGE_PROBE_DEADLINE_MS);
   const runner = deps.commandRunner ?? defaultProjectPageCommandRunner;
-  const workspaceFactory = deps.workspaceFactory ?? createProjectPageWorkspace;
+  const workspaceFactory = deps.workspaceFactory ?? createAutomationWorkspace;
   const workspaceCleanup = deps.workspaceCleanup ?? cleanupProjectPageWorkspace;
 
   let workspace: ProjectPageWorkspace;
@@ -406,7 +386,7 @@ export const probeProjectPage = async (
 
   const globalArgs = [
     executable,
-    "--session", PROJECT_PAGE_PROBE_SESSION,
+    "--session", createAutomationSessionId(),
     "--cdp", String(session.port),
     "--pin-tab",
     "--content-boundaries",
@@ -435,6 +415,7 @@ export const probeProjectPage = async (
     }
   };
 
+  let ownedTargetId: string | undefined;
   try {
     const opened = await run(["open", config.chatgptProjectUrl]);
     if (opened === null) {
@@ -442,6 +423,10 @@ export const probeProjectPage = async (
         status: "warn",
         message: "The live project-page probe timed out opening the configured project URL.",
       };
+    }
+
+    if (typeof opened.targetId === "string" && /^[A-Fa-f0-9]{32}$/.test(opened.targetId)) {
+      ownedTargetId = opened.targetId;
     }
 
     const urlData = await run(["get", "url"]);
@@ -480,7 +465,7 @@ export const probeProjectPage = async (
     });
   } finally {
     try {
-      await runner([...globalArgs, "tab", "close"], {
+      if (ownedTargetId !== undefined) await runner([...globalArgs, "tab", "close", ownedTargetId], {
         cwd: workspace.dir,
         env,
         timeoutMs: PROJECT_PAGE_TAB_CLOSE_BUDGET_MS,

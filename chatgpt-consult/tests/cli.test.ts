@@ -3,6 +3,7 @@ import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { main, type MainDependencies } from "../src/cli/main";
+import { renderHuman } from "../src/cli/render";
 import { ConsultError } from "../src/core/errors";
 import type { ChatgptSetupGuidance, SetupClientsResult } from "../src/cli/setup";
 import { setupBrowserSession } from "../src/browser/runtime";
@@ -11,6 +12,17 @@ import { BrowserSessionManager } from "../src/browser/session";
 import type { BrowserAutomationHooks } from "../src/browser/handoff";
 
 const temporaryPaths: string[] = [];
+
+test.each(["start", "followup", "status"])("%s tells rate-limited users to pause without an immediate handoff", (command) => {
+  const text = renderHuman(command, {
+    requestId: "a".repeat(32), state: "pending", handoff: "Do not send this during the restriction",
+    browser: { phase: "needs_manual", reason: "rate_limited", submissionCertainty: "uncertain", workerActive: false },
+  });
+  expect(text).toContain("five minutes");
+  expect(text).toContain("never resend an uncertain submission");
+  expect(text).not.toContain("Manual handoff:");
+  expect(text).not.toContain("Use handoff and import-result");
+});
 const absoluteBin = join(dirname(import.meta.dir), "bin", "chatgpt-consult.ts");
 
 const makeProject = async () => {

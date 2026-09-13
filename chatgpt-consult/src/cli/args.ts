@@ -25,6 +25,7 @@ export interface ParsedArgs {
   idempotencyKey?: string;
   chatgptProjectUrl?: string;
   browserCdpPort?: string;
+  chatMode?: string;
 }
 
 const commands = new Set<CommandName>([
@@ -40,7 +41,7 @@ const repeated: Record<string, "files" | "attachments" | "connectors" | undefine
 };
 const scalar: Record<string,
   | "profile" | "diff" | "output" | "input" | "limit" | "idempotencyKey"
-  | "chatgptProjectUrl" | "browserCdpPort" | undefined> = {
+  | "chatgptProjectUrl" | "browserCdpPort" | "chatMode" | undefined> = {
   "--profile": "profile",
   "--diff": "diff",
   "--output": "output",
@@ -49,6 +50,7 @@ const scalar: Record<string,
   "--idempotency-key": "idempotencyKey",
   "--chatgpt-project-url": "chatgptProjectUrl",
   "--cdp": "browserCdpPort",
+  "--chat-mode": "chatMode",
 };
 const boolean: Record<string, "json" | "smart" | "open" | "allowSensitive" | "apply" | "replace" | "managed" | undefined> = {
   "--json": "json",
@@ -69,6 +71,7 @@ const allowed: Record<CommandName, ReadonlySet<string>> = {
   followup: new Set([
     "--json", "--file", "--attachment", "--connector", "--profile", "--smart",
     "--diff", "--open", "--idempotency-key", "--allow-sensitive",
+    "--chat-mode",
   ]),
   status: new Set(["--json"]),
   show: new Set(["--json"]),

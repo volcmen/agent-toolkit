@@ -4,6 +4,7 @@ import {
   classifyObservedChatgptUrl,
   formatChatgptHandoff,
   sanitizeChatgptUrl,
+  conversationBelongsToProject,
   type BrowserSubmitter,
   type BrowserSubmitInput,
   type BrowserSubmitResult,
@@ -63,6 +64,14 @@ describe("formatChatgptHandoff", () => {
 });
 
 describe("sanitizeChatgptUrl", () => {
+  test("Project membership uses its stable ID and rejects ordinary or other Project chats", () => {
+    const id = "g-p-" + "a".repeat(32);
+    const project = `https://chatgpt.com/g/${id}-original/project`;
+    expect(conversationBelongsToProject(`https://chatgpt.com/g/${id}-renamed/c/first`, project)).toBeTrue();
+    expect(conversationBelongsToProject("https://chatgpt.com/c/first", project)).toBeFalse();
+    expect(conversationBelongsToProject(`https://chatgpt.com/g/g-p-${"b".repeat(32)}/c/first`, project)).toBeFalse();
+    expect(sanitizeChatgptUrl("https://chatgpt.com/settings", "conversation")).toBeNull();
+  });
   describe("configured navigation target", () => {
     const purpose = "configured" as const;
 
@@ -150,10 +159,8 @@ describe("sanitizeChatgptUrl", () => {
       expect(sanitizeChatgptUrl("https://chatgpt.com/login/callback", purpose)).toBeNull();
     });
 
-    test("accepts /author path (not an auth/login family)", () => {
-      expect(sanitizeChatgptUrl("https://chatgpt.com/author/profile", purpose)).toBe(
-        "https://chatgpt.com/author/profile",
-      );
+    test.each(["/author/profile", "/c/existing-chat", "/g/custom-gpt", "/settings"])("rejects non-Project target %s", (path) => {
+      expect(sanitizeChatgptUrl(`https://chatgpt.com${path}`, purpose)).toBeNull();
     });
   });
 

@@ -17,7 +17,10 @@ jobs:
           python-version: "3.11"
       - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2
         with:
-          bun-version: "1.3.14"
+          bun-version: "1.4.0"
+      - name: install ChatGPT Consult dependencies
+        run: bun install --frozen-lockfile
+        working-directory: chatgpt-consult
       # The rendered manifests must match plugins.json, every catalogued plugin
       # must be well formed, and each project's own suite must pass.
       - run: python3 scripts/plugins.py sync --check

@@ -12,11 +12,22 @@ import {
 } from "../src/core/service";
 import { RequestStore } from "../src/core/store";
 import { createLocalMcp } from "../src/mcp/local";
-import { browserRecoveryInstruction } from "../src/mcp/results";
+import { browserRecoveryInstruction, errorResult } from "../src/mcp/results";
+import { ConsultError, ConversationBusyError } from "../src/core/errors";
 import { resolveProject } from "../src/security/project";
 
 const temporaryPaths: string[] = [];
 const fixedTime = new Date("2026-08-30T12:00:00.000Z");
+
+test("conversation conflicts expose only the validated request locator", () => {
+  const requestId = "a".repeat(32);
+  const result = errorResult(new ConversationBusyError(requestId));
+  expect(result.isError).toBeTrue();
+  expect(result.structuredContent).toMatchObject({ error: { code: "CONFLICT", requestId } });
+  expect(JSON.stringify(result.content)).toContain(requestId);
+  const other = errorResult(new ConsultError("CONFLICT", "private detail", { requestId: "private detail" }));
+  expect(JSON.stringify(other)).not.toContain("private detail");
+});
 
 const makeFixture = async (options: {
   beforePublicationCommit?: (directory: string) => Promise<void>;
@@ -132,6 +143,14 @@ describe("browserRecoveryInstruction", () => {
   test("returns null outside needs_login and needs_manual", () => {
     expect(browserRecoveryInstruction("awaiting_response", "not_submitted")).toBeNull();
     expect(browserRecoveryInstruction(undefined, undefined)).toBeNull();
+  });
+
+  test("rate limits explain shared backoff without requesting login or immediate retry", () => {
+    const instruction = browserRecoveryInstruction("needs_manual", "not_submitted", "rate_limited");
+    expect(instruction).toContain("five minutes");
+    expect(instruction).toContain("do not reload, retry automatically, or sign in again");
+    expect(instruction).not.toContain("Run open");
+    expect(instruction).not.toContain("setup browser");
   });
 });
 
@@ -756,6 +775,12 @@ describe("local MCP", () => {
       for (const text of await guidance()) {
         expect(text).toContain("call consult_status with wait_seconds");
         expect(text).toContain("do not resubmit");
+      }
+      browser = { ...exact, reason: "rate_limited", workerActive: false };
+      for (const text of await guidance()) {
+        expect(text).toContain("five minutes");
+        expect(text).toContain("never resend an uncertain submission");
+        expect(text).not.toContain("call consult_status with wait_seconds");
       }
     } finally {
       await client.close();

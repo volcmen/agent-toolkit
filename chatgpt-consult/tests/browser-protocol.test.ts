@@ -39,6 +39,8 @@ describe("browser completion protocol", () => {
     expect(prompt).toContain("perform no action outside analysis");
     expect(prompt).toContain("BEGIN_CHATGPT_CONSULT_RESULT");
     expect(prompt).not.toContain("claim_token");
+    expect(parseBrowserCompletion(prompt.slice(prompt.lastIndexOf(BROWSER_RESULT_BEGIN)), requestId, 0))
+      .toMatchObject({ summary: "Brief summary", answer: "Your analysis", evidence: [] });
   });
 
   test.each(["lean", "research", "analysis", "connected"] as const)(

@@ -6,6 +6,7 @@ import {
   type BrowserAutomationInput,
   type BrowserAutomationResult,
   type BrowserCollectionPath,
+  conversationBelongsToProject,
   sanitizeChatgptUrl,
 } from "./handoff.js";
 import {
@@ -214,6 +215,7 @@ export class BrowserJob {
           mode === "submit_and_collect" && automationTarget.kind === "conversation"
             ? automationTarget.url
             : undefined,
+          request.thread?.projectUrl ?? this.projectUrl,
         );
         let automationResult: BrowserAutomationResult;
         try {
@@ -279,7 +281,7 @@ export class BrowserJob {
           requestId,
           ownerId,
           () => this.automation.waitForAuthenticatedProject(
-            this.authenticationInput(headed),
+            this.authenticationInput(headed, request.thread?.projectUrl ?? this.projectUrl),
             loginHooks,
           ),
         );
@@ -353,7 +355,9 @@ export class BrowserJob {
   }
 
   private async resolveTarget(request: ConsultationRequest): Promise<Target | null> {
-    if (request.parentId === null) return { url: this.projectUrl, kind: "configured" };
+    const projectUrl = request.thread?.projectUrl ?? this.projectUrl;
+    if (sanitizeChatgptUrl(projectUrl, "configured") !== projectUrl) return null;
+    if (request.parentId === null || request.thread?.mode === "new") return { url: projectUrl, kind: "configured" };
     let parent: ConsultationRequest;
     try {
       parent = await this.store.get(request.parentId);
@@ -361,14 +365,18 @@ export class BrowserJob {
       return null;
     }
     const url = sanitizeChatgptUrl(parent.conversationUrl, "conversation");
-    if (url === null || url !== parent.conversationUrl) return null;
+    if (url === null || url !== parent.conversationUrl
+      || !conversationBelongsToProject(url, projectUrl)
+      || (request.conversationUrl !== null && request.conversationUrl !== url)) return null;
     return { url, kind: "conversation" };
   }
 
   private submittedTarget(request: ConsultationRequest, expected: Target): Target | null {
     const url = sanitizeChatgptUrl(request.conversationUrl, "conversation");
     if (url === null || url !== request.conversationUrl) return null;
-    if (request.parentId !== null && (expected.kind !== "conversation" || expected.url !== url)) {
+    if (!conversationBelongsToProject(url, request.thread?.projectUrl ?? this.projectUrl)) return null;
+    if (request.parentId !== null && request.thread?.mode !== "new"
+      && (expected.kind !== "conversation" || expected.url !== url)) {
       return null;
     }
     return { url, kind: "conversation" };
@@ -417,6 +425,7 @@ export class BrowserJob {
     requestId: string,
     ownerId: string,
     expectedConversationUrl?: string,
+    expectedProjectUrl = this.projectUrl,
   ): BrowserAutomationHooks {
     let capability: BrowserSubmissionAttempt | undefined;
     return {
@@ -432,6 +441,7 @@ export class BrowserJob {
         }
         const canonicalUrl = sanitizeChatgptUrl(conversationUrl, "conversation");
         if (canonicalUrl === null || canonicalUrl !== conversationUrl
+          || !conversationBelongsToProject(canonicalUrl, expectedProjectUrl)
           || (expectedConversationUrl !== undefined
             && canonicalUrl !== expectedConversationUrl)) {
           throw new ConsultError("CONFLICT", "Browser submission left its proven conversation");
@@ -468,6 +478,7 @@ export class BrowserJob {
       requestId: browserPackage.requestId,
       targetUrl: target.url,
       targetKind: target.kind,
+      projectUrl: request.thread?.projectUrl ?? this.projectUrl,
       prompt: browserPackage.prompt,
       uploadPaths: browserPackage.uploadPaths,
       stagingDirectory: browserPackage.directory,
@@ -475,8 +486,8 @@ export class BrowserJob {
     };
   }
 
-  private authenticationInput(session: ChromeSession): AuthenticationProbeInput {
-    return { session, projectUrl: this.projectUrl, deadlineMs: LOGIN_DEADLINE_MS };
+  private authenticationInput(session: ChromeSession, projectUrl: string): AuthenticationProbeInput {
+    return { session, projectUrl, deadlineMs: LOGIN_DEADLINE_MS };
   }
 
   private async importCompletion(
@@ -489,6 +500,7 @@ export class BrowserJob {
     const canonicalUrl = sanitizeChatgptUrl(result.conversationUrl, "conversation");
     const request = await this.store.get(requestId);
     if (canonicalUrl === null || canonicalUrl !== result.conversationUrl
+      || !conversationBelongsToProject(canonicalUrl, request.thread?.projectUrl ?? this.projectUrl)
       || request.conversationUrl !== canonicalUrl
       || request.browserExecution?.phase !== "awaiting_response"
       || request.browserExecution.submission.certainty !== "submitted") {
@@ -566,7 +578,7 @@ export class BrowserJob {
         requestId,
         ownerId,
         "needs_manual",
-        "submission_uncertain",
+        value.reason === "rate_limited" ? "rate_limited" : "submission_uncertain",
         "uncertain",
         value.collectionPath,
       );
@@ -610,7 +622,7 @@ export class BrowserJob {
       const durable = request.browserExecution!.submission.certainty;
       if (durable === "uncertain") {
         phase = "needs_manual";
-        reason = "submission_uncertain";
+        if (reason !== "rate_limited") reason = "submission_uncertain";
         certainty = "uncertain";
       } else if (phase === "needs_login" && durable !== "not_submitted") {
         phase = "needs_manual";

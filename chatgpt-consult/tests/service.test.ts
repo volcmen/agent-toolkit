@@ -587,6 +587,57 @@ describe("consultation service", () => {
       browserExecution: { phase: "queued" },
     });
   });
+  test("concurrent clients cannot submit sibling follow-ups into the same conversation", async () => {
+    const defaults = { profile: "lean" as const, files: [], attachments: [], smart: false, diff: "none" as const };
+    const launched: string[] = [];
+    const workerLauncher = { start: async (id: string) => { launched.push(id); } };
+    const { project, store, service } = await makeFixture({ workerLauncher });
+    const parent = await service.start({ ...defaults, goal: "Parent", profile: "lean", open: false, idempotencyKey: "parallel-parent" });
+    await store.setConversationUrl(parent.requestId, "https://chatgpt.com/c/parallel-parent");
+    await service.importManualCompletion(parent.requestId, completion());
+    const secondStore = await RequestStore.init(project, { now: () => fixedTime });
+    const secondClient = new ConsultationService(project, secondStore, new ContextService(project, secondStore), {
+      workerLauncher, now: () => fixedTime,
+    });
+    const outcomes = await Promise.allSettled([service, secondClient].map((client, index) => client.followup({ ...defaults,
+      parentId: parent.requestId, goal: `Child ${index}`, profile: "lean", open: true,
+      idempotencyKey: `parallel-child-${index}`,
+    })));
+    expect(outcomes.filter((value) => value.status === "fulfilled")).toHaveLength(1);
+    const rejected = outcomes.find((value) => value.status === "rejected") as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({ code: "CONFLICT", details: { requestId: launched[0] } });
+    expect(launched).toHaveLength(1);
+    expect(await store.listRecent()).toHaveLength(2);
+
+    const queued = await secondClient.followup({ ...defaults,
+      parentId: parent.requestId, goal: "Queued sibling", open: false, idempotencyKey: "parallel-queued",
+    });
+    await expect(secondClient.open(queued.requestId)).rejects.toMatchObject({ code: "CONFLICT" });
+    await service.cancel(launched[0]!);
+    await secondClient.open(queued.requestId);
+    expect(launched).toEqual([launched[0]!, queued.requestId]);
+
+    const unrelated = await service.start({ ...defaults, goal: "Independent chat", open: true, idempotencyKey: "parallel-unrelated" });
+    expect(launched).toContain(unrelated.requestId);
+  });
+
+  test("an uncertain follow-up keeps its conversation reserved after the worker exits", async () => {
+    const defaults = { profile: "lean" as const, files: [], attachments: [], smart: false, diff: "none" as const };
+    const { store, service } = await makeFixture({ workerLauncher: { start: async () => {} } });
+    const parent = await service.start({ ...defaults, goal: "Parent", open: false, idempotencyKey: "uncertain-parent" });
+    await store.setConversationUrl(parent.requestId, "https://chatgpt.com/c/uncertain-parent");
+    await service.importManualCompletion(parent.requestId, completion());
+    const child = await service.followup({ ...defaults, parentId: parent.requestId, goal: "First", open: true, idempotencyKey: "uncertain-child" });
+    const owner = "f".repeat(32);
+    await store.acquireBrowserLease(child.requestId, owner);
+    await store.recordBrowserProgress(child.requestId, owner, { phase: "awaiting_browser" });
+    await store.beginBrowserSubmission(child.requestId, owner);
+    await store.releaseBrowserLease(child.requestId, owner);
+    await expect(service.followup({ ...defaults, parentId: parent.requestId, goal: "Second", open: true, idempotencyKey: "uncertain-sibling" }))
+      .rejects.toMatchObject({ code: "CONFLICT", details: { requestId: child.requestId } });
+    expect(await store.listRecent()).toHaveLength(2);
+  });
+
   test("rejects more than 100 connectors before context selection or request creation", async () => {
     const { project, service } = await makeFixture();
     const connectors = Array.from({ length: 101 }, (_, index) => `connector-${index}`);
@@ -1163,6 +1214,27 @@ describe("consultation service", () => {
     expect(result.chatgptProjectUrl).toBe("https://chatgpt.com/g/projects/local");
   });
 
+  test("configuring a new Project preserves the shared signed-in Chrome setting", async () => {
+    const root = await mkdtemp(join(tmpdir(), "chatgpt-consult-shared-login-"));
+    const configHome = await mkdtemp(join(tmpdir(), "chatgpt-consult-config-home-"));
+    temporaryPaths.push(root, configHome);
+    const project = await resolveProject(root);
+    const global = {
+      schemaVersion: 1 as const, chatgptProjectUrl: "https://chatgpt.com/g/global/project",
+      browserCdpPort: 9222, defaultProfile: "analysis" as const, connectorAllowlist: [], budget: {},
+    };
+    const globalText = `${JSON.stringify(global)}\n`;
+    await writeFile(join(configHome, "config.json"), globalText);
+    const environment = { CHATGPT_CONSULT_CONFIG_HOME: configHome };
+    await initializeProject(project, { chatgptProjectUrl: "https://chatgpt.com/g/local/project" }, environment);
+    expect(await readLocalConfig(project, environment)).toEqual({
+      ...global, chatgptProjectUrl: "https://chatgpt.com/g/local/project",
+    });
+    await initializeProject(project, { chatgptProjectUrl: "https://chatgpt.com/g/revised/project" }, environment);
+    expect((await readLocalConfig(project, environment)).browserCdpPort).toBe(9222);
+    expect(await readFile(join(configHome, "config.json"), "utf8")).toBe(globalText);
+  });
+
   test("readLocalConfig rejects a malformed global configuration instead of ignoring it", async () => {
     const root = await mkdtemp(join(tmpdir(), "chatgpt-consult-bad-global-"));
     temporaryPaths.push(root);
@@ -1172,6 +1244,32 @@ describe("consultation service", () => {
     await writeFile(join(configHome, "config.json"), "{not json\n");
 
     await expect(readLocalConfig(project, { CHATGPT_CONSULT_CONFIG_HOME: configHome }))
+      .rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  test.each(["local", "global"])("init repairs an obsolete %s Project URL while preserving the shared browser", async (scope) => {
+    const root = await mkdtemp(join(tmpdir(), "consult-repair-url-"));
+    const configHome = await mkdtemp(join(tmpdir(), "consult-config-"));
+    temporaryPaths.push(root, configHome);
+    const project = await resolveProject(root);
+    await RequestStore.init(project);
+    const path = scope === "local" ? join(project.stateDir, "config.local.json") : join(configHome, "config.json");
+    const old = {
+      schemaVersion: 1, chatgptProjectUrl: "https://chatgpt.com/c/legacy-configured-chat",
+      browserCdpPort: 9222, defaultProfile: "analysis", connectorAllowlist: [], budget: {},
+    };
+    const original = `${JSON.stringify(old)}\n`;
+    await writeFile(path, original);
+    const environment = { CHATGPT_CONSULT_CONFIG_HOME: configHome };
+    await expect(readLocalConfig(project, environment)).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await initializeProject(project, { chatgptProjectUrl: "https://chatgpt.com/g/repaired/project" }, environment);
+    expect(await readLocalConfig(project, environment)).toMatchObject({
+      chatgptProjectUrl: "https://chatgpt.com/g/repaired/project", browserCdpPort: 9222, defaultProfile: "analysis",
+    });
+    if (scope === "global") expect(await readFile(path, "utf8")).toBe(original);
+    const localPath = join(project.stateDir, "config.local.json");
+    await writeFile(localPath, `${JSON.stringify({ ...old, browserCdpPort: 99999 })}\n`);
+    await expect(initializeProject(project, { chatgptProjectUrl: "https://chatgpt.com/g/repaired/project" }, environment))
       .rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 

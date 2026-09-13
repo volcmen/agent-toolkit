@@ -1123,7 +1123,7 @@ describe("WebViewSubmitter", () => {
       expect(waitCalls).toBeGreaterThanOrEqual(1);
     });
 
-    test("configured target with safe pre-existing redirect, unchanged after Enter, no count increase reaches deadline: unavailable, one close", async () => {
+    test("configured target with an unsupported Project subpath stops before mutation", async () => {
       const WebViewSubmitter = await importSubmitter();
       const clock = makeClock();
       let waitCalls = 0;
@@ -1146,7 +1146,9 @@ describe("WebViewSubmitter", () => {
       expect(result.kind).toBe("unavailable");
       expect(result.kind).not.toBe("submitted");
       expect(view.closeCount()).toBe(1);
-      expect(waitCalls).toBeGreaterThanOrEqual(1);
+      expect(waitCalls).toBe(0);
+      expect(view.cdpCalls.filter((call) => call.method === "Input.insertText")).toHaveLength(0);
+      expect(view.cdpCalls.filter((call) => call.method === "Input.dispatchKeyEvent")).toHaveLength(0);
     });
 
     test("exhausted non-repeating scripted URLs fail closed: unexpected extra read yields unavailable, one close", async () => {

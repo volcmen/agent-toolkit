@@ -2,6 +2,7 @@ import type { JsonEnvelope } from "../core/schema";
 import type { ChatgptSetupGuidance, SetupClientsResult } from "./setup";
 import type { DoctorResult } from "./doctor";
 import type { BrowserSetupResult } from "../browser/runtime";
+import { browserRecoveryInstruction } from "../mcp/results";
 
 export const successEnvelope = (data: unknown): JsonEnvelope => ({
   schemaVersion: 1,
@@ -79,6 +80,9 @@ const renderBrowserSetup = (data: BrowserSetupResult): string => {
 };
 
 const nextAction = (state: string, browser?: Record<string, unknown>): string => {
+  if (browser?.phase === "needs_manual" && browser.reason === "rate_limited") {
+    return browserRecoveryInstruction("needs_manual", undefined, "rate_limited")!;
+  }
   if (browser?.phase === "needs_login") return "Run setup browser, sign in directly, then run open for this request.";
   if (browser?.phase === "needs_manual") return "Use handoff and import-result for manual recovery.";
   if (["queued", "preparing", "awaiting_browser", "awaiting_response"].includes(String(browser?.phase))) {
@@ -129,6 +133,11 @@ export const renderHuman = (command: string, data: unknown): string => {
         : undefined,
     )}`,
   ];
+  if (value.thread && typeof value.thread === "object") {
+    const thread = value.thread as Record<string, unknown>;
+    lines.push(`ChatGPT Project: ${String(thread.projectUrl)}`,
+      `Chat: ${String(thread.mode)} (${String(thread.reason)}), exchange ${String(thread.turn)}`);
+  }
   if (value.browser && typeof value.browser === "object") {
     const browser = value.browser as Record<string, unknown>;
     lines.push(
@@ -145,6 +154,7 @@ export const renderHuman = (command: string, data: unknown): string => {
     ? value.browser as Record<string, unknown>
     : undefined;
   if ((command === "start" || command === "followup") && value.handoff
+    && browser?.reason !== "rate_limited"
     && (browser === undefined || browser.phase === "needs_manual")) {
     lines.push("", "Manual handoff:", String(value.handoff));
   }

@@ -17,7 +17,33 @@ endpoint, or require ChatGPT Developer Mode.
 | Local MCP | Lets Codex or Claude start, inspect, continue, cancel, and explicitly publish consultations. |
 | Request store | Keeps bounded requests, browser progress, and results under ignored `.chatgpt-consult/` state. |
 | Browser worker | Uses pinned `agent-browser` with loopback CDP and a dedicated persistent Chrome profile. |
-| ChatGPT Project | Receives one root conversation per consultation thread; follow-ups reuse its proven conversation URL. |
+| ChatGPT Project | Groups consultation chats; related follow-ups continue or start fresh with a bounded summary. |
+
+Independent consultations can run in parallel, including from separate Codex
+and Claude clients. Each browser attempt has its own pinned tab, automation
+session, and private temporary workspace. All attach to the same signed-in
+Chrome profile, reusing its existing credentials; starting another consultation
+does not require another login. These sessions isolate tab control, not account
+cookies or ChatGPT usage limits.
+
+A detected ChatGPT rate-limit warning returns `needs_manual` / `rate_limited`
+and starts a five-minute local cooldown shared by workers using the same Chrome
+CDP port and configuration root. New automatic attempts stop before opening a
+tab; they do not extend the cooldown or retry automatically. Keep the existing
+login and wait for the site's restriction to clear before resuming. Five
+minutes is a conservative local policy, not a guarantee about ChatGPT's limit.
+
+Only one unfinished automatic consultation may write to a given conversation.
+A simultaneous follow-up returns `CONFLICT` with the existing request ID before
+creating another request. Wait for that request to finish, then continue the
+thread; use a new consultation for an independent question. Diagnostic
+probes also use isolated sessions and close only their exact created tab.
+
+Attachment requests wait for an enabled Send button and click it explicitly.
+Follow-ups become `submitted` only after the newly posted user message matches
+the current request ID and revision. An unchanged conversation URL cannot prove submission;
+failure to observe the message returns `submission_uncertain` without sending
+it again. Rejected responses remain in private bounded diagnostics.
 
 ## Install and sign in
 
@@ -57,6 +83,16 @@ attaches the worker to an already signed-in Chrome on that loopback port instead
 of the managed profile, which is the recommended setup on a desktop where the
 sterile profile cannot pass account login checks.
 
+Use the URL of an actual ChatGPT Project, such as
+`https://chatgpt.com/g/g-p-example/project`. Home, ordinary conversation,
+custom GPT, and settings URLs are rejected. Run `init --chatgpt-project-url`
+in each repository to organize its consultations in a different Project;
+new local configuration preserves the global Chrome connection settings.
+Changing the Project does not require a different login. A saved consultation
+keeps its original Project even if the repository configuration later changes.
+`init --chatgpt-project-url` can also replace an older non-Project URL while
+preserving the existing browser settings.
+
 ## Consult
 
 Use the cheapest sufficient profile and only the context the question needs:
@@ -70,6 +106,7 @@ consult start "Review the queue retry policy" \
 consult status <id>
 consult show <id>
 consult followup <id> "Check cancellation races too" --file src/queue.ts --open
+consult followup <id> "Explore a different design" --chat-mode new --open
 ```
 
 `--open` starts asynchronous browser work; the MCP tools start it by default
@@ -88,8 +125,24 @@ Profiles are `lean`, `analysis`, `research`, and `connected`. Prefer explicit
 remaining bounded path budget. Diffs and attachments are opt-in, and sensitive
 content remains blocked unless `--allow-sensitive` is deliberately supplied.
 
-Follow-ups reuse the same ChatGPT conversation. Private completion does not
-grant write authority:
+Use `start` for an unrelated topic. For related completed work, `followup`
+accepts `--chat-mode` (MCP: `chat_mode`):
+
+| Mode | Behavior |
+| --- | --- |
+| `auto` (default) | Continues inside the saved Project until six recorded exchanges; then starts a fresh Project chat. Missing or outside-Project conversations also start fresh. |
+| `new` | Starts a fresh chat in the same Project with a bounded summary of the parent consultation. Use for a changed direction or crowded context. |
+| `continue` | Explicitly keeps the proven Project conversation, overriding the exchange threshold. |
+
+Queued exchanges reserve slots so parallel callers cannot overfill the same
+thread. Fresh chats retain the local parent link and carry only the prior
+goal, summary, and a few risks and recommendations; old full answers, files,
+and attachments are not copied. Status shows the Project, mode, reason, and
+exchange number. Browser submission and recovery check Project membership;
+an unexpected redirect stops the attempt. This policy neither retries
+uncertain work nor bypasses account usage limits.
+
+Private completion does not grant write authority:
 
 ```bash
 consult publish <id>

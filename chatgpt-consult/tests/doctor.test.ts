@@ -108,10 +108,12 @@ function assertNonMutating(calls: readonly ProbeRunnerCall[]): void {
   if (opens.length > 1) {
     throw new Error(`probe opened more than one tab: ${JSON.stringify(calls.map((call) => call.argv))}`);
   }
+  expect(new Set(calls.map((call) => call.argv[call.argv.indexOf("--session") + 1])).size).toBe(1);
   const last = calls[calls.length - 1];
   if (last === undefined || !last.argv.includes("tab") || !last.argv.includes("close")) {
     throw new Error(`probe did not close its tab last: ${JSON.stringify(calls.map((call) => call.argv))}`);
   }
+  expect(last.argv.slice(-3)).toEqual(["tab", "close", "D".repeat(32)]);
 }
 
 describe("runDoctor", () => {
@@ -504,7 +506,7 @@ describe("probeProjectPage", () => {
 
   test("passes and closes its tab when the resolved page has a project-scoped composer", async () => {
     const fake = createProbeRunner([
-      probeEmptyJson(),
+      { status: 0, output: JSON.stringify({ success: true, data: { targetId: "D".repeat(32) } }) },
       probeUrlJson(CONFIGURED_URL),
       probeSnapshotJson({ e1: { role: "textbox", name: "New chat in Work" } }),
       probeEmptyJson(),
@@ -532,7 +534,7 @@ describe("probeProjectPage", () => {
 
   test("fails and still closes its tab when the URL silently redirects to the ChatGPT home page", async () => {
     const fake = createProbeRunner([
-      probeEmptyJson(),
+      { status: 0, output: JSON.stringify({ success: true, data: { targetId: "D".repeat(32) } }) },
       probeUrlJson("https://chatgpt.com/"),
       probeSnapshotJson({ e1: { role: "textbox", name: "Message ChatGPT" } }),
       probeEmptyJson(),
@@ -560,7 +562,7 @@ describe("probeProjectPage", () => {
 
   test("fails when the resolved URL matches but only a generic composer is present", async () => {
     const fake = createProbeRunner([
-      probeEmptyJson(),
+      { status: 0, output: JSON.stringify({ success: true, data: { targetId: "D".repeat(32) } }) },
       probeUrlJson(CONFIGURED_URL),
       probeSnapshotJson({ e1: { role: "textbox", name: "Message ChatGPT" } }),
       probeEmptyJson(),
@@ -584,7 +586,7 @@ describe("probeProjectPage", () => {
 
   test("warns rather than failing when the resolved URL matches but no composer can be found at all", async () => {
     const fake = createProbeRunner([
-      probeEmptyJson(),
+      { status: 0, output: JSON.stringify({ success: true, data: { targetId: "D".repeat(32) } }) },
       probeUrlJson(CONFIGURED_URL),
       ...Array.from({ length: 8 }, () => probeSnapshotJson({ e1: { role: "heading", name: "Chat history" } })),
       probeEmptyJson(),
@@ -613,7 +615,7 @@ describe("probeProjectPage", () => {
 
   test("passes with a note when a rate-limit banner is present alongside a project composer", async () => {
     const fake = createProbeRunner([
-      probeEmptyJson(),
+      { status: 0, output: JSON.stringify({ success: true, data: { targetId: "D".repeat(32) } }) },
       probeUrlJson(CONFIGURED_URL),
       probeSnapshotJson({
         e1: { role: "textbox", name: "New chat in Work" },
@@ -642,7 +644,7 @@ describe("probeProjectPage", () => {
 
   test("warns rather than failing when a rate-limit banner is present with no composer", async () => {
     const fake = createProbeRunner([
-      probeEmptyJson(),
+      { status: 0, output: JSON.stringify({ success: true, data: { targetId: "D".repeat(32) } }) },
       probeUrlJson(CONFIGURED_URL),
       probeSnapshotJson({
         e1: { role: "heading", name: "Too Many Requests" },
@@ -671,7 +673,7 @@ describe("probeProjectPage", () => {
 
   test("warns when ChatGPT requires signing in before the page can be verified", async () => {
     const fake = createProbeRunner([
-      probeEmptyJson(),
+      { status: 0, output: JSON.stringify({ success: true, data: { targetId: "D".repeat(32) } }) },
       probeUrlJson("https://chatgpt.com/auth/login"),
       probeSnapshotJson({ e1: { role: "button", name: "Log in" } }),
       probeEmptyJson(),
@@ -695,7 +697,7 @@ describe("probeProjectPage", () => {
 
   test("warns when the project page itself shows a sign-in control", async () => {
     const fake = createProbeRunner([
-      probeEmptyJson(),
+      { status: 0, output: JSON.stringify({ success: true, data: { targetId: "D".repeat(32) } }) },
       probeUrlJson(CONFIGURED_URL),
       probeSnapshotJson({ e1: { role: "button", name: "Log in" } }),
       probeEmptyJson(),
@@ -716,7 +718,7 @@ describe("probeProjectPage", () => {
     expect(result.status).toBe("warn");
   });
 
-  test("warns rather than hanging when opening the page exceeds its budget, and still closes its tab", async () => {
+  test("warns rather than hanging when opening the page exceeds its budget without guessing which tab to close", async () => {
     const fake = createProbeRunner([
       { status: 1, output: "" },
       probeEmptyJson(),
@@ -735,13 +737,13 @@ describe("probeProjectPage", () => {
     );
 
     expect(result.status).toBe("warn");
-    expect(fake.calls.some((call) => call.argv.includes("tab") && call.argv.includes("close"))).toBeTrue();
+    expect(fake.calls.some((call) => call.argv.includes("tab") && call.argv.includes("close"))).toBeFalse();
     expect(ws.cleanedDirs).toEqual([ws.workspace.dir]);
   });
 
   test("retries the snapshot within its budget until the project composer appears", async () => {
     const fake = createProbeRunner([
-      probeEmptyJson(),
+      { status: 0, output: JSON.stringify({ success: true, data: { targetId: "D".repeat(32) } }) },
       probeUrlJson(CONFIGURED_URL),
       probeSnapshotJson({}),
       probeSnapshotJson({ e1: { role: "textbox", name: "New chat in Work" } }),

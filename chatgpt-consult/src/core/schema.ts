@@ -50,6 +50,7 @@ export type BrowserPhase = z.infer<typeof BrowserPhaseSchema>;
 export const BrowserFailureReasonSchema = z.enum([
   "login_required",
   "human_challenge",
+  "rate_limited",
   "browser_unavailable",
   "ui_changed",
   "upload_failed",
@@ -208,6 +209,17 @@ export type SensitivityDecision = z.infer<typeof SensitivityDecisionSchema>;
 
 const ConnectorAllowlistSchema = z.array(z.string().min(1).max(128)).max(100);
 
+export const ChatModeSchema = z.enum(["auto", "new", "continue"]);
+export type ChatMode = z.infer<typeof ChatModeSchema>;
+export const ChatThreadSchema = z.object({
+  projectUrl: z.url(),
+  mode: z.enum(["new", "continue"]),
+  requestedMode: ChatModeSchema,
+  reason: z.enum(["initial", "requested", "turn_limit", "no_conversation", "outside_project", "continuation"]),
+  turn: z.number().int().positive(),
+}).strict();
+export type ChatThread = z.infer<typeof ChatThreadSchema>;
+
 export const RequestSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -218,6 +230,7 @@ export const RequestSchema = z
     profile: CapabilityProfileSchema,
     parentId: z.string().min(1).nullable(),
     conversationUrl: z.url().nullable(),
+    thread: ChatThreadSchema.optional(),
     state: RequestStateSchema,
     revision: z.number().int().nonnegative(),
     createdAt: z.string().datetime({ offset: true }),

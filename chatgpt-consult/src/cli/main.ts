@@ -17,7 +17,7 @@ import {
   readLocalConfig,
   type BrowserWorkerLauncher as BrowserWorkerLauncherContract,
 } from "../core/service";
-import { CapabilityProfileSchema, HARD_BUDGET, resolveRequestedProfile, type CapabilityProfile } from "../core/schema";
+import { CapabilityProfileSchema, ChatModeSchema, HARD_BUDGET, resolveRequestedProfile, type CapabilityProfile } from "../core/schema";
 import { RequestStore } from "../core/store";
 import { createLocalMcp, serveLocalStdio } from "../mcp/local";
 import { startChatgptHttp } from "../mcp/http";
@@ -217,6 +217,7 @@ export const main = async (
           const workerLauncher = selectWorkerLauncher(deps, project, store);
           const service = new ConsultationService(project, store, context, {
             workerLauncher,
+            ...(config.chatgptProjectUrl === undefined ? {} : { chatgptProjectUrl: config.chatgptProjectUrl }),
           });
           return createLocalMcp(service, config.defaultProfile);
         });
@@ -311,6 +312,7 @@ export const main = async (
       const workerLauncher = selectWorkerLauncher(deps, project, store);
       const service = new ConsultationService(project, store, context, {
         workerLauncher,
+        ...(config.chatgptProjectUrl === undefined ? {} : { chatgptProjectUrl: config.chatgptProjectUrl }),
       });
       switch (args.command) {
         case "start": {
@@ -349,6 +351,8 @@ export const main = async (
         }
         case "followup": {
           requireCount(args.positionals, 2, Number.MAX_SAFE_INTEGER, "A parent request and goal are required");
+          const chatMode = ChatModeSchema.safeParse(args.chatMode ?? "auto");
+          if (!chatMode.success) throw new ConsultError("INVALID_INPUT", "--chat-mode must be auto, new, or continue");
           const [parentId, ...goal] = args.positionals;
           let explicitProfile: CapabilityProfile | undefined;
           if (args.profile !== undefined) {
@@ -367,6 +371,7 @@ export const main = async (
           });
           data = await service.followup({
             parentId: parentId!,
+            chatMode: chatMode.data,
             goal: goal.join(" "),
             ...(profile ? { profile } : {}),
             files: args.files,

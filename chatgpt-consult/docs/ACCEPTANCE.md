@@ -10,7 +10,9 @@ headed browser.
 - [x] `python3 bun-global-tools/sync.py check --deep` verifies Bun-owned
       `agent-browser` 0.35.1 and its `~/.bun/bin` command path.
 - [x] `bun run check` passes; only explicitly opt-in live tests are skipped.
-- [x] `python3 scripts/plugins.py check` passes from the workspace root.
+- [ ] `python3 scripts/plugins.py check` passes from the workspace root.
+      The September 13 run passes this project and fails unrelated existing
+      `claude-core` checks; see the dated record below.
 - [x] `chatgpt-consult doctor --json` reports the browser-backed required
       checks without requiring a tunnel.
 - [x] The local MCP still exposes exactly `consult_start`, `consult_status`,
@@ -24,7 +26,9 @@ headed browser.
 - [x] A lean root request with explicit non-sensitive context and `--open`
       reaches `completed`; status is polled rather than treated as synchronous.
 - [x] `chatgpt-consult show <id>` returns a browser-sourced validated result.
-- [ ] One follow-up with `--open` completes in the same canonical conversation.
+- [x] One follow-up with `--open` completes in the same canonical conversation.
+- [ ] A `chat_mode: new` follow-up completes in a different conversation
+      inside the same Project with a bounded parent summary.
 - [ ] One small explicitly approved attachment is uploaded from bounded private
       staging and completes.
 - [ ] A separate request exercises `handoff` plus `import-result` without
@@ -48,11 +52,103 @@ Record only pass/fail, timestamps, sanitized request IDs, and phase/source
 names. Never capture account cookies, credentials, full claims, browser-profile
 data, private source, or raw consultation transcripts.
 
+## Parallel verification
+
+Run the real browser lifecycle with synthetic context:
+
+```bash
+CHATGPT_CONSULT_BROWSER_ACCEPTANCE=1 bun test tests/browser-live.test.ts --timeout 3000000
+```
+
+It starts two independent local MCP clients against the same signed-in Chrome,
+requires distinct completed conversations, then checks a same-conversation
+follow-up, attachment, and fresh-chat follow-up. Every returned conversation
+must belong to the configured Project. It also validates local manual import
+and temporary publication. No new login profile or credentials are created.
+
+`tests/browser-concurrency.test.ts` forces interleaved navigation, submission,
+cancellation, diagnostics and authentication probes in a shared daemon
+namespace. The installed agent-browser also namespaces daemons by the private
+temporary home, so a fixed session name alone is not proof of a live collision.
+The explicit attempt session ID makes isolation independent of that behavior.
+
+The optional disposable transport smoke test exercises the production CDP
+page client and agent-browser against a temporary Chrome. On macOS it uses a
+mock Keychain solely for the disposable test profile, plus short temporary
+paths that fit Unix socket limits. Normal consultations retain the existing
+Chrome profile and Keychain. See the upstream [tab pinning contract](https://agent-browser.dev/cdp-mode)
+and [Chromium test launch guidance](https://chromium.googlesource.com/chromium/src/+/main/docs/mac_build_instructions.md).
+
+For local diagnosis of synthetic acceptance failures only, setting
+`CHATGPT_CONSULT_BROWSER_KEEP=1` retains the temporary request fixture. It is
+off by default; remove retained fixtures after inspecting them.
+
 ## Legacy/optional compatibility
 
 Testing `serve chatgpt`, its loopback health endpoint, a Secure MCP Tunnel, or
 ChatGPT Developer Mode is a separate compatibility exercise. None is a
 prerequisite for browser-backed acceptance, and none is started automatically.
+
+## Acceptance record — 2026-09-13
+
+- Shared authentication and independent parallel roots: **PASS**. Separate
+  local MCP clients completed requests `58745a1978f024a406bdd3d30c4f7ed4`
+  and `c3236839f649d1fe42a606f4ad631b50` in distinct conversations using the
+  existing Chrome session. No additional login was required.
+- Same-conversation follow-up: **PASS before the final submission-proof
+  changes**, request `97bf15aa1da70a2e2c6ff2fbc2db1ef0`. A later attempt showed
+  that full prompt text comparisons reject ChatGPT's Markdown rendering;
+  the final implementation checks the stable request ID/revision header.
+- Attachment lifecycle: **NOT YET VERIFIED AFTER THE FIX**. Request
+  `c3c664b3c2b6ca955a39024ab8d87025` was marked submitted without a posted user
+  message and eventually timed out. The implementation now targets the
+  general-file upload input, waits for Send readiness, clicks Send, and
+  verifies a follow-up's posted request header. Local regression tests cover
+  delayed uploads, missing messages, Markdown rendering, and no duplicate send.
+- Full live rerun: **STOPPED** after the user reported ChatGPT's “Too many
+  requests” conversation-access warning. Both active synthetic requests were
+  cancelled and their worker leases released. Repeated live tests may have
+  contributed. Do not infer that the account limit has cleared from local test
+  results; the complete attachment/manual/publication sequence remains pending.
+- Rate-limit recovery: **LOCAL TESTS PASS**. The warning becomes `rate_limited`,
+  and independent workers using the same configuration and CDP port share a
+  five-minute cooldown before opening further tabs. Blocked reads do not
+  extend it. The policy does not guarantee the website will recover in five
+  minutes and does not authenticate, reload, or resend automatically.
+- Project organization and fresh chats: **LOCAL TESTS PASS; LIVE RERUN PENDING**.
+  Configuration requires a Project URL and new repository configuration
+  preserves the shared Chrome setting. Requests retain their Project binding;
+  ordinary or foreign conversation URLs cannot be continued automatically.
+  `auto` rolls over after six recorded exchanges, `new` deliberately starts
+  fresh, and `continue` overrides the threshold. Fresh chats carry a bounded
+  parent summary, not its full answer or old file payloads. Regression tests
+  cover sibling counting, idempotent routing, configuration changes, two MCP
+  clients creating fresh chats, and worker recovery in the new conversation.
+  No additional live consultations were sent after the rate-limit warning.
+- Disposable browser transport: **PASS**, using the production CDP page client
+  and agent-browser. The smoke-only mock Keychain avoids the macOS prompt;
+  the normal Chrome profile and Keychain are retained.
+- Concurrency regression: **PASS** for interleaved roots, cancellation of one
+  while another completes, concurrent diagnostics, and authentication probes.
+  Mutation back to a fixed session name fails all four shared-namespace cases;
+  this is robustness coverage, not proof that the old name alone caused the
+  user's live problem.
+- Independent pre-push review found six defects, corrected with local
+  regression coverage: event-collector rate-limit detection, rollover while
+  the final exchange is active, retries of legacy requests without thread
+  metadata, JSON-escaped submission-proof transport limits, replacement of
+  obsolete configured URLs, and CLI cooldown guidance. Rate limits during
+  uncertain submission confirmation also pause peers without clearing
+  uncertainty or permitting another send. CI now installs the frozen Consult
+  dependencies with the required Bun 1.4.0. The final independent review reports
+  no remaining findings; its affected test run passes all 351 tests.
+- Local project gate: **PASS**, typecheck plus 1,061 tests, two opt-in skips.
+  Skill validation, plugin refresh/status for both agents, and whitespace
+  validation also pass.
+- Workspace validation: the catalog, workspace, wiki, codex-pair, and
+  ChatGPT Consult checks pass. Two unrelated existing `claude-core` tests fail,
+  including its always-on context byte budget. No unrelated workspace edits
+  were changed.
 
 ## Acceptance record — 2026-09-01
 
