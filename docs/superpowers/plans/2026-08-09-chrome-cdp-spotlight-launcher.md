@@ -6,7 +6,7 @@
 
 **Architecture:** A presentation-only AppleScript app invokes an embedded Swift helper. A pure Swift core owns configuration, state classification, and orchestration; a macOS library owns filesystem, process, listener, HTTP, lock, and AppKit effects. A separate native installer performs an atomic bundle swap. Bash scripts assemble, sign, back up, install, roll back, and verify the app without managing browser data.
 
-**Tech Stack:** Swift tools 6.0, Foundation, AppKit, Darwin, CoreServices, XCTest, AppleScript, Bash 3.2, and macOS system tools. No third-party packages or runtime dependencies.
+**Tech Stack:** Swift 6.x, Foundation, AppKit, Darwin, CoreServices, AppleScript, Bash 3.2, macOS system tools, and an in-repo executable test runner with internal test support. No third-party packages or runtime dependencies.
 
 ## Global Constraints
 
@@ -57,11 +57,13 @@ chrome-cdp/
 │   │   └── ProfileGuard.swift
 │   ├── ChromeCDPHelper/main.swift
 │   ├── ChromeCDPInstaller/main.swift
-│   └── ChromeCDPIntegrationHarness/main.swift
-├── Tests/
-│   ├── ChromeCDPCoreTests/
-│   ├── ChromeCDPMacTests/
-│   └── ChromeCDPIntegrationTests/
+│   ├── ChromeCDPIntegrationHarness/main.swift
+│   ├── ChromeCDPTestSupport/
+│   └── ChromeCDPTests/
+│       ├── Core/
+│       ├── Mac/
+│       ├── Integration/
+│       └── main.swift
 ├── app/
 │   ├── Chrome CDP.applescript
 │   └── Info.plist
@@ -85,7 +87,9 @@ chrome-cdp/
 - Create: `chrome-cdp/.gitignore`
 - Create: `chrome-cdp/Sources/ChromeCDPCore/LauncherConfiguration.swift`
 - Create: `chrome-cdp/Sources/ChromeCDPHelper/main.swift`
-- Create: `chrome-cdp/Tests/ChromeCDPCoreTests/LauncherConfigurationTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTestSupport/TestSupport.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/main.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Core/LauncherConfigurationTests.swift`
 
 - [ ] **Step 1: Start the project with its README**
 
@@ -93,7 +97,7 @@ Write a short, accurate initial README containing the title, fixed production co
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test
+/usr/bin/swift run chrome-cdp-tests
 /usr/bin/swift build -c release
 ```
 
@@ -101,27 +105,27 @@ Keep the initial README limited to behavior and commands that exist in this task
 
 - [ ] **Step 2: Write the failing production-configuration test**
 
-Create `LauncherConfigurationTests.swift` with a temporary home URL and assert all production fields:
+Create `LauncherConfigurationTests.swift` with a temporary home URL and register an ordinary throwing test function with the internal runner. Assert all production fields without importing XCTest or Swift Testing:
 
 ```swift
 let home = URL(fileURLWithPath: "/Users/tester", isDirectory: true)
 let configuration = LauncherConfiguration.production(homeDirectory: home)
-XCTAssertEqual(configuration.chromeApplicationURL.path, "/Applications/Google Chrome.app")
-XCTAssertEqual(configuration.chromeExecutableURL.path, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-XCTAssertEqual(configuration.profileURL.path, "/Users/tester/chrome-cdp-profile")
-XCTAssertEqual(configuration.host, "127.0.0.1")
-XCTAssertEqual(configuration.port, 9222)
-XCTAssertEqual(configuration.readinessTimeout, 10)
-XCTAssertEqual(configuration.pollInterval, 0.2)
-XCTAssertEqual(configuration.lockTimeout, 10)
-XCTAssertEqual(configuration.lockURL.path, "/Users/tester/Library/Caches/Chrome CDP/launch.lock")
+try expectEqual(configuration.chromeApplicationURL.path, "/Applications/Google Chrome.app")
+try expectEqual(configuration.chromeExecutableURL.path, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+try expectEqual(configuration.profileURL.path, "/Users/tester/chrome-cdp-profile")
+try expectEqual(configuration.host, "127.0.0.1")
+try expectEqual(configuration.port, 9222)
+try expectEqual(configuration.readinessTimeout, 10)
+try expectEqual(configuration.pollInterval, 0.2)
+try expectEqual(configuration.lockTimeout, 10)
+try expectEqual(configuration.lockURL.path, "/Users/tester/Library/Caches/Chrome CDP/launch.lock")
 ```
 
 - [ ] **Step 3: Run the test and confirm the missing package API**
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter LauncherConfigurationTests
+/usr/bin/swift run chrome-cdp-tests --filter LauncherConfigurationTests
 ```
 
 Expected: FAIL because `Package.swift` and `LauncherConfiguration` do not exist.
@@ -139,18 +143,25 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "ChromeCDPCore", targets: ["ChromeCDPCore"]),
-        .executable(name: "chrome-cdp-helper", targets: ["ChromeCDPHelper"])
+        .executable(name: "chrome-cdp-helper", targets: ["ChromeCDPHelper"]),
+        .executable(name: "chrome-cdp-tests", targets: ["ChromeCDPTests"])
     ],
     targets: [
         .target(name: "ChromeCDPCore"),
+        .target(name: "ChromeCDPTestSupport"),
         .executableTarget(
             name: "ChromeCDPHelper",
             dependencies: ["ChromeCDPCore"]
         ),
-        .testTarget(name: "ChromeCDPCoreTests", dependencies: ["ChromeCDPCore"])
+        .executableTarget(
+            name: "ChromeCDPTests",
+            dependencies: ["ChromeCDPCore", "ChromeCDPTestSupport"]
+        )
     ]
 )
 ```
+
+`ChromeCDPTestSupport` remains dependency-free apart from Foundation and provides test registration, assertion reporting, filtering, test-owned temporary-directory creation, and environment-gated skips. Test cases are ordinary throwing functions registered with `chrome-cdp-tests`. When Task 3 adds `ChromeCDPMac`, add it to the `ChromeCDPTests` dependencies.
 
 Implement an immutable `LauncherConfiguration: Equatable, Sendable` with the tested fields and:
 
@@ -172,14 +183,14 @@ Create `chrome-cdp/.gitignore` with exactly:
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test
+/usr/bin/swift run chrome-cdp-tests
 /usr/bin/swift build -c release
 cd /Users/david.david/Personal/ai
 git add chrome-cdp
 git commit -m "feat: scaffold Chrome CDP launcher"
 ```
 
-Expected: tests and release build PASS.
+Expected: the test runner and release build both exit successfully.
 
 ### Task 2: Implement the pure launcher classifier and failure contract
 
@@ -188,8 +199,8 @@ Expected: tests and release build PASS.
 - Create: `chrome-cdp/Sources/ChromeCDPCore/LauncherModels.swift`
 - Create: `chrome-cdp/Sources/ChromeCDPCore/LauncherFailure.swift`
 - Create: `chrome-cdp/Sources/ChromeCDPCore/LauncherClassifier.swift`
-- Create: `chrome-cdp/Tests/ChromeCDPCoreTests/LauncherClassifierTests.swift`
-- Create: `chrome-cdp/Tests/ChromeCDPCoreTests/LauncherFailureTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Core/LauncherClassifierTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Core/LauncherFailureTests.swift`
 
 - [ ] **Step 1: Define the tests against the final public model**
 
@@ -269,8 +280,8 @@ Cover each decision and precedence rule with named tests:
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter LauncherClassifierTests
-/usr/bin/swift test --filter LauncherFailureTests
+/usr/bin/swift run chrome-cdp-tests --filter LauncherClassifierTests
+/usr/bin/swift run chrome-cdp-tests --filter LauncherFailureTests
 ```
 
 Expected: FAIL because the model, classifier, and errors do not exist.
@@ -318,9 +329,9 @@ Messages may include a PID, port, and profile path. They must not include full c
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter ChromeCDPCoreTests
+/usr/bin/swift run chrome-cdp-tests --filter ChromeCDPCoreTests
 cd /Users/david.david/Personal/ai
-git add chrome-cdp/Sources/ChromeCDPCore chrome-cdp/Tests/ChromeCDPCoreTests
+git add chrome-cdp/Sources/ChromeCDPCore chrome-cdp/Sources/ChromeCDPTests/Core
 git commit -m "feat: classify Chrome CDP launcher state"
 ```
 
@@ -333,12 +344,12 @@ Expected: every non-UI state passes without reading the filesystem, process tabl
 - Modify: `chrome-cdp/Package.swift`
 - Create: `chrome-cdp/Sources/ChromeCDPMac/ProfileGuard.swift`
 - Create: `chrome-cdp/Sources/ChromeCDPMac/LaunchLock.swift`
-- Create: `chrome-cdp/Tests/ChromeCDPMacTests/ProfileGuardTests.swift`
-- Create: `chrome-cdp/Tests/ChromeCDPMacTests/LaunchLockTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Mac/ProfileGuardTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Mac/LaunchLockTests.swift`
 
 - [ ] **Step 1: Write temporary-directory profile tests**
 
-First add the `ChromeCDPMac` library target and `ChromeCDPMacTests` test target to `Package.swift`. `ChromeCDPMac` depends on `ChromeCDPCore` and links AppKit and CoreServices; its tests depend on both libraries.
+First add the `ChromeCDPMac` library target to `Package.swift`. `ChromeCDPMac` depends on `ChromeCDPCore` and links AppKit and CoreServices; add `ChromeCDPMac` to the existing `ChromeCDPTests` executable target dependencies.
 
 Cover these real filesystem outcomes:
 
@@ -357,8 +368,8 @@ Use a temporary lock URL. Assert the first acquisition succeeds, a child process
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter ProfileGuardTests
-/usr/bin/swift test --filter LaunchLockTests
+/usr/bin/swift run chrome-cdp-tests --filter ProfileGuardTests
+/usr/bin/swift run chrome-cdp-tests --filter LaunchLockTests
 ```
 
 Expected: FAIL because `ProfileGuard` and `LaunchLock` do not exist.
@@ -392,14 +403,14 @@ For profile creation, set `umask(0o077)`, call `mkdir(path, 0o700)`, restore the
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter ChromeCDPMacTests
+/usr/bin/swift run chrome-cdp-tests --filter ChromeCDPMacTests
 cd /Users/david.david/Personal/ai
-git add chrome-cdp/Sources/ChromeCDPMac chrome-cdp/Tests/ChromeCDPMacTests
+git add chrome-cdp/Sources/ChromeCDPMac chrome-cdp/Sources/ChromeCDPTests/Mac
 git add chrome-cdp/Package.swift
 git commit -m "feat: secure Chrome CDP profile and launch lock"
 ```
 
-Expected: tests PASS and touch only their temporary directories.
+Expected: the test runner exits successfully and touches only its test-owned temporary directories.
 
 ### Task 4: Observe exact macOS processes, listeners, and CDP data
 
@@ -408,9 +419,9 @@ Expected: tests PASS and touch only their temporary directories.
 - Create: `chrome-cdp/Sources/ChromeCDPMac/ProcessInspector.swift`
 - Create: `chrome-cdp/Sources/ChromeCDPMac/ListenerInspector.swift`
 - Create: `chrome-cdp/Sources/ChromeCDPMac/CDPClient.swift`
-- Create: `chrome-cdp/Tests/ChromeCDPMacTests/ProcessInspectorTests.swift`
-- Create: `chrome-cdp/Tests/ChromeCDPMacTests/ListenerInspectorTests.swift`
-- Create: `chrome-cdp/Tests/ChromeCDPMacTests/CDPClientTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Mac/ProcessInspectorTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Mac/ListenerInspectorTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Mac/CDPClientTests.swift`
 
 - [ ] **Step 1: Write exact process-argument parser tests**
 
@@ -437,9 +448,9 @@ Test `/json/version` and `/json/list` fixtures for:
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter ProcessInspectorTests
-/usr/bin/swift test --filter ListenerInspectorTests
-/usr/bin/swift test --filter CDPClientTests
+/usr/bin/swift run chrome-cdp-tests --filter ProcessInspectorTests
+/usr/bin/swift run chrome-cdp-tests --filter ListenerInspectorTests
+/usr/bin/swift run chrome-cdp-tests --filter CDPClientTests
 ```
 
 Expected: FAIL because the observers do not exist.
@@ -471,9 +482,9 @@ Use an ephemeral session with a per-request timeout below the 200 ms poll budget
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter ChromeCDPMacTests
+/usr/bin/swift run chrome-cdp-tests --filter ChromeCDPMacTests
 cd /Users/david.david/Personal/ai
-git add chrome-cdp/Sources/ChromeCDPMac chrome-cdp/Tests/ChromeCDPMacTests
+git add chrome-cdp/Sources/ChromeCDPMac chrome-cdp/Sources/ChromeCDPTests/Mac
 git commit -m "feat: inspect Chrome CDP process and endpoint"
 ```
 
@@ -483,7 +494,7 @@ git commit -m "feat: inspect Chrome CDP process and endpoint"
 
 - Create: `chrome-cdp/Sources/ChromeCDPCore/LauncherProtocols.swift`
 - Create: `chrome-cdp/Sources/ChromeCDPCore/LauncherRunner.swift`
-- Create: `chrome-cdp/Tests/ChromeCDPCoreTests/LauncherRunnerTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Core/LauncherRunnerTests.swift`
 
 - [ ] **Step 1: Add the effect interfaces to the core**
 
@@ -541,7 +552,7 @@ Use a fake monotonic clock. Assert sleeps are 200 ms and total sleep never excee
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter LauncherRunnerTests
+/usr/bin/swift run chrome-cdp-tests --filter LauncherRunnerTests
 ```
 
 Expected: FAIL because the protocols and runner do not exist.
@@ -570,9 +581,9 @@ Acquire the lock first and release it with `defer`. Check Chrome existence befor
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter ChromeCDPCoreTests
+/usr/bin/swift run chrome-cdp-tests --filter ChromeCDPCoreTests
 cd /Users/david.david/Personal/ai
-git add chrome-cdp/Sources/ChromeCDPCore chrome-cdp/Tests/ChromeCDPCoreTests
+git add chrome-cdp/Sources/ChromeCDPCore chrome-cdp/Sources/ChromeCDPTests/Core
 git commit -m "feat: orchestrate Chrome CDP launch and reuse"
 ```
 
@@ -584,8 +595,8 @@ git commit -m "feat: orchestrate Chrome CDP launch and reuse"
 - Create: `chrome-cdp/Sources/ChromeCDPMac/MacLauncherSystem.swift`
 - Modify: `chrome-cdp/Sources/ChromeCDPMac/LaunchLock.swift`
 - Modify: `chrome-cdp/Sources/ChromeCDPHelper/main.swift`
-- Create: `chrome-cdp/Tests/ChromeCDPMacTests/MacLauncherSystemTests.swift`
-- Create: `chrome-cdp/Tests/ChromeCDPMacTests/HelperContractTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Mac/MacLauncherSystemTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Mac/HelperContractTests.swift`
 
 - [ ] **Step 1: Write command and activation contract tests**
 
@@ -608,8 +619,8 @@ Test an injected application activator receives only the classified PID. Test la
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter MacLauncherSystemTests
-/usr/bin/swift test --filter HelperContractTests
+/usr/bin/swift run chrome-cdp-tests --filter MacLauncherSystemTests
+/usr/bin/swift run chrome-cdp-tests --filter HelperContractTests
 ```
 
 Expected: FAIL because the adapter and final helper contract are incomplete.
@@ -656,12 +667,12 @@ The number is the real outcome PID. On failure print only the localized actionab
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test
+/usr/bin/swift run chrome-cdp-tests
 /usr/bin/swift build -c release --product chrome-cdp-helper
 ./.build/release/chrome-cdp-helper --version
 ./.build/release/chrome-cdp-helper --self-check
 cd /Users/david.david/Personal/ai
-git add chrome-cdp/Package.swift chrome-cdp/Sources chrome-cdp/Tests
+git add chrome-cdp/Package.swift chrome-cdp/Sources
 git commit -m "feat: wire Chrome CDP macOS helper"
 ```
 
@@ -673,7 +684,7 @@ Expected: PASS. Do not invoke the helper with no arguments in this task.
 
 - Modify: `chrome-cdp/Package.swift`
 - Create: `chrome-cdp/Sources/ChromeCDPIntegrationHarness/main.swift`
-- Create: `chrome-cdp/Tests/ChromeCDPIntegrationTests/ChromeCDPIntegrationTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Integration/ChromeCDPIntegrationTests.swift`
 
 - [ ] **Step 1: Add a gated, unbundled integration harness**
 
@@ -681,15 +692,9 @@ Add an executable product `chrome-cdp-integration-harness` depending on Core and
 
 - [ ] **Step 2: Write opt-in integration tests**
 
-Every test starts with:
+Register the integration suite as skipped unless `CHROME_CDP_RUN_INTEGRATION=1`. The runner must report the skip and must not contact port `9222` when integration is disabled.
 
-```swift
-try XCTSkipUnless(
-    ProcessInfo.processInfo.environment["CHROME_CDP_RUN_INTEGRATION"] == "1"
-)
-```
-
-Reserve an unused loopback port other than `9222`, create all profiles and locks below an XCTest temporary directory, record Chrome PIDs before the test, and clean up only exact Chrome PIDs whose argument vector contains that test's temporary profile.
+Reserve an unused loopback port other than `9222`, create all profiles and locks below a test-owned temporary directory created by the internal test support, record Chrome PIDs before the test, and clean up only exact Chrome PIDs whose argument vector contains that test's temporary profile.
 
 Cover:
 
@@ -709,17 +714,17 @@ Wrong-owner behavior and readiness timeout remain injected unit tests because th
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test
+/usr/bin/swift run chrome-cdp-tests
 ```
 
-Expected: PASS with the integration cases reported as skipped and no contact with port `9222`.
+Expected: the test runner exits successfully, reports the integration suite as skipped, and makes no contact with port `9222`.
 
 - [ ] **Step 4: Run the alternate-port integration suite**
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
 CHROME_CDP_RUN_INTEGRATION=1 CHROME_CDP_INTEGRATION_TEST=1 \
-  /usr/bin/swift test --filter ChromeCDPIntegrationTests
+  /usr/bin/swift run chrome-cdp-tests --filter ChromeCDPIntegrationTests
 ```
 
 Expected: PASS. Before accepting cleanup, compare the exact pre-test and post-test listener PID on `9222` and the normal-Chrome PID set.
@@ -728,7 +733,7 @@ Expected: PASS. Before accepting cleanup, compare the exact pre-test and post-te
 
 ```bash
 cd /Users/david.david/Personal/ai
-git add chrome-cdp/Package.swift chrome-cdp/Sources/ChromeCDPIntegrationHarness chrome-cdp/Tests/ChromeCDPIntegrationTests
+git add chrome-cdp/Package.swift chrome-cdp/Sources/ChromeCDPIntegrationHarness chrome-cdp/Sources/ChromeCDPTests/Integration
 git commit -m "test: cover Chrome CDP integration states"
 ```
 
@@ -740,11 +745,11 @@ git commit -m "test: cover Chrome CDP integration states"
 - Create: `chrome-cdp/app/Info.plist`
 - Create: `chrome-cdp/scripts/build.sh`
 - Create: `chrome-cdp/scripts/verify.sh`
-- Create: `chrome-cdp/Tests/ChromeCDPMacTests/AppBundleBuildTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Mac/AppBundleBuildTests.swift`
 
 - [ ] **Step 1: Write staged app-build tests**
 
-Copy the project into an XCTest temporary directory, run its `scripts/build.sh`, and verify the resulting app bundle as an artifact. Inspect the built `Info.plist` with `/usr/bin/plutil`; execute the embedded `Contents/Resources/chrome-cdp-helper` with `--version` and `--self-check`; run `/usr/bin/osadecompile` against the compiled applet; and require strict `/usr/bin/codesign` verification for both the embedded helper and bundle, including ad-hoc signature details.
+Copy the project into a test-owned temporary directory created by the internal test support, run its `scripts/build.sh`, and verify the resulting app bundle as an artifact. Inspect the built `Info.plist` with `/usr/bin/plutil`; execute the embedded `Contents/Resources/chrome-cdp-helper` with `--version` and `--self-check`; run `/usr/bin/osadecompile` against the compiled applet; and require strict `/usr/bin/codesign` verification for both the embedded helper and bundle, including ad-hoc signature details.
 
 Assert the built plist exposes the exact identity and version values specified below through `plutil`, not by inspecting source. The test must not invoke the helper's no-argument lifecycle, access a live CDP endpoint, or write to the repository's `dist/` directory.
 
@@ -752,7 +757,7 @@ Assert the built plist exposes the exact identity and version values specified b
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter AppBundleBuildTests
+/usr/bin/swift run chrome-cdp-tests --filter AppBundleBuildTests
 ```
 
 Expected: FAIL because the app and scripts do not exist.
@@ -811,12 +816,12 @@ OSAAppletShowStartupScreen = false
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter AppBundleBuildTests
+/usr/bin/swift run chrome-cdp-tests --filter AppBundleBuildTests
 /bin/chmod 0755 scripts/build.sh scripts/verify.sh
 ./scripts/build.sh
 ./scripts/verify.sh --app "$PWD/dist/Chrome CDP.app" --staged
 cd /Users/david.david/Personal/ai
-git add chrome-cdp/app chrome-cdp/scripts chrome-cdp/Tests/ChromeCDPMacTests/AppBundleBuildTests.swift
+git add chrome-cdp/app chrome-cdp/scripts chrome-cdp/Sources/ChromeCDPTests/Mac/AppBundleBuildTests.swift
 git commit -m "build: assemble Chrome CDP Spotlight app"
 ```
 
@@ -832,8 +837,8 @@ Expected: staged verification PASS; `dist/` remains untracked.
 - Create: `chrome-cdp/Sources/ChromeCDPInstaller/main.swift`
 - Create: `chrome-cdp/scripts/bundle-manifest.sh`
 - Create: `chrome-cdp/scripts/install.sh`
-- Create: `chrome-cdp/Tests/ChromeCDPMacTests/AtomicBundleSwapTests.swift`
-- Create: `chrome-cdp/Tests/ChromeCDPMacTests/BundleManifestTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Mac/AtomicBundleSwapTests.swift`
+- Create: `chrome-cdp/Sources/ChromeCDPTests/Mac/BundleManifestTests.swift`
 
 - [ ] **Step 1: Write atomic-swap tests before installer code**
 
@@ -847,8 +852,8 @@ In temporary `.app` bundles containing nested regular files, run `bundle-manifes
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter AtomicBundleSwapTests
-/usr/bin/swift test --filter BundleManifestTests
+/usr/bin/swift run chrome-cdp-tests --filter AtomicBundleSwapTests
+/usr/bin/swift run chrome-cdp-tests --filter BundleManifestTests
 ```
 
 Expected: FAIL because atomic swap and scripts do not exist.
@@ -888,17 +893,17 @@ Exercise installation safety through the native swap tests, bundle-manifest beha
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test --filter ChromeCDPMacTests
+/usr/bin/swift run chrome-cdp-tests --filter ChromeCDPMacTests
 /bin/bash -n scripts/build.sh scripts/bundle-manifest.sh scripts/install.sh scripts/verify.sh
 /bin/chmod 0755 scripts/bundle-manifest.sh scripts/install.sh
 ./scripts/build.sh
 ./scripts/verify.sh --app "$PWD/dist/Chrome CDP.app" --staged
 cd /Users/david.david/Personal/ai
-git add chrome-cdp/Package.swift chrome-cdp/Sources/ChromeCDPMac/AtomicBundleSwap.swift chrome-cdp/Sources/ChromeCDPInstaller chrome-cdp/scripts chrome-cdp/Tests/ChromeCDPMacTests
+git add chrome-cdp/Package.swift chrome-cdp/Sources/ChromeCDPMac/AtomicBundleSwap.swift chrome-cdp/Sources/ChromeCDPInstaller chrome-cdp/scripts chrome-cdp/Sources/ChromeCDPTests/Mac
 git commit -m "feat: install Chrome CDP app atomically"
 ```
 
-Expected: all tests PASS; do not run `install.sh install` yet.
+Expected: the test runner exits successfully; do not run `install.sh install` yet.
 
 ### Task 10: Finish operator documentation and root project discovery
 
@@ -937,7 +942,7 @@ Document three isolated `agent-browser` sessions and `close` each session after 
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test
+/usr/bin/swift run chrome-cdp-tests
 ./scripts/build.sh
 ./scripts/verify.sh --app "$PWD/dist/Chrome CDP.app" --staged
 cd /Users/david.david/Personal/ai
@@ -957,9 +962,9 @@ git commit -m "docs: document Chrome CDP launcher"
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test
+/usr/bin/swift run chrome-cdp-tests
 CHROME_CDP_RUN_INTEGRATION=1 CHROME_CDP_INTEGRATION_TEST=1 \
-  /usr/bin/swift test --filter ChromeCDPIntegrationTests
+  /usr/bin/swift run chrome-cdp-tests --filter ChromeCDPIntegrationTests
 ./scripts/build.sh
 ./scripts/verify.sh --app "$PWD/dist/Chrome CDP.app" --staged
 cd /Users/david.david/Personal/ai
@@ -1086,7 +1091,7 @@ Invoke `superpowers:verification-before-completion`, then run:
 
 ```bash
 cd /Users/david.david/Personal/ai/chrome-cdp
-/usr/bin/swift test
+/usr/bin/swift run chrome-cdp-tests
 ./scripts/verify.sh --app "$PWD/dist/Chrome CDP.app" --staged
 ./scripts/verify.sh --app "/Applications/Chrome CDP.app" --installed
 cd /Users/david.david/Personal/ai
