@@ -600,7 +600,7 @@ Create `shared-agents/evals/controller-routing.json` from the existing three eva
 
 - [ ] **Step 4: Remove `shared-agents` from the canonical plugin catalog**
 
-Delete the complete `shared-agents` object from the `plugins` array in `plugins.json`, leaving `obsidian-memory`, `agent-board`, and `codex-pair` unchanged. Regenerate manifests:
+Delete the complete `shared-agents` object from the `plugins` array in `plugins.json`, leaving `obsidian-memory` and `codex-pair` unchanged. Regenerate manifests:
 
 ```bash
 python3 scripts/plugins.py sync

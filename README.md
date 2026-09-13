@@ -7,8 +7,6 @@ their own projects and use their product-native installation workflows.
 ## Projects
 
 - [`wiki`](wiki/): bounded Obsidian memory shared by Claude Code and Codex.
-- [`agent-board`](agent-board/): autonomous local Kanban with markdown cards,
-  role souls, local-first triage, capacity-safe dispatch, and a web dashboard.
 - [`codex-pair`](codex-pair/): independent Codex judgment, product shaping,
   technical leadership, and review from inside Claude Code.
 - [`chatgpt-consult`](chatgpt-consult/): bounded consultations through ChatGPT
@@ -34,14 +32,12 @@ cd agent-toolkit
 # Codex
 codex plugin marketplace add "$PWD" --json
 codex plugin add obsidian-memory@ai-workspace --json
-codex plugin add agent-board@ai-workspace --json
 codex plugin add codex-pair@ai-workspace --json
 codex plugin add chatgpt-consult@ai-workspace --json
 
 # Claude Code
 claude plugin marketplace add "$PWD" --scope user
 claude plugin install obsidian-memory@ai-workspace --scope user
-claude plugin install agent-board@ai-workspace --scope user
 claude plugin install codex-pair@ai-workspace --scope user
 claude plugin install chatgpt-consult@ai-workspace --scope user
 ```
@@ -75,9 +71,6 @@ plugins.json                            ← edit catalog metadata here
 ├── .claude-plugin/marketplace.json     ← generated Claude Code marketplace
 ├── .agents/plugins/marketplace.json    ← generated Codex marketplace
 ├── wiki/plugins/obsidian-memory/
-│   ├── .claude-plugin/plugin.json      ← generated
-│   └── .codex-plugin/plugin.json       ← generated
-├── agent-board/plugins/agent-board/
 │   ├── .claude-plugin/plugin.json      ← generated
 │   └── .codex-plugin/plugin.json       ← generated
 ├── codex-pair/plugins/codex-pair/
@@ -140,7 +133,6 @@ validation commands above.
 ├── .github/workflows/check.yml
 ├── plugins.json
 ├── scripts/
-├── agent-board/
 ├── bun-global-tools/
 ├── chatgpt-consult/
 ├── codex-pair/

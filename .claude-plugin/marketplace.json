@@ -23,22 +23,6 @@
       "license": "MIT"
     },
     {
-      "name": "agent-board",
-      "source": "./agent-board/plugins/agent-board",
-      "description": "Autonomous local Kanban for coding agents: markdown cards, souls/roles, local-first triage, capacity-safe dispatch, attachable sessions.",
-      "version": "1.0.0",
-      "displayName": "Agent Board",
-      "category": "Productivity",
-      "keywords": [
-        "kanban",
-        "orchestration",
-        "autonomous-agents",
-        "claude-code",
-        "codex"
-      ],
-      "license": "MIT"
-    },
-    {
       "name": "codex-pair",
       "source": "./codex-pair/plugins/codex-pair",
       "description": "Codex CLI as Claude Code's independent second model: grounded judgment, product shaping, adversarial plan and diff review, and a technical-lead loop where Codex scopes and signs off while Claude implements.",

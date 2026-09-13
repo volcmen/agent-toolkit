@@ -18,18 +18,11 @@ jobs:
       - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2
         with:
           bun-version: "1.4.0"
-      - name: install agent-board dev deps
-        run: bun install --frozen-lockfile
-        working-directory: agent-board
-      - name: install agent-board web dev deps
-        run: bun install --frozen-lockfile
-        working-directory: agent-board/web
       - name: install ChatGPT Consult dependencies
         run: bun install --frozen-lockfile
         working-directory: chatgpt-consult
       # The rendered manifests must match plugins.json, every catalogued plugin
       # must be well formed, and each project's own suite must pass.
       - run: python3 scripts/plugins.py sync --check
-      # Bun.WebView drives a real Chrome-family browser for the dashboard suite.
-      # GitHub's Linux runners need a virtual display for those trusted-input flows.
+      # Browser-backed suites need a virtual display on GitHub's Linux runners.
       - run: xvfb-run -a python3 scripts/plugins.py check

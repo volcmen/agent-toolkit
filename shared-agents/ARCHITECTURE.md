@@ -38,7 +38,6 @@ user-managed.
 4. Run `manage.py install` to copy the Claude agents into `~/.claude/agents/`.
 
 Source edits do not update the copied user agents until installation is rerun.
-The installer neither invokes Agent Board nor creates or updates board cards.
 It does not install marketplace plugins or modify Codex configuration.
 
 ## Writing route

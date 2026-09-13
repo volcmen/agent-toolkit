@@ -1,7 +1,7 @@
 # Shared agents
 
 A standalone personal Claude Code controller and specialist-agent system,
-maintained in this workspace and independent of Agent Board and the workspace
+maintained in this workspace and independent of the workspace
 plugin marketplace.
 
 ## Claude Code agents
