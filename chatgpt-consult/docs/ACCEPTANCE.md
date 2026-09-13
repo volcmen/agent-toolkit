@@ -10,9 +10,9 @@ headed browser.
 - [x] `python3 bun-global-tools/sync.py check --deep` verifies Bun-owned
       `agent-browser` 0.35.1 and its `~/.bun/bin` command path.
 - [x] `bun run check` passes; only explicitly opt-in live tests are skipped.
-- [ ] `python3 scripts/plugins.py check` passes from the workspace root.
-      The September 13 run passes this project and fails unrelated existing
-      `claude-core` checks; see the dated record below.
+- [x] `python3 scripts/plugins.py check` passes from the scoped push branch.
+      The main development checkout has unrelated existing `claude-core`
+      failures; see the dated record below.
 - [x] `chatgpt-consult doctor --json` reports the browser-backed required
       checks without requiring a tunnel.
 - [x] The local MCP still exposes exactly `consult_start`, `consult_status`,
@@ -145,10 +145,15 @@ prerequisite for browser-backed acceptance, and none is started automatically.
 - Local project gate: **PASS**, typecheck plus 1,061 tests, two opt-in skips.
   Skill validation, plugin refresh/status for both agents, and whitespace
   validation also pass.
-- Workspace validation: the catalog, workspace, wiki, codex-pair, and
+- Workspace validation in the main development checkout: the catalog,
+  workspace, wiki, codex-pair, and
   ChatGPT Consult checks pass. Two unrelated existing `claude-core` tests fail,
   including its always-on context byte budget. No unrelated workspace edits
   were changed.
+- Scoped push branch validation: **PASS**. The branch contains Consult and its
+  unpublished prerequisites on the remote main baseline. The catalog,
+  workspace, wiki, agent-board, codex-pair, ChatGPT Consult, and shared-agents
+  checks all pass. Its Consult implementation matches the reviewed checkout.
 
 ## Acceptance record — 2026-09-01
 

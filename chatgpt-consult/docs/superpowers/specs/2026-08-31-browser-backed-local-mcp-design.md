@@ -1,6 +1,6 @@
 # Browser-Backed Local MCP Design
 
-**Date:** 2026-08-31  
+**Date:** 2026-08-31
 **Status:** Approved design, pending implementation plan
 
 ## Summary
