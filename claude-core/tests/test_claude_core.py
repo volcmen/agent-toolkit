@@ -489,7 +489,7 @@ class MergedLifecycle(unittest.TestCase):
                 code, output = quiet(manage.cmd_install, None)
                 self.assertEqual(code, 0, output)
                 self.assertEqual(before, {path: path.lstat().st_mtime_ns for path in paths})
-                self.assertIn("unchanged 9 link(s)", output)
+                self.assertIn("unchanged 11 link(s)", output)
                 self.assertIn("unchanged 6 agent file(s)", output)
                 self.assertNotIn("backed up", output)
                 self.assertEqual(len([path for path in backups.rglob("*") if path.is_file()]), 2)

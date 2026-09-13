@@ -1,0 +1,14 @@
+{
+  "model": "",
+  "wall_time": "45m",
+  "max_tool_calls": 200,
+  "max_turns": 80,
+  "max_subagent_depth": 1,
+  "safe_mode": true,
+  "sandbox": false,
+  "model_check": true,
+  "state_dir": "~/.qwen-gsd",
+  "warn_requests": 120,
+  "warn_fresh_plus_output": 300000,
+  "warn_tool_failures": 10
+}

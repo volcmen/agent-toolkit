@@ -1,0 +1,4 @@
+interface:
+  display_name: "Qwen GSD Slice"
+  short_description: "Autonomous Qwen coding with Codex review"
+  default_prompt: "Use $qwen-gsd-slice to implement the next bounded slice."

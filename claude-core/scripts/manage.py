@@ -29,9 +29,11 @@ MANAGED_FILES = (
     "CLAUDE.md",
     "chrome-cdp.md",
     "rules/waiting.md",
+    "rules/corporate-systems.md",
     "rules/code-style.md",
     "hooks/f17-ticket-keys.sh",
     "hooks/f17-comment-count.sh",
+    "hooks/guard-red-write.py",
 )
 MANAGED_DIRECTORIES = (
     "skills/engineering",

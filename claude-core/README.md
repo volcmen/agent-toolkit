@@ -138,3 +138,43 @@ script bytes, so moving or linking the scripts does not invalidate it.
 Claude Code transcripts under `~/.claude/projects`: initial and peak context,
 cache-read and output tokens, compactions, Bash timeouts, status polling,
 and subagent birth context and cost. Baseline snapshots live in `metrics/`.
+
+## Verification evidence
+
+`scripts/verify-run.py --scope <name> -- <command>` runs a verification command
+and appends one JSON line to `<git-common-dir>/guard-verify.jsonl`: the tracked
+tree it ran against, the full worktree tree, whether the worktree was dirty, the
+untracked paths that were present, a digest of the lockfiles, the interpreter
+and platform, the command, its exit status, duration, the test counts parsed
+from its output, and a chain hash over the previous entry.
+
+`--gate <tree-ish>` answers whether a tree has usable evidence, and never
+answers unknown as success:
+
+| state | meaning |
+| --- | --- |
+| `PASS` | a green run that counted tests, under the current lockfiles |
+| `MISSING` | nothing ran against this tree |
+| `VACUOUS` | exit zero with no test counted — a typecheck, an empty collection |
+| `FAIL` | a scope's last authorized attempt failed |
+| `FLAKY` | a scope passed only after failing; the first failure is preserved |
+| `STALE` | every passing run predates the current dependency digest |
+
+`~/.config/git-guards/pre-push-foreign-history` reads it as rule R7. R7 is
+advisory by default and prints `UNVERIFIED`; `git config --bool
+guard.requireVerify true` makes it blocking in that clone, and
+`git config guard.verifyRun <path>` points it at this checkout. A push whose
+whole change is prose is exempt — `.md`, `.txt`, `.rst`, `docs/`, `LICENSE` —
+but instruction files, hook and CI definitions and anything under `rules/`,
+`hooks/`, `skills/`, `.claude/` or `.github/` are verification-sensitive inputs
+and are deliberately not prose.
+
+The wrapper, the ledger and the chain are all writable by the user they
+describe, so this is evidence and not proof: it catches the stale tree, the
+vacuous run, the red-then-green and the never-run suite. It is not an
+authorization boundary, and it says nothing about whether the tests are good.
+
+`scripts/test-quality-scan.py <paths>` covers the other half — assertion-free
+tests, mock-only assertions, retry policies that hide a flake, and seeds pinned
+on the default exploration path. A seed inside a named `register_profile` or
+read from `FC_SEED` is replay machinery and is reported as advisory.

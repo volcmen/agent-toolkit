@@ -73,5 +73,15 @@ printf '%s' "$title" | grep -qE '\b[A-Z][A-Z0-9]{1,9}-[0-9]+\b' || fail M08 no_t
 [ "$resolved" = "True" ] || fail M10 unresolved_threads "blocking discussions unresolved"
 [ "${nrev:-0}" -gt 0 ] 2>/dev/null || warn M11 no_reviewer "no reviewer assigned"
 
-[ "$fails" -eq 0 ] && echo "mr-doctor: PASS (11 checks, !$iid -> $target)"
+while read -r url; do
+  [ -n "$url" ] || continue
+  lpath=$(printf '%s' "$url" | sed -E 's#^https://gitlab\.com/##; s#/-/(merge_requests|issues)/[0-9]+.*$##')
+  lkind=$(printf '%s' "$url" | grep -oE '/-/(merge_requests|issues)/' | tr -d '/-')
+  liid=$(printf '%s' "$url" | grep -oE '/-/(merge_requests|issues)/[0-9]+' | grep -oE '[0-9]+$')
+  lenc=$(printf '%s' "$lpath" | sed 's#/#%2F#g')
+  glab api "projects/$lenc/${lkind}/${liid}" 2>/dev/null | grep -q '"iid"' \
+    || fail M12 link_unresolvable "description link does not resolve: $url"
+done < <(printf '%s' "$desc" | grep -oE 'https://gitlab\.com/[A-Za-z0-9._/-]+/-/(merge_requests|issues)/[0-9]+' | sort -u)
+
+[ "$fails" -eq 0 ] && echo "mr-doctor: PASS (12 checks, !$iid -> $target)"
 exit 0

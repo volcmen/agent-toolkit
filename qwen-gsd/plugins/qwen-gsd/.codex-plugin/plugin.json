@@ -1,0 +1,35 @@
+{
+  "name": "qwen-gsd",
+  "version": "1.0.0",
+  "description": "Economical Qwen-authored development slices with bounded orchestration, diff review, verification, and usage accounting.",
+  "author": {
+    "name": "David David"
+  },
+  "license": "MIT",
+  "keywords": [
+    "qwen",
+    "gsd",
+    "code-generation",
+    "orchestration",
+    "cost-control",
+    "claude-code",
+    "codex"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Qwen GSD",
+    "shortDescription": "Bounded Qwen coding with review and cost telemetry.",
+    "longDescription": "Orchestrates economical, bounded development slices in which Qwen Code authors production and test changes while Codex or Claude Code scopes the work, reviews the diff, verifies the project, and records model, budget, failure, and usage evidence.",
+    "developerName": "David David",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Use Qwen to implement the next bounded GSD slice.",
+      "Have Qwen build this change while you review and verify it.",
+      "Implement this slice with Qwen and report its measured cost."
+    ]
+  }
+}

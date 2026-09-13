@@ -80,12 +80,19 @@ already carries comments of that kind.
   (`@fast-check/vitest`, `zod-fast-check`). If the repo lacks the framework,
   propose the dependency in its own MR and meanwhile write a generative test
   with per-run entropy that prints the failing input.
-- Fresh data every run: no `derandomize`, no global seed, no `Faker.seed`, no
-  hardcoded RNG seed. Reproducibility comes from the framework — hypothesis
-  replays `.hypothesis/examples`, fast-check prints `{seed, path}`; commit the
-  shrunk counterexample as an explicit example, never the seed. Framework
-  default example count in the dev loop; 500+ for parsers, money, and
-  security-sensitive paths; never lower it to hide slowness.
+- Explore unpinned, reproduce pinned — the axis is the profile, not the presence
+  of a seed. The default path a plain run takes gets fresh data every run: no
+  `derandomize`, no global seed, no `Faker.seed`, no hardcoded RNG seed there,
+  and never a seed on an individual test. A seed belongs only in a *named*
+  profile the default does not select: hypothesis `settings.register_profile`
+  (`explore` unpinned over `.hypothesis/examples`, a `mutation` profile with
+  `derandomize=True` so a mutant is compared against a fixed sequence, `nightly`
+  with a larger budget); fast-check reads `FC_SEED`/`FC_PATH` from the
+  environment for replay and sets neither by default. Reproducibility comes from
+  the framework — hypothesis replays its example database, fast-check prints
+  `{seed, path}`; commit the shrunk counterexample as an explicit example, never
+  the seed. Framework default example count in the dev loop; 500+ for parsers,
+  money, and security-sensitive paths; never lower it to hide slowness.
 - Generate the right shape directly (`st.builds`, mapped arbitraries) rather
   than `filter`/`assume` chains. Faker supplies surface values nested inside a
   strategy that owns structure and edge cases; it never provides adversarial
@@ -93,5 +100,14 @@ already carries comments of that kind.
   NaN/±Infinity/-0.0, unicode, leap and DST dates, boundary integers.
 - One property per test; no tautologies that only exercise the generator or
   the type. Every new test has a named mutation that kills it, run red → green
-  once. Never weaken, delete, or skip a failing test to go green — fix the
-  cause or report why the expectation is wrong.
+  once. For a guard, the mutation is removing the guard: the test must detect the
+  prohibited effect, and a "kill" caused by an import error, a collection
+  failure, or broken discovery is not a kill. Never weaken, delete, or skip a
+  failing test to go green — fix the cause or report why the expectation is wrong.
+- A retry never converts a red run into a green one: run the gate with
+  `--force-reruns 0` (pytest) or `--retry=0` (vitest), and treat a test that
+  passes only on a rerun as flaky — an owner, an expiry, and a visible
+  non-gating status, never a quietly smaller denominator.
+- A regenerated snapshot is a rewritten baseline, not a verification. Keep
+  snapshot updating off in any run that is meant as evidence, and pair a snapshot
+  with semantic assertions on the properties that must hold.

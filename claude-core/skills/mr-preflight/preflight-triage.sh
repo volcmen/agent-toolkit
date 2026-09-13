@@ -234,8 +234,15 @@ payload=$(git log "$target..HEAD" --format=%B | grep -vE '^(Signed-off-by|Change
 sl=$(printf '%s\n' "$payload" | grep -nE 'claude\.ai/code/session_|Claude-Session:|Generated with \[?Claude|Co-Authored-By: Claude')
 if [ -n "$sl" ]; then mech_fail=1; echo "FAIL F21 session-link-leak (commit bodies + MR description) [total=$(printf '%s\n' "$sl" | grep -c .)]"; printf '%s\n' "$sl" | show; else echo "PASS F21 — 0 session links"; fi
 
-seeds=$(added_in 'derandomize|Faker\.seed|seed_instance|random\.seed|[Ss]eed[[:space:]]*[=:][[:space:]]*[0-9]' | test_only)
-if [ -n "$seeds" ]; then mech_fail=1; echo "FAIL F19 pinned seed"; printf '%s\n' "$seeds" | show; else echo "PASS F19-seed"; fi
+scanner="$HOME/Personal/ai/claude-core/scripts/test-quality-scan.py"
+changed_tests=$(printf '%s\n' "$files" | rg -N -e "($test_re)" || true)
+if [ -n "$changed_tests" ] && [ -f "$scanner" ] && command -v python3 >/dev/null; then
+  seeds=$(python3 "$scanner" $changed_tests 2>/dev/null | rg -N -e 'pinned-seed' | rg -N -v -e 'advisory' || true)
+  if [ -n "$seeds" ]; then mech_fail=1; echo "FAIL F19 pinned seed on the default exploration path"; printf '%s\n' "$seeds" | show; else echo "PASS F19-seed — no seed pinned outside a named profile"; fi
+else
+  seeds=$(added_in 'derandomize|Faker\.seed|seed_instance|random\.seed|[Ss]eed[[:space:]]*[=:][[:space:]]*[0-9]' | test_only)
+  if [ -n "$seeds" ]; then mech_fail=1; echo "FAIL F19 pinned seed (textual fallback; a named replay profile is a false positive here)"; printf '%s\n' "$seeds" | show; else echo "PASS F19-seed"; fi
+fi
 
 f24_done=""
 if [ -n "$py_src" ]; then
