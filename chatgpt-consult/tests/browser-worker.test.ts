@@ -16,7 +16,7 @@ import { RequestStore, type CreateRequestInput } from "../src/core/store";
 import { resolveProject, type ResolvedProject } from "../src/security/project";
 
 const PROJECT_URL = "https://chatgpt.com/g/projects/browser-worker";
-const CONVERSATION_URL = "https://chatgpt.com/c/proven-conversation";
+const CONVERSATION_URL = "https://chatgpt.com/g/browser-worker/c/proven-conversation";
 const OWNER_A = "a".repeat(32);
 const OWNER_B = "b".repeat(32);
 const temporaryPaths: string[] = [];
@@ -240,6 +240,22 @@ afterEach(async () => {
 });
 
 describe("browser job coordinator", () => {
+  test("keeps a rate-limit reason without clearing an uncertain submission or resending", async () => {
+    const automation = new FakeAutomation(async (_input, hooks) => {
+      await hooks.beforeSubmission();
+      return { kind: "recovery", phase: "needs_manual", reason: "rate_limited", certainty: "uncertain" };
+    });
+    const harness = await makeHarness({ automation });
+    await harness.store.queueBrowserExecution(harness.requestId);
+    expect(await harness.job.run(harness.requestId, OWNER_A)).toMatchObject({ kind: "recovery", reason: "rate_limited" });
+    const saved = await harness.store.get(harness.requestId);
+    expect(saved.browserExecution).toMatchObject({
+      phase: "needs_manual", reason: "rate_limited", submission: { certainty: "uncertain" }, lease: null,
+    });
+    await harness.job.run(harness.requestId, OWNER_B);
+    expect(automation.calls).toHaveLength(1);
+  });
+
   test("leases, submits once, validates, imports, and releases exact package provenance", async () => {
     let harness!: Harness;
     const observedStates: unknown[] = [];
@@ -343,7 +359,7 @@ describe("browser job coordinator", () => {
     });
     const harness = await makeHarness({ automation });
     const parent = await harness.store.create(validCreateInput("parent", {
-      conversationUrl: "https://chatgpt.com/c/proven-parent",
+      conversationUrl: "https://chatgpt.com/g/browser-worker/c/proven-parent",
     }));
     const child = await harness.store.create(validCreateInput("child", {
       parentId: parent.request.id,
@@ -352,14 +368,39 @@ describe("browser job coordinator", () => {
 
     await harness.job.run(child.request.id, OWNER_B);
 
-    expect(harness.automation.calls[0]?.targetUrl).toBe("https://chatgpt.com/c/proven-parent");
+    expect(harness.automation.calls[0]?.targetUrl).toBe("https://chatgpt.com/g/browser-worker/c/proven-parent");
     expect(harness.automation.calls[0]?.targetKind).toBe("conversation");
+  });
+
+  test("a fresh follow-up uses its saved Project and resumes only its own new conversation", async () => {
+    const harness = await makeHarness();
+    const parent = await harness.store.create(validCreateInput("fresh-parent", {
+      conversationUrl: "https://chatgpt.com/g/browser-worker/c/parent",
+    }));
+    const child = await harness.store.create(validCreateInput("fresh-child", {
+      parentId: parent.request.id, conversationUrl: null,
+      thread: { projectUrl: PROJECT_URL, mode: "new", requestedMode: "new", reason: "requested", turn: 1 },
+    }));
+    harness.automation.runImpl = async (_input, hooks) => {
+      await hooks.beforeSubmission();
+      await hooks.submissionConfirmed(CONVERSATION_URL);
+      return { kind: "recovery", phase: "needs_manual", reason: "timed_out", certainty: "submitted", conversationUrl: CONVERSATION_URL };
+    };
+    await harness.job.run(child.request.id, OWNER_A);
+    expect(harness.automation.calls[0]).toMatchObject({ targetUrl: PROJECT_URL, targetKind: "configured", projectUrl: PROJECT_URL });
+    harness.automation.runImpl = async (input) => ({
+      kind: "completed", conversationUrl: CONVERSATION_URL, responseText: responseEnvelope(input.requestId, 0),
+    });
+    const result = await harness.job.run(child.request.id, OWNER_B);
+    expect(result.kind).toBe("completed");
+    expect(harness.automation.calls[1]).toMatchObject({ mode: "collect_only", targetUrl: CONVERSATION_URL });
+    expect((await harness.store.get(parent.request.id)).conversationUrl).toBe("https://chatgpt.com/g/browser-worker/c/parent");
   });
 
   test("follow-up confirmation cannot escape the proven parent conversation", async () => {
     const harness = await makeHarness();
     const parent = await harness.store.create(validCreateInput("bound-parent", {
-      conversationUrl: "https://chatgpt.com/c/proven-parent",
+      conversationUrl: "https://chatgpt.com/g/browser-worker/c/proven-parent",
     }));
     const child = await harness.store.create(validCreateInput("bound-child", {
       parentId: parent.request.id,

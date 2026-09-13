@@ -13,3 +13,10 @@ export class ConsultError extends Error {
     this.name = "ConsultError";
   }
 }
+
+export class ConversationBusyError extends ConsultError {
+  constructor(public readonly requestId: string) {
+    if (!/^[a-f0-9]{32}$/.test(requestId)) throw new TypeError("Invalid busy conversation request ID");
+    super("CONFLICT", `This conversation is busy; wait for consultation ${requestId} or use a new chat`, { requestId });
+  }
+}

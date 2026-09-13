@@ -11,10 +11,10 @@ import {
   readLocalConfig,
 } from "../src/core/service";
 import { resolveProject, type ResolvedProject } from "../src/security/project";
+import { conversationBelongsToProject } from "../src/browser/handoff";
 
 const OPT_IN = process.env.CHATGPT_CONSULT_BROWSER_ACCEPTANCE === "1";
 const LIVE_TIMEOUT_MS = 10 * 60_000;
-const POLL_INTERVAL_MS = 1_000;
 const exactToolNames = [
   "consult_start",
   "consult_status",
@@ -138,9 +138,10 @@ const waitForCompletion = async (
   while (Date.now() < deadline) {
     const result = valueOf(await client.callTool({
       name: "consult_status",
-      arguments: { request_id: requestId },
+      arguments: { request_id: requestId, wait_seconds: 50 },
     }), "consult_status");
     const status = result as unknown as PublicStatus;
+    process.stderr.write(`browser-live request=${requestId} state=${status.state} phase=${status.browser?.phase ?? "none"}\n`);
     if (status.browser?.phase) phases.add(status.browser.phase);
     if (status.state === "completed") return status;
     if (status.state === "cancelled" || status.state === "expired") {
@@ -148,7 +149,6 @@ const waitForCompletion = async (
     }
     if (status.browser?.phase === "needs_login" || status.browser?.phase === "needs_manual") {
       if (activeWorkerOwnsUncertainSubmission(status)) {
-        await Bun.sleep(POLL_INTERVAL_MS);
         continue;
       }
       throw new Error(
@@ -156,7 +156,6 @@ const waitForCompletion = async (
         + `/${status.browser.submissionCertainty ?? "unknown"}`,
       );
     }
-    await Bun.sleep(POLL_INTERVAL_MS);
   }
   throw new Error("Browser consultation did not complete within ten minutes");
 };
@@ -171,6 +170,10 @@ const runCli = (root: string, args: readonly string[]): void => {
 };
 
 afterEach(async () => {
+  if (OPT_IN && process.env.CHATGPT_CONSULT_BROWSER_KEEP === "1") {
+    process.stderr.write(`browser-live diagnostic fixtures=${JSON.stringify(temporaryPaths.splice(0))}\n`);
+    return;
+  }
   await Promise.all(temporaryPaths.splice(0).map((path) => rm(path, {
     recursive: true,
     force: true,
@@ -206,13 +209,18 @@ describe("authenticated browser acceptance", () => {
     });
     transport.stderr?.on("data", () => {});
     const client = new Client({ name: "chatgpt-consult-browser-live", version: "1.0.0" });
+    const peerTransport = new StdioClientTransport({
+      command: "bun", args: [absoluteBin, "serve", "local"], cwd: root, stderr: "pipe",
+    });
+    peerTransport.stderr?.on("data", () => {});
+    const peer = new Client({ name: "chatgpt-consult-browser-peer", version: "1.0.0" });
     const phases = new Set<string>();
     const sources = new Set<string>();
     try {
-      await client.connect(transport);
+      await Promise.all([client.connect(transport), peer.connect(peerTransport)]);
       expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([...exactToolNames]);
 
-      const rootStart = valueOf(await client.callTool({
+      const [rootResult, peerResult] = await Promise.all([client.callTool({
         name: "consult_start",
         arguments: {
           goal: "Return a concise review of the bounded retry statement.",
@@ -221,9 +229,20 @@ describe("authenticated browser acceptance", () => {
           open: true,
           idempotency_key: "browser-live-root",
         },
-      }), "consult_start");
+      }), peer.callTool({
+        name: "consult_start",
+        arguments: {
+          goal: "Return the marker PARALLEL-B in the answer field. This is a synthetic concurrency check.",
+          profile: "lean", open: true, idempotency_key: "browser-live-peer",
+        },
+      })]);
+      const rootStart = valueOf(rootResult, "consult_start");
+      const peerStart = valueOf(peerResult, "parallel consult_start");
       const rootId = requestIdOf(rootStart, "consult_start");
-      const rootStatus = await waitForCompletion(client, rootId, phases);
+      const peerId = requestIdOf(peerStart, "parallel consult_start");
+      const [rootStatus, peerStatus] = await Promise.all([
+        waitForCompletion(client, rootId, phases), waitForCompletion(peer, peerId, phases),
+      ]);
       if (rootStatus.completionSource !== "browser"
         || rootStatus.browser?.submissionCertainty !== "submitted"
         || typeof rootStatus.browser.conversationUrl !== "string") {
@@ -231,6 +250,14 @@ describe("authenticated browser acceptance", () => {
       }
       sources.add(rootStatus.completionSource);
       const rootConversationUrl = rootStatus.browser.conversationUrl;
+      expect(peerStatus.completionSource).toBe("browser");
+      expect(peerStatus.browser?.conversationUrl).toBeString();
+      expect(peerStatus.browser?.conversationUrl).not.toBe(rootConversationUrl);
+      expect(conversationBelongsToProject(rootConversationUrl, config.chatgptProjectUrl!)).toBeTrue();
+      expect(conversationBelongsToProject(peerStatus.browser!.conversationUrl!, config.chatgptProjectUrl!)).toBeTrue();
+      const peerShow = valueOf(await peer.callTool({ name: "consult_show", arguments: { request_id: peerId } }), "parallel consult_show");
+      expect((peerShow.completion as { answer: string }).answer).toContain("PARALLEL-B");
+      process.stderr.write("browser-live parallel roots completed with distinct conversations using shared authentication\n");
       const rootShow = valueOf(await client.callTool({
         name: "consult_show",
         arguments: { request_id: rootId },
@@ -275,6 +302,21 @@ describe("authenticated browser acceptance", () => {
         throw new Error("Attachment follow-up did not complete in the proven conversation");
       }
       sources.add(attachmentStatus.completionSource);
+
+      const freshStart = valueOf(await client.callTool({
+        name: "consult_followup",
+        arguments: {
+          parent_id: attachmentId,
+          goal: "In this fresh chat, give one sentence about the previous consultation summary.",
+          profile: "lean", chat_mode: "new", open: true,
+          idempotency_key: "browser-live-fresh",
+        },
+      }), "consult_followup fresh");
+      const freshStatus = await waitForCompletion(client, requestIdOf(freshStart, "consult_followup fresh"), phases);
+      expect(freshStatus.completionSource).toBe("browser");
+      expect(freshStatus.browser?.submissionCertainty).toBe("submitted");
+      expect(freshStatus.browser?.conversationUrl).not.toBe(rootConversationUrl);
+      expect(conversationBelongsToProject(freshStatus.browser!.conversationUrl!, config.chatgptProjectUrl!)).toBeTrue();
 
       const manualStart = valueOf(await client.callTool({
         name: "consult_start",
@@ -327,7 +369,7 @@ describe("authenticated browser acceptance", () => {
         `browser-live phases=${[...phases].sort().join(",")} sources=${[...sources].sort().join(",")}\n`,
       );
     } finally {
-      await client.close();
+      await Promise.allSettled([client.close(), peer.close()]);
     }
-  });
+  }, LIVE_TIMEOUT_MS * 5);
 });

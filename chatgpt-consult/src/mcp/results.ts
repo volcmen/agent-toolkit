@@ -1,6 +1,6 @@
 import type { CallToolResult, StandardSchemaWithJSON } from "@modelcontextprotocol/server";
 import { z } from "zod/v4";
-import { ConsultError, type ConsultErrorCode } from "../core/errors";
+import { ConsultError, ConversationBusyError, type ConsultErrorCode } from "../core/errors";
 
 const safeMessages: Record<ConsultErrorCode, string> = {
   INVALID_INPUT: "The request is invalid.",
@@ -83,7 +83,13 @@ export const compactText = (value: string, limit = 240): string => {
 export const browserRecoveryInstruction = (
   phase: string | undefined,
   submissionCertainty?: "not_submitted" | "submitted" | "uncertain",
+  reason?: string | null,
 ): string | null => {
+  if (phase === "needs_manual" && reason === "rate_limited") {
+    return "ChatGPT has temporarily limited requests. Pause all consultations using this Chrome session for at least five minutes; "
+      + "do not reload, retry automatically, or sign in again. The shared local cooldown prevents new browser attempts. "
+      + "Resume this request only after the limit clears; never resend an uncertain submission.";
+  }
   if (phase === "needs_login") {
     return "No browser worker is running for this request; it will not resume on its own. "
       + "Run setup browser, sign in directly, then run open and wait with consult_status.";
@@ -152,12 +158,14 @@ export const successResult = <Schema extends z.ZodType>(
 
 export const errorResult = (error: unknown): CallToolResult => {
   const code: ConsultErrorCode = error instanceof ConsultError ? error.code : "INTERNAL";
-  const message = code === "INVALID_INPUT" && error instanceof ConsultError
+  const message = (code === "INVALID_INPUT" && error instanceof ConsultError) || error instanceof ConversationBusyError
     ? error.message
     : safeMessages[code];
   return {
     content: [{ type: "text", text: `${code}: ${message}` }],
-    structuredContent: { error: { code, message } },
+    structuredContent: { error: { code, message,
+      ...(error instanceof ConversationBusyError ? { requestId: error.requestId } : {}),
+    } },
     isError: true,
   };
 };

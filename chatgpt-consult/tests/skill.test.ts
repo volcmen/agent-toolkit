@@ -112,7 +112,9 @@ describe("chatgpt-consult skill package", () => {
 
     expect(policy).toMatch(/generate one stable idempotency_key per logical consultation/i);
     expect(policy).toMatch(/reuse it only to retry a consult_start whose response never arrived/i);
-    expect(policy).toMatch(/never call consult_start once a request id exists or submission_uncertain is reported/i);
+    expect(policy).toMatch(/never call consult_start again for that consultation once a request id exists or submission_uncertain is reported/i);
+    expect(policy).toMatch(/unrelated topics use consult_start/i);
+    expect(policy).toMatch(/auto rolls over after six exchanges; new carries a bounded summary; continue deliberately retains the chat/i);
 
     expect(text.split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(600);
   });

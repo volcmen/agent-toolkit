@@ -1,9 +1,11 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { randomBytes } from "node:crypto";
 
 import {
   classifyObservedChatgptUrl,
+  conversationBelongsToProject,
   sanitizeChatgptUrl,
   type AuthenticationProbeInput,
   type BrowserAutomationHooks,
@@ -14,8 +16,11 @@ import {
   type BrowserSubmitter,
 } from "./handoff.js";
 import { runBoundedDiagnosticResult } from "./chrome.js";
+import type { BrowserRateLimitGate } from "./rate-limit.js";
 import { HARD_BUDGET, type BrowserFailureReason, type SubmissionCertainty } from "../core/schema.js";
 import {
+  BROWSER_REQUEST_BEGIN,
+  BROWSER_REQUEST_END,
   BROWSER_RESULT_BEGIN,
   BROWSER_RESULT_END,
   BrowserCompletionEnvelopeSchema,
@@ -51,6 +56,8 @@ const MSG_MANUAL_SUBMISSION = "Submission could not complete.";
 
 const REF_KEY_RE = /^e[1-9][0-9]{0,3}$/;
 const TARGET_ID_RE = /^[A-Fa-f0-9]{32}$/;
+
+export const createAutomationSessionId = (): string => `consult-${randomBytes(12).toString("hex")}`;
 const COMPOSER_NAMES: ReadonlySet<string> = new Set([
   "message chatgpt",
   "ask chatgpt",
@@ -173,8 +180,9 @@ const defaultCommandRunner: CommandRunner = async (argv, options) => {
   );
 };
 
-const defaultWorkspaceFactory: WorkspaceFactory = async () => {
-  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "ab-"));
+export const createAutomationWorkspace: WorkspaceFactory = async () => {
+  const root = process.platform === "darwin" ? "/tmp" : os.tmpdir();
+  const dir = await fs.promises.mkdtemp(path.join(root, "ab-"));
   try {
     await fs.promises.chmod(dir, 0o700);
 
@@ -238,7 +246,7 @@ export class AgentBrowserSubmitter implements BrowserSubmitter {
 
     this.executablePath = options?.executablePath;
     this.runner = options?.commandRunner ?? defaultCommandRunner;
-    this.factory = options?.workspaceFactory ?? defaultWorkspaceFactory;
+    this.factory = options?.workspaceFactory ?? createAutomationWorkspace;
     this.cleanup = options?.workspaceCleanup ?? defaultWorkspaceCleanup;
     this.deadlineMs = options?.deadlineMs ?? DEFAULT_DEADLINE_MS;
     this.now = options?.now ?? performance.now.bind(performance);
@@ -389,7 +397,7 @@ export class AgentBrowserSubmitter implements BrowserSubmitter {
     if (urlData === null) return null;
     const rawUrl = urlData.url;
     if (typeof rawUrl !== "string") return null;
-    return sanitizeChatgptUrl(rawUrl, "conversation");
+    return sanitizeChatgptUrl(rawUrl, "conversation") ?? sanitizeChatgptUrl(rawUrl, "configured");
   }
 
   private buildGlobalArgs(
@@ -399,7 +407,7 @@ export class AgentBrowserSubmitter implements BrowserSubmitter {
   ): readonly string[] {
     return [
       executable,
-      "--session", "chatgpt-consult",
+      "--session", createAutomationSessionId(),
       "--cdp", String(port),
       "--pin-tab",
       "--content-boundaries",
@@ -482,7 +490,10 @@ const HEARTBEAT_INTERVAL_MS = 10_000;
 const PROMPT_MAX_BYTES = 65_536;
 const RESPONSE_OVERHEAD_BYTES = 16_384;
 const ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
-const UPLOAD_SELECTOR = "input[type=file]";
+const USER_SELECTOR = '[data-message-author-role="user"]';
+const SEND_READY_SELECTOR = 'button[data-testid="send-button"]:enabled';
+const UPLOAD_SELECTOR = "input#upload-files[type=file]";
+const UPLOAD_READY_MS = 60_000;
 const SAFE_REQUEST_ID = /^[a-f0-9]{32}$/;
 const CONVERSATION_PATH_RE = /\/c\/([^/?#]+)$/;
 
@@ -510,10 +521,12 @@ export interface AgentBrowserAutomationOptions {
   readonly commandWait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   readonly ownedTabCleanup?: OwnedTabCleanup;
   readonly cdpPageClientFactory?: CdpPageClientFactory;
+  readonly rateLimitGate?: Pick<BrowserRateLimitGate, "isBlocked" | "pause">;
 }
 
 export interface OwnedTabCleanupInput {
   readonly executable: string;
+  readonly sessionId: string;
   readonly targetId: string;
   readonly sessionPort: number;
   readonly workspace: WorkspacePaths;
@@ -524,6 +537,7 @@ export type OwnedTabCleanup = (input: OwnedTabCleanupInput) => Promise<void>;
 
 interface AutomationContext {
   readonly executable: string;
+  readonly sessionId: string;
   readonly sessionPort: number;
   readonly workspace: WorkspacePaths;
   readonly env: Record<string, string>;
@@ -538,7 +552,7 @@ interface AutomationContext {
 const defaultOwnedTabCleanup: OwnedTabCleanup = async (input) => {
   await defaultCommandRunner([
     input.executable,
-    "--session", "chatgpt-consult",
+    "--session", input.sessionId,
     "--cdp", String(input.sessionPort),
     "--pin-tab",
     "--content-boundaries",
@@ -559,7 +573,8 @@ const defaultOwnedTabCleanup: OwnedTabCleanup = async (input) => {
 type StepFailure = "cancelled" | "timed_out" | "command_failed";
 type StepResult<T> = { kind: "ok"; value: T } | { kind: "failed"; failure: StepFailure };
 
-type HeartbeatWatchOutcome = TurnWatchOutcome | { kind: "hint_recovered"; responseText: string };
+type HeartbeatWatchOutcome = TurnWatchOutcome | { kind: "hint_recovered"; responseText: string }
+  | { kind: "rate_limited" };
 type HeartbeatRaceResult =
   | { kind: "watch"; value: TurnWatchOutcome }
   | { kind: "elapsed" }
@@ -572,6 +587,7 @@ interface InteractiveState {
   readonly hasStopControl: boolean;
   readonly hasSignInControl: boolean;
   readonly hasHumanChallenge: boolean;
+  readonly hasRateLimit: boolean;
   readonly hasAmbiguousDialog: boolean;
 }
 
@@ -592,6 +608,7 @@ const analyzeInteractiveState = (data: Record<string, unknown>): InteractiveStat
   let hasStopControl = false;
   let hasSignInControl = false;
   let hasHumanChallenge = false;
+  let hasRateLimit = data.rateLimitDetected === true;
   let hasAmbiguousDialog = false;
 
   for (const [key, raw] of entries) {
@@ -600,9 +617,12 @@ const analyzeInteractiveState = (data: Record<string, unknown>): InteractiveStat
     }
     const entry = raw as Record<string, unknown>;
     const role = typeof entry.role === "string" ? entry.role.trim().toLowerCase() : "";
-    if (role === "dialog") hasAmbiguousDialog = true;
+    if (role === "dialog" || role === "alertdialog") hasAmbiguousDialog = true;
     const name = normalizeAccessibleName(entry.name);
     if (name === null) continue;
+    if ((role === "dialog" || role === "alertdialog" || role === "alert")
+      && (name === "too many requests" || name.startsWith("too many requests ")
+        || name.includes("temporarily limited access to your conversations"))) hasRateLimit = true;
 
     if (role === "textbox" && isComposerAccessibleName(name)) composerRefs.push(key);
     if ((role === "button" || role === "link")
@@ -629,6 +649,7 @@ const analyzeInteractiveState = (data: Record<string, unknown>): InteractiveStat
     hasStopControl,
     hasSignInControl,
     hasHumanChallenge,
+    hasRateLimit,
     hasAmbiguousDialog,
   };
 };
@@ -714,6 +735,7 @@ export class AgentBrowserAutomation {
   private readonly commandWait: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   private readonly ownedTabCleanup: OwnedTabCleanup;
   private readonly cdpPageClientFactory: CdpPageClientFactory | undefined;
+  private readonly rateLimitGate: AgentBrowserAutomationOptions["rateLimitGate"];
 
   constructor(options: AgentBrowserAutomationOptions = {}) {
     if (options.executablePath !== undefined && options.executablePath !== null
@@ -751,7 +773,7 @@ export class AgentBrowserAutomation {
     }
     this.executablePath = options.executablePath;
     this.runner = options.commandRunner ?? defaultCommandRunner;
-    this.factory = options.workspaceFactory ?? defaultWorkspaceFactory;
+    this.factory = options.workspaceFactory ?? createAutomationWorkspace;
     this.cleanup = options.workspaceCleanup ?? defaultWorkspaceCleanup;
     this.deadlineMs = options.deadlineMs ?? AUTOMATION_DEADLINE_MS;
     this.now = options.now ?? performance.now.bind(performance);
@@ -775,6 +797,7 @@ export class AgentBrowserAutomation {
     });
     this.ownedTabCleanup = options.ownedTabCleanup ?? defaultOwnedTabCleanup;
     this.cdpPageClientFactory = options.cdpPageClientFactory;
+    this.rateLimitGate = options.rateLimitGate;
   }
 
   get eventCollectionEnabled(): boolean {
@@ -789,6 +812,13 @@ export class AgentBrowserAutomation {
     const priorCertainty = input.mode === "collect_only" ? "submitted" : "not_submitted";
     if (targetUrl === null) return recovery("ui_changed", priorCertainty);
     const priorConversationUrl = input.mode === "collect_only" ? targetUrl : undefined;
+    try {
+      if (await this.rateLimitGate?.isBlocked(input.session.port)) {
+        return recovery("rate_limited", priorCertainty, priorConversationUrl);
+      }
+    } catch {
+      return recovery("browser_unavailable", priorCertainty, priorConversationUrl);
+    }
     if (input.mode === "submit_and_collect"
       && !await this.validateUploadPaths(input.stagingDirectory, input.uploadPaths)) {
       return recovery("upload_failed", "not_submitted");
@@ -806,6 +836,7 @@ export class AgentBrowserAutomation {
     const started = this.now();
     const context: AutomationContext = {
       executable,
+      sessionId: createAutomationSessionId(),
       sessionPort: input.session.port,
       workspace,
       env: this.buildAutomationEnv(workspace.dir),
@@ -814,7 +845,16 @@ export class AgentBrowserAutomation {
       lastHeartbeat: started,
     };
     try {
-      return await this.executeRun(input, targetUrl, context);
+      let result = await this.executeRun(input, targetUrl, context);
+      if (result.kind === "recovery" && result.certainty === "uncertain"
+        && result.reason !== "rate_limited"
+        && await this.hasRateLimitWarning(context, [targetUrl, result.conversationUrl])) {
+        result = { ...result, reason: "rate_limited" };
+      }
+      if (result.kind === "recovery" && result.reason === "rate_limited") {
+        await this.rateLimitGate?.pause(input.session.port);
+      }
+      return result;
     } finally {
       if (context.eventClient !== undefined) {
         if (context.eventRestore !== undefined) {
@@ -830,6 +870,7 @@ export class AgentBrowserAutomation {
         try {
           await this.ownedTabCleanup({
             executable: context.executable,
+            sessionId: context.sessionId,
             targetId: context.ownedTargetId,
             sessionPort: context.sessionPort,
             workspace: context.workspace,
@@ -869,6 +910,7 @@ export class AgentBrowserAutomation {
     const started = this.now();
     const context: AutomationContext = {
       executable,
+      sessionId: createAutomationSessionId(),
       sessionPort: input.session.port,
       workspace,
       env: this.buildAutomationEnv(workspace.dir),
@@ -932,7 +974,11 @@ export class AgentBrowserAutomation {
       || !Number.isInteger(input.session.port) || input.session.port < 1 || input.session.port > 65_535) {
       return null;
     }
-    return sanitizeChatgptUrl(input.targetUrl, input.targetKind);
+    const targetUrl = sanitizeChatgptUrl(input.targetUrl, input.targetKind);
+    if (input.projectUrl !== undefined && (sanitizeChatgptUrl(input.projectUrl, "configured") !== input.projectUrl
+      || (input.targetKind === "configured" ? targetUrl !== input.projectUrl
+        : targetUrl === null || !conversationBelongsToProject(targetUrl, input.projectUrl)))) return null;
+    return targetUrl;
   }
 
   private async validateUploadPaths(
@@ -1020,6 +1066,7 @@ export class AgentBrowserAutomation {
       && state !== null
       && !state.hasSignInControl
       && !state.hasHumanChallenge
+      && !state.hasRateLimit
       && !state.hasAmbiguousDialog
       && state.composerRefs.length === 0
       && (input.targetKind === "conversation" || state.projectNewChatRefs.length === 0)
@@ -1050,6 +1097,7 @@ export class AgentBrowserAutomation {
       && state !== null
       && !state.hasSignInControl
       && !state.hasHumanChallenge
+      && !state.hasRateLimit
       && !state.hasAmbiguousDialog
       && state.composerRefs.length === 0
       && state.projectNewChatRefs.length === 1;
@@ -1166,6 +1214,17 @@ export class AgentBrowserAutomation {
       return recovery(filled.failure === "timed_out" ? "timed_out" : "ui_changed", "not_submitted");
     }
 
+    if (input.uploadPaths.length > 0) {
+      const readyDeadline = Math.min(context.deadline, this.now() + UPLOAD_READY_MS);
+      for (;;) {
+        const ready = await this.command(context, ["get", "count", SEND_READY_SELECTOR]);
+        if (ready.kind === "failed") return recovery("upload_failed", "not_submitted");
+        if (ready.value.count === 1) break;
+        if (ready.value.count !== 0 || this.now() >= readyDeadline) return recovery("upload_failed", "not_submitted");
+        if (await this.pause(context) !== "ok") return recovery("upload_failed", "not_submitted");
+      }
+    }
+
     const preSubmissionUrl = await this.readObservedUrl(context);
     if (preSubmissionUrl.kind === "failed") {
       return recovery(preSubmissionUrl.failure === "timed_out" ? "timed_out" : "ui_changed", "not_submitted");
@@ -1183,7 +1242,9 @@ export class AgentBrowserAutomation {
     if (input.targetKind === "conversation") {
       context.eventClient?.resetBufferedFrames();
     }
-    const pressed = await this.command(context, ["press", "Enter"]);
+    const pressed = await this.command(context, input.uploadPaths.length > 0
+      ? ["click", SEND_READY_SELECTOR]
+      : ["press", "Enter"]);
     if (pressed.kind === "failed") return recovery("submission_uncertain", "uncertain");
 
     let submittedUrl = await this.readObservedUrl(context);
@@ -1206,9 +1267,33 @@ export class AgentBrowserAutomation {
       }
     }
     const conversationUrl = submittedUrl.value.url;
+    if (input.projectUrl !== undefined && !conversationBelongsToProject(conversationUrl, input.projectUrl)) {
+      return recovery("submission_uncertain", "uncertain", conversationUrl);
+    }
     if ((input.targetKind === "configured" && conversationUrl === targetUrl)
       || (input.targetKind === "conversation" && conversationUrl !== targetUrl)) {
       return recovery("submission_uncertain", "uncertain");
+    }
+    if (input.targetKind === "conversation") {
+      const headerEnd = input.prompt.startsWith(`${BROWSER_REQUEST_BEGIN}\n`)
+        ? input.prompt.indexOf(`\n${BROWSER_REQUEST_END}`) : -1;
+      const submissionProof = (headerEnd === -1 ? input.prompt
+        : input.prompt.slice(0, headerEnd + BROWSER_REQUEST_END.length + 1)).replace(/\s+/g, " ").trim();
+      for (;;) {
+        const latest = await this.command(context, ["find", "last", USER_SELECTOR, "text"],
+          (PROMPT_MAX_BYTES + RESPONSE_OVERHEAD_BYTES) * 6 + RESPONSE_OVERHEAD_BYTES,
+          (PROMPT_MAX_BYTES + RESPONSE_OVERHEAD_BYTES) * 6 + RESPONSE_OVERHEAD_BYTES);
+        if (latest.kind === "ok" && typeof latest.value.text === "string"
+          && Buffer.byteLength(latest.value.text, "utf8") <= PROMPT_MAX_BYTES + RESPONSE_OVERHEAD_BYTES
+          && latest.value.text.replace(/\s+/g, " ").trim().startsWith(submissionProof)) break;
+        if (this.now() >= navigationDeadline || await this.pause(context) !== "ok") {
+          return recovery("submission_uncertain", "uncertain", conversationUrl);
+        }
+        const current = await this.readObservedUrl(context);
+        if (current.kind === "failed" || current.value.kind !== "page" || current.value.url !== conversationUrl) {
+          return recovery("submission_uncertain", "uncertain", conversationUrl);
+        }
+      }
     }
     try {
       await context.hooks.submissionConfirmed(conversationUrl);
@@ -1228,6 +1313,7 @@ export class AgentBrowserAutomation {
     state: InteractiveState | null,
   ): { reason: BrowserFailureReason } | null {
     if (state === null) return { reason: "ui_changed" };
+    if (state.hasRateLimit) return { reason: "rate_limited" };
     if (state.hasHumanChallenge) return { reason: "human_challenge" };
     if (state.hasAmbiguousDialog) return { reason: "ui_changed" };
     if (state.composerRefs.length === 0 && state.hasSignInControl) {
@@ -1262,6 +1348,7 @@ export class AgentBrowserAutomation {
           ? "timed_out" : "invalid_response", "submitted", conversationUrl);
       }
       const state = analyzeInteractiveState(snapshot.value);
+      if (state?.hasRateLimit) return recovery("rate_limited", "submitted", conversationUrl);
       if (state === null) return recovery("invalid_response", "submitted", conversationUrl);
       if (state.hasHumanChallenge) return recovery("human_challenge", "submitted", conversationUrl);
       if (state.hasAmbiguousDialog) return recovery("ui_changed", "submitted", conversationUrl);
@@ -1326,13 +1413,13 @@ export class AgentBrowserAutomation {
           return { kind: "completed", conversationUrl, responseText: second.value };
         }
         if (responseIsFinalButUnusable(second.value)) {
-          return recovery("invalid_response", "submitted", conversationUrl);
+          return recovery("invalid_response", "submitted", conversationUrl, second.value);
         }
         stableForeign = stableForeign !== null && stableForeign.text === second.value
           ? { text: second.value, pairs: stableForeign.pairs + 1 }
           : { text: second.value, pairs: 1 };
         if (stableForeign.pairs >= FINAL_ANSWER_STABLE_PAIRS) {
-          return recovery("invalid_response", "submitted", conversationUrl);
+          return recovery("invalid_response", "submitted", conversationUrl, second.value);
         }
       } else {
         stableForeign = null;
@@ -1409,6 +1496,7 @@ export class AgentBrowserAutomation {
   ): Promise<HeartbeatWatchOutcome> {
     let hintReadPromise: Promise<HeartbeatRaceResult> | null = null;
     let lastHintReadStartedAt = -Infinity;
+    let watchSettled = false;
     const drainHintRead = async (): Promise<void> => {
       if (hintReadPromise === null) return;
       await hintReadPromise;
@@ -1422,7 +1510,7 @@ export class AgentBrowserAutomation {
         hintReadPromise = this.attemptImmediateCompletionRead(input, context, conversationUrl)
           .then((text) => ({ kind: "hint_read" as const, text }));
       },
-    });
+    }).then((outcome) => { watchSettled = true; return outcome; });
     for (;;) {
       const untilDeadline = context.deadline - this.now();
       if (untilDeadline <= 0) {
@@ -1462,7 +1550,18 @@ export class AgentBrowserAutomation {
         await drainHintRead();
         return { kind: "deadline_exceeded" };
       }
+      if (!watchSettled && hintReadPromise === null && await this.hasRateLimitWarning(context, [conversationUrl])) {
+        await drainHintRead();
+        return { kind: "rate_limited" };
+      }
     }
+  }
+
+  private async hasRateLimitWarning(context: AutomationContext, allowedUrls: readonly (string | undefined)[]): Promise<boolean> {
+    const observed = await this.readObservedUrl(context);
+    if (observed.kind !== "ok" || observed.value.kind !== "page" || !allowedUrls.includes(observed.value.url)) return false;
+    const snapshot = await this.readSnapshot(context);
+    return snapshot.kind === "ok" && analyzeInteractiveState(snapshot.value)?.hasRateLimit === true;
   }
 
   private async collectResponseEventDriven(
@@ -1476,6 +1575,9 @@ export class AgentBrowserAutomation {
       return this.withPath(await this.collectResponse(input, context, conversationUrl, null), "polling");
     }
     const outcome = await this.watchTurnWithHeartbeat(input, context, client, conversationId, conversationUrl);
+    if (outcome.kind === "rate_limited") {
+      return this.withPath(recovery("rate_limited", "submitted", conversationUrl), "event");
+    }
     if (outcome.kind === "hint_recovered") {
       return this.withPath(
         { kind: "completed", conversationUrl, responseText: outcome.responseText },
@@ -1565,7 +1667,18 @@ export class AgentBrowserAutomation {
   }
 
   private async readSnapshot(context: AutomationContext): Promise<StepResult<Record<string, unknown>>> {
-    return this.command(context, ["snapshot", "-i"], SNAPSHOT_STDOUT_BYTES);
+    const snapshot = await this.command(context, ["snapshot", "-i"], SNAPSHOT_STDOUT_BYTES);
+    if (snapshot.kind === "failed" || analyzeInteractiveState(snapshot.value)?.hasRateLimit) return snapshot;
+    const refs = snapshot.value.refs;
+    if (typeof refs !== "object" || refs === null || !Object.values(refs).some((ref) =>
+      typeof ref === "object" && ref !== null && ref.role === "button"
+      && normalizeAccessibleName(ref.name) === "got it")) return snapshot;
+    const dialog = await this.command(context,
+      ["find", "first", '[role="dialog"],[role="alertdialog"]', "text"]);
+    if (dialog.kind === "ok" && normalizeAccessibleName(dialog.value.text)?.startsWith("too many requests")) {
+      return { kind: "ok", value: { ...snapshot.value, rateLimitDetected: true } };
+    }
+    return snapshot;
   }
 
   private async settleConversationResponse(
@@ -1647,7 +1760,7 @@ export class AgentBrowserAutomation {
     const remaining = context.deadline - this.now();
     const argv = [
       context.executable,
-      "--session", "chatgpt-consult",
+      "--session", context.sessionId,
       "--cdp", String(context.sessionPort),
       "--pin-tab",
       "--content-boundaries",

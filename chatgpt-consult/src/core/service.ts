@@ -14,17 +14,20 @@ import {
 import { basename, dirname, isAbsolute, join, normalize, relative } from "node:path";
 import { type ContextService } from "../context/selection";
 import { configuredRoot } from "../browser/cdp";
-import { formatChatgptHandoff, sanitizeChatgptUrl } from "../browser/handoff";
+import { conversationBelongsToProject, formatChatgptHandoff, sanitizeChatgptUrl } from "../browser/handoff";
 import { classifyPath } from "../security/policy";
 import type { ResolvedProject } from "../security/project";
 import { inspectTextClaimMaterial, redactCompletionClaimMaterial } from "./claim-material";
 import { ConsultError } from "./errors";
 import {
   CapabilityProfileSchema,
+  ChatModeSchema,
   CompletionSchema,
   LocalConfigSchema,
   resolveBudget,
   type CapabilityProfile,
+  type ChatMode,
+  type ChatThread,
   type BrowserFailureReason,
   type BrowserPhase,
   type ConsultationCompletion,
@@ -66,11 +69,13 @@ export interface StartInput {
   budget?: ContextBudgetOverride;
   parentId?: string | null;
   conversationUrl?: string | null;
+  thread?: ChatThread;
 }
 
 export interface FollowupInput extends Omit<StartInput, "profile" | "parentId"> {
   parentId: string;
   profile?: CapabilityProfile;
+  chatMode?: ChatMode;
 }
 
 export interface StartResult {
@@ -79,6 +84,7 @@ export interface StartResult {
   revision: number;
   claimToken: string;
   handoff: string;
+  thread?: ChatThread;
   browser?: BrowserStatus;
 }
 
@@ -98,6 +104,7 @@ export interface StatusResult {
   goal: string;
   profile: CapabilityProfile;
   parentId: string | null;
+  thread?: ChatThread;
   createdAt: string;
   updatedAt: string;
   expiresAt: string;
@@ -125,6 +132,7 @@ export interface OpenResult extends StatusResult {
 export interface ConsultationSummary extends StatusResult {}
 
 export interface ConsultationServiceOptions {
+  chatgptProjectUrl?: string;
   workerLauncher?: BrowserWorkerLauncher;
   now?: () => Date;
   beforePublicationCommit?: (directory: string) => Promise<void>;
@@ -140,6 +148,7 @@ export interface WaitStatusResult {
 }
 
 export const MAX_STATUS_WAIT_SECONDS = 50;
+export const MAX_CONVERSATION_REQUESTS = 6;
 const STATUS_WAIT_INTERVAL_MS = 1_000;
 
 const waitForInterval = (milliseconds: number, signal?: AbortSignal): Promise<void> =>
@@ -202,7 +211,7 @@ const atomicWrite = async (path: string, data: string, mode: number): Promise<vo
 
 const GLOBAL_CONFIG_FILE = "config.json";
 
-const readConfigFile = async (path: string, label: string): Promise<LocalConfig | null> => {
+const readConfigFile = async (path: string, label: string, projectUrlOverride?: string): Promise<LocalConfig | null> => {
   let text: string;
   try {
     const info = await lstat(path);
@@ -220,7 +229,9 @@ const readConfigFile = async (path: string, label: string): Promise<LocalConfig 
   } catch {
     throw new ConsultError("INVALID_INPUT", `${label} configuration is malformed JSON`);
   }
-  const parsed = LocalConfigSchema.safeParse(value);
+  const parsed = LocalConfigSchema.safeParse(projectUrlOverride !== undefined
+    && typeof value === "object" && value !== null && !Array.isArray(value)
+    ? { ...value, chatgptProjectUrl: projectUrlOverride } : value);
   if (!parsed.success) {
     throw new ConsultError("INVALID_INPUT", `${label} configuration does not match its schema`);
   }
@@ -232,7 +243,7 @@ const readConfigFile = async (path: string, label: string): Promise<LocalConfig 
   if (parsed.data.chatgptProjectUrl != null) {
     const canonical = sanitizeChatgptUrl(parsed.data.chatgptProjectUrl, "configured");
     if (canonical === null) {
-      throw new ConsultError("INVALID_INPUT", "Persisted project URL is not a valid ChatGPT endpoint");
+      throw new ConsultError("INVALID_INPUT", "chatgptProjectUrl must identify a ChatGPT Project on https://chatgpt.com");
     }
     if (canonical !== parsed.data.chatgptProjectUrl) {
       return { ...parsed.data, chatgptProjectUrl: canonical };
@@ -241,8 +252,8 @@ const readConfigFile = async (path: string, label: string): Promise<LocalConfig 
   return parsed.data;
 };
 
-const readExistingConfig = (project: ResolvedProject): Promise<LocalConfig | null> =>
-  readConfigFile(join(project.stateDir, "config.local.json"), "Local");
+const readExistingConfig = (project: ResolvedProject, projectUrlOverride?: string): Promise<LocalConfig | null> =>
+  readConfigFile(join(project.stateDir, "config.local.json"), "Local", projectUrlOverride);
 
 export const globalConfigPath = (
   environment: Readonly<Record<string, string | undefined>> = process.env,
@@ -250,6 +261,7 @@ export const globalConfigPath = (
 
 const readGlobalConfig = async (
   environment: Readonly<Record<string, string | undefined>>,
+  projectUrlOverride?: string,
 ): Promise<LocalConfig | null> => {
   let path: string;
   try {
@@ -257,20 +269,19 @@ const readGlobalConfig = async (
   } catch {
     return null;
   }
-  return readConfigFile(path, "Global");
+  return readConfigFile(path, "Global", projectUrlOverride);
 };
+
+const defaultLocalConfig = (): LocalConfig => ({
+  schemaVersion: 1, defaultProfile: "lean", connectorAllowlist: [], budget: {},
+});
 
 export const readLocalConfig = async (
   project: ResolvedProject,
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<LocalConfig> => {
   const existing = await readExistingConfig(project) ?? await readGlobalConfig(environment);
-  return existing ?? LocalConfigSchema.parse({
-    schemaVersion: 1,
-    defaultProfile: "lean",
-    connectorAllowlist: [],
-    budget: {},
-  });
+  return existing ?? defaultLocalConfig();
 };
 
 export const configureBrowserCdp = async (
@@ -318,28 +329,24 @@ const ensureIgnoreLine = async (project: ResolvedProject): Promise<void> => {
 export const initializeProject = async (
   project: ResolvedProject,
   input: InitializeProjectInput,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<{ stateDir: string; configPath?: string }> => {
   let canonicalUrl: string | undefined;
   if (input.chatgptProjectUrl !== undefined) {
     const sanitized = sanitizeChatgptUrl(input.chatgptProjectUrl, "configured");
     if (sanitized === null) {
-      throw new ConsultError("INVALID_INPUT", "Project URL is not a valid ChatGPT endpoint");
+      throw new ConsultError("INVALID_INPUT", "chatgptProjectUrl must identify a ChatGPT Project on https://chatgpt.com");
     }
     canonicalUrl = sanitized;
   }
   await RequestStore.init(project);
   await ensureIgnoreLine(project);
-  const existing = await readExistingConfig(project);
+  const existing = await readExistingConfig(project, canonicalUrl);
   if (!existing && canonicalUrl === undefined) {
     return { stateDir: ".chatgpt-consult" };
   }
   const value = {
-    ...(existing ?? {
-      schemaVersion: 1 as const,
-      defaultProfile: "lean" as const,
-      connectorAllowlist: [],
-      budget: {},
-    }),
+    ...(existing ?? await readGlobalConfig(environment, canonicalUrl) ?? defaultLocalConfig()),
     ...(canonicalUrl === undefined
       ? {}
       : { chatgptProjectUrl: canonicalUrl }),
@@ -397,6 +404,7 @@ const publicStatus = (
   goal: request.goal,
   profile: request.profile,
   parentId: request.parentId,
+  ...(request.thread === undefined ? {} : { thread: request.thread }),
   createdAt: request.createdAt,
   updatedAt: request.updatedAt,
   expiresAt: request.expiresAt,
@@ -557,6 +565,7 @@ export class ConsultationService {
   private readonly now: () => Date;
   private readonly beforePublicationCommit: ((directory: string) => Promise<void>) | undefined;
   private readonly wait: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+  private readonly chatgptProjectUrl: string | undefined;
 
   constructor(
     project: ResolvedProject,
@@ -565,6 +574,11 @@ export class ConsultationService {
     options: ConsultationServiceOptions = {},
   ) {
     this.project = Object.freeze({ ...project });
+    if (options.chatgptProjectUrl !== undefined
+      && sanitizeChatgptUrl(options.chatgptProjectUrl, "configured") !== options.chatgptProjectUrl) {
+      throw new ConsultError("INVALID_INPUT", "chatgptProjectUrl must be a canonical ChatGPT Project URL");
+    }
+    this.chatgptProjectUrl = options.chatgptProjectUrl;
     this.store = store;
     this.context = context;
     this.workerLauncher = options.workerLauncher ?? new UnavailableBrowserWorkerLauncher();
@@ -590,6 +604,11 @@ export class ConsultationService {
       throw new ConsultError("INVALID_INPUT", "Request budget is invalid or exceeds a hard ceiling");
     }
     const idempotencyKey = validateIdempotencyKey(input.idempotencyKey ?? randomUUID());
+    const existing = input.idempotencyKey === undefined ? null : await this.store.findByIdempotencyKey(idempotencyKey);
+    const thread = input.thread ?? (existing !== null ? existing.thread : this.chatgptProjectUrl === undefined ? undefined : {
+      projectUrl: this.chatgptProjectUrl, mode: "new" as const,
+      requestedMode: "new" as const, reason: "initial" as const, turn: 1,
+    });
 
     const built = await this.context.build({
       goal: input.goal,
@@ -629,6 +648,7 @@ export class ConsultationService {
       profile: profile.data,
       parentId: input.parentId ?? null,
       conversationUrl: input.conversationUrl ?? null,
+      ...(thread === undefined ? {} : { thread }),
       idempotencyKey,
       budget,
       contextManifest: {
@@ -649,6 +669,7 @@ export class ConsultationService {
       revision: created.request.revision,
       claimToken: created.claimToken,
       handoff: formatChatgptHandoff(created.request.id, created.claimToken),
+      ...(created.request.thread === undefined ? {} : { thread: created.request.thread }),
     };
     if (input.open) {
       request = await this.store.queueBrowserExecution(created.request.id);
@@ -698,6 +719,62 @@ export class ConsultationService {
 
   async followup(input: FollowupInput): Promise<StartResult> {
     const parent = await this.store.get(input.parentId);
+    const requestedMode = ChatModeSchema.safeParse(input.chatMode ?? "auto");
+    if (!requestedMode.success) throw new ConsultError("INVALID_INPUT", "chat_mode must be auto, new, or continue");
+    const projectUrl = parent.thread?.projectUrl ?? this.chatgptProjectUrl;
+    if (projectUrl !== undefined) {
+      if (input.open && parent.state !== "completed") {
+        throw new ConsultError("CONFLICT", "Complete the parent consultation before starting a follow-up");
+      }
+      const create = async () => {
+        const existing = input.idempotencyKey === undefined ? null
+          : await this.store.findByIdempotencyKey(validateIdempotencyKey(input.idempotencyKey));
+        let thread: ChatThread | undefined;
+        if (existing !== null && existing.thread === undefined && requestedMode.data === "auto") {
+          thread = undefined;
+        } else if (existing?.thread && existing.thread.requestedMode === requestedMode.data) {
+          thread = existing.thread;
+        } else {
+          const sameProject = parent.conversationUrl !== null
+            && conversationBelongsToProject(parent.conversationUrl, projectUrl);
+          if (requestedMode.data === "continue" && !sameProject) {
+            throw new ConsultError("CONFLICT", "Continuing requires a proven conversation inside the configured ChatGPT Project; use chat_mode new");
+          }
+          const count = sameProject ? await this.store.countConversationRequests(parent.conversationUrl!) : 0;
+          const reason = requestedMode.data === "new" ? "requested"
+            : parent.conversationUrl === null ? "no_conversation"
+              : !sameProject ? "outside_project"
+                : requestedMode.data === "auto" && count >= MAX_CONVERSATION_REQUESTS ? "turn_limit"
+                  : "continuation";
+          thread = {
+            projectUrl, requestedMode: requestedMode.data,
+            mode: reason === "continuation" ? "continue" : "new", reason,
+            turn: reason === "continuation" ? count + 1 : 1,
+          };
+        }
+        const continues = thread?.mode !== "new";
+        if (input.open && continues) {
+          if (parent.conversationUrl === null) throw new ConsultError("CONFLICT", "Automatic follow-up requires a proven parent conversation URL");
+          await this.store.assertBrowserConversationAvailable(parent.conversationUrl, {
+            ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+          });
+        }
+        return this.start({
+          ...input, profile: input.profile ?? parent.profile, parentId: parent.id,
+          ...(thread === undefined ? {} : { thread }),
+          conversationUrl: continues ? parent.conversationUrl : null,
+          connectors: input.connectors ?? ((input.profile ?? parent.profile) === "connected" ? parent.connectorAllowlist : []),
+        });
+      };
+      return requestedMode.data === "new" ? create()
+        : this.store.withBrowserConversation(parent.conversationUrl, {
+            allowBusy: true,
+            ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+          }, create);
+    }
+    if (requestedMode.data !== "auto") {
+      throw new ConsultError("INVALID_INPUT", "Configure a ChatGPT Project URL before selecting chat_mode");
+    }
     if (input.open && parent.conversationUrl === null) {
       throw new ConsultError(
         "CONFLICT",
@@ -705,7 +782,7 @@ export class ConsultationService {
       );
     }
     const profile = input.profile ?? parent.profile;
-    return this.start({
+    const start = () => this.start({
       ...input,
       profile,
       parentId: parent.id,
@@ -713,6 +790,11 @@ export class ConsultationService {
       connectors: input.connectors
         ?? (profile === "connected" ? parent.connectorAllowlist : []),
     });
+    return input.open
+      ? this.store.withBrowserConversation(parent.conversationUrl, {
+          ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+        }, start)
+      : start();
   }
 
   async cancel(id: string): Promise<StatusResult> {
@@ -789,13 +871,15 @@ export class ConsultationService {
       || request.state === "expired") {
       throw new ConsultError("CONFLICT", `Cannot resume a ${request.state} request`);
     }
-    await this.store.queueBrowserExecution(id);
-    const resumed = await this.launchWorker(id);
-    const status = publicStatus(resumed, await this.store.getCompletion(id), this.now());
-    if (!status.browser) {
-      throw new ConsultError("INTERNAL", "Browser execution state is unavailable");
-    }
-    return { ...status, browser: status.browser };
+    return this.store.withBrowserConversation(request.conversationUrl, { requestId: id }, async () => {
+      await this.store.queueBrowserExecution(id);
+      const resumed = await this.launchWorker(id);
+      const status = publicStatus(resumed, await this.store.getCompletion(id), this.now());
+      if (!status.browser) {
+        throw new ConsultError("INTERNAL", "Browser execution state is unavailable");
+      }
+      return { ...status, browser: status.browser };
+    });
   }
 
   private async launchWorker(id: string): Promise<ConsultationRequest> {

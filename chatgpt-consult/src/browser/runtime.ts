@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 import { isAbsolute } from "node:path";
 import { AgentBrowserAutomation } from "./agent-browser.js";
 import { CdpPageClient } from "./cdp-page.js";
+import { configuredRoot } from "./cdp.js";
+import { BrowserRateLimitGate } from "./rate-limit.js";
 import { BrowserSessionManager } from "./session.js";
 import { BrowserJob } from "./worker.js";
 import { ContextService } from "../context/selection.js";
@@ -346,6 +348,7 @@ export const createBrowserRuntime = async (
   });
   const automation = options.automation ?? new AgentBrowserAutomation({
     cdpPageClientFactory: (input) => new CdpPageClient(input),
+    rateLimitGate: new BrowserRateLimitGate(configuredRoot(process.env)),
   });
   const job = new BrowserJob({
     project,

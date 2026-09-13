@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { randomBytes } from "node:crypto";
+import { createAutomationSessionId } from "../src/browser/agent-browser";
+import { CdpPageClient } from "../src/browser/cdp-page";
 import { constants as fsConstants } from "node:fs";
 import {
   access,
@@ -34,11 +35,6 @@ const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => { setTimeout(resolve, ms); });
 
 const monotonicNow = (): number => performance.now();
-
-interface MinimalView {
-  cdp(method: string, params?: Record<string, unknown>): Promise<unknown>;
-  close(): void;
-}
 
 async function findChrome(): Promise<string | null> {
   const candidates: string[] = [];
@@ -218,51 +214,6 @@ function assertPidLive(pid: number): void {
   }
 }
 
-async function cdpWithDeadline(
-  view: MinimalView,
-  method: string,
-  params: Record<string, unknown> | undefined,
-  capMs: number,
-  deadline: number,
-): Promise<unknown> {
-  if (monotonicNow() >= deadline) throw new Error(`${method} pre-deadline`);
-  const remaining = deadline - monotonicNow();
-  const effective = Math.min(capMs, remaining);
-  if (effective <= 0) throw new Error(`${method} deadline`);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => { reject(new Error(`${method} deadline`)); }, effective);
-  });
-  void timeout.catch(() => {});
-  try {
-    const result = await Promise.race([view.cdp(method, params), timeout]);
-    if (monotonicNow() >= deadline) throw new Error(`${method} post-deadline`);
-    return result;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
-async function waitForFrameUrl(
-  view: MinimalView,
-  fixtureUrl: string,
-  deadline: number,
-): Promise<void> {
-  while (monotonicNow() < deadline) {
-    const remaining = deadline - monotonicNow();
-    if (remaining <= 0) break;
-    const cap = Math.min(CDP_TIMEOUT_MS, remaining);
-    const raw = await cdpWithDeadline(view, "Page.getFrameTree", {}, cap, deadline);
-    const frameResult = raw as { frameTree?: { frame?: { url?: unknown } } };
-    const frameUrl = frameResult?.frameTree?.frame?.url;
-    if (frameUrl === fixtureUrl) return;
-    const pollRemaining = deadline - monotonicNow();
-    if (pollRemaining <= 0) break;
-    await sleep(Math.min(POLL_INTERVAL_MS, pollRemaining));
-  }
-  throw new Error("Frame URL did not match fixture before deadline");
-}
-
 async function runAgentBrowserBounded(
   argv: string[],
   env: Record<string, string>,
@@ -271,6 +222,7 @@ async function runAgentBrowserBounded(
 ): Promise<{ status: number; output: string }> {
   if (monotonicNow() >= deadline) throw new Error("pre-command deadline");
   const remaining = deadline - monotonicNow();
+  process.stderr.write(`browser-smoke command=${argv.slice(argv.indexOf("--json") + 1).join(" ")}\n`);
   const child = Bun.spawn(argv, {
     cwd,
     stdin: "ignore",
@@ -285,11 +237,12 @@ async function runAgentBrowserBounded(
       kill: (signal: "SIGTERM" | "SIGKILL") => { child.kill(signal); },
     },
     {
-      timeoutMs: remaining,
+      timeoutMs: Math.min(remaining, 15000),
       maximumBytes: STDOUT_MAX_BYTES,
       cleanupTimeoutMs: AB_CLEANUP_TIMEOUT_MS,
     },
   );
+  process.stderr.write(`browser-smoke command status=${result.status}\n`);
   if (monotonicNow() >= deadline) throw new Error("post-command deadline");
   return result;
 }
@@ -323,7 +276,7 @@ describe.skipIf(!OPT_IN)("browser smoke", () => {
       let root: string | undefined;
       let chromeChild: Bun.Subprocess | undefined;
       let server: Bun.Server<undefined> | undefined;
-      let view: MinimalView | undefined;
+      let view: CdpPageClient | undefined;
       let abInvoked = false;
       let sessionClosed = false;
       let chromeReaped = false;
@@ -336,7 +289,7 @@ describe.skipIf(!OPT_IN)("browser smoke", () => {
         const deadline = monotonicNow() + 115_000;
 
         // 1. Temp root + dedicated profile
-        root = await mkdtemp(join(tmpdir(), "browser-smoke-"));
+        root = await mkdtemp(join(process.platform === "darwin" ? "/tmp" : tmpdir(), "browser-smoke-"));
         await chmod(root, 0o700);
         const profileDir = join(root, "profile");
         await mkdir(profileDir, { mode: 0o700 });
@@ -370,6 +323,7 @@ describe.skipIf(!OPT_IN)("browser smoke", () => {
           `--user-data-dir=${profileDir}`,
           "--no-first-run",
           "--no-default-browser-check",
+          "--use-mock-keychain",
           "about:blank",
         ], { stdout: "ignore", stderr: "ignore", env: chromeEnv });
         const chromePid = chromeChild.pid;
@@ -410,25 +364,6 @@ describe.skipIf(!OPT_IN)("browser smoke", () => {
         if (fixturePort === undefined) throw new Error("fixture port unavailable");
         const fixtureUrl = `http://127.0.0.1:${fixturePort}/`;
 
-        // 7. WebView attachment
-        const g = globalThis as Record<string, unknown>;
-        const BunNS = g.Bun as Record<string, unknown> | undefined;
-        type WebViewFactory = new (opts: Record<string, unknown>) => MinimalView;
-        const WebViewCtor = (BunNS?.WebView as WebViewFactory | undefined);
-        if (typeof WebViewCtor !== "function") {
-          throw new Error("Bun.WebView is not available in this build");
-        }
-        view = new WebViewCtor({
-          backend: { type: "chrome", url: webSocketUrl },
-          url: fixtureUrl,
-        });
-
-        await cdpWithDeadline(view, "Page.enable", {}, CDP_TIMEOUT_MS, deadline);
-        await waitForFrameUrl(view, fixtureUrl, deadline);
-
-        // Chrome PID alive after WebView attachment
-        assertPidLive(chromePid);
-
         // 8. agent-browser attachment
         const abExe = Bun.which("agent-browser");
         if (abExe === null) {
@@ -454,7 +389,7 @@ describe.skipIf(!OPT_IN)("browser smoke", () => {
         abHome = abHomePath;
         abConfig = abConfigPath;
 
-        const sid = randomBytes(16).toString("hex");
+        const sid = createAutomationSessionId();
         sessionId = sid;
         abPort = activePort.port;
         const globalArgs = [
@@ -503,9 +438,12 @@ describe.skipIf(!OPT_IN)("browser smoke", () => {
         expect(urlResult.status).toBe(0);
         expect(parseGetUrlEnvelope(urlResult.output, fixtureUrl)).toBe(true);
 
-        // Both WebView and agent-browser attached via the same CDP port
-        // that was written by the directly spawned Chrome child (chromePid).
-        // Verify the child is still alive after both attachments.
+        const targetId = openData?.targetId;
+        expect(typeof targetId).toBe("string");
+        view = new CdpPageClient({ port: activePort.port, targetId: targetId as string });
+        await view.connect();
+        await view.send("Page.enable");
+        await view.send("Network.enable");
         assertPidLive(chromePid);
 
         // Invoke bounded close for exact session
@@ -516,14 +454,17 @@ describe.skipIf(!OPT_IN)("browser smoke", () => {
             abHomePath,
             deadline,
           );
-          if (closeResult.status === 0) sessionClosed = true;
+          if (closeResult.status === 0) {
+            sessionClosed = true;
+            assertPidLive(chromePid);
+          }
         } catch {
           // close failed, will retry in cleanup
         }
       } finally {
-        // Close WebView at most once
+        // Close the production page collector at most once
         if (view) {
-          try { view.close(); } catch { /* swallow */ }
+          try { await view.close(); } catch { /* swallow */ }
         }
         // Stop fixture server
         if (server) {

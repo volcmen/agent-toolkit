@@ -188,7 +188,7 @@ afterEach(async () => {
 describe("no-account end-to-end consultation", () => {
   test("runs the automatic browser lifecycle through only the six local MCP tools", async () => {
     const configuredProjectUrl = "https://chatgpt.com/g/g-p-browser-e2e/project";
-    const conversationUrl = "https://chatgpt.com/c/browser-e2e-conversation";
+    const conversationUrl = "https://chatgpt.com/g/g-p-browser-e2e/c/browser-e2e-conversation";
     const automationCalls: Array<{
       requestId: string;
       targetUrl: string;
