@@ -23,7 +23,7 @@ private func chrome(pid: Int32 = 41, arguments: [String]? = nil) -> ProcessObser
         executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         arguments: arguments ?? [
             "--remote-debugging-address=127.0.0.1",
-            "--remote-debugging-port=9333",
+            "--remote-debugging-port=9222",
             "--user-data-dir=/Users/tester/chrome-cdp-profile",
             "--no-first-run",
             "--no-default-browser-check"
@@ -31,11 +31,11 @@ private func chrome(pid: Int32 = 41, arguments: [String]? = nil) -> ProcessObser
     )
 }
 
-private func listener(pid: Int32? = 41, address: String = "127.0.0.1", port: UInt16 = 9333) -> ListenerBinding {
+private func listener(pid: Int32? = 41, address: String = "127.0.0.1", port: UInt16 = 9222) -> ListenerBinding {
     ListenerBinding(pid: pid, address: address, port: port)
 }
 
-private func healthyEndpoint(pages: Int = 1, host: String = "127.0.0.1", port: Int = 9333) -> EndpointObservation {
+private func healthyEndpoint(pages: Int = 1, host: String = "127.0.0.1", port: Int = 9222) -> EndpointObservation {
     .healthy(
         webSocketURL: URL(string: "ws://\(host):\(port)/devtools/browser/example")!,
         pageTargetCount: pages
@@ -45,7 +45,7 @@ private func healthyEndpoint(pages: Int = 1, host: String = "127.0.0.1", port: I
 private func wrongProfileChrome(arguments: [String]? = nil) -> ProcessObservation {
     chrome(arguments: arguments ?? [
         "--remote-debugging-address=127.0.0.1",
-        "--remote-debugging-port=9333",
+        "--remote-debugging-port=9222",
         "--user-data-dir=/Users/tester/other-profile",
         "--no-first-run",
         "--no-default-browser-check"
@@ -140,17 +140,17 @@ func launcherClassifierHealthyExpectedChromeWithPagesReusesWithoutBlankTargetTes
 }
 
 func launcherClassifierKnownForeignListenerFailsTest() throws {
-    try expectEqual(classify(listeners: [listener(pid: 72)]), .fail(.foreignListener(pid: 72, port: 9333)))
+    try expectEqual(classify(listeners: [listener(pid: 72)]), .fail(.foreignListener(pid: 72, port: 9222)))
 }
 
 func launcherClassifierUnknownForeignListenerFailsTest() throws {
-    try expectEqual(classify(listeners: [listener(pid: nil)]), .fail(.foreignListener(pid: nil, port: 9333)))
+    try expectEqual(classify(listeners: [listener(pid: nil)]), .fail(.foreignListener(pid: nil, port: 9222)))
 }
 
 func launcherClassifierNonLoopbackListenerFailsTest() throws {
     try expectEqual(
         classify(listeners: [listener(address: "0.0.0.0")]),
-        .fail(.nonLoopbackListener(address: "0.0.0.0", port: 9333))
+        .fail(.nonLoopbackListener(address: "0.0.0.0", port: 9222))
     )
 }
 
@@ -161,14 +161,14 @@ func launcherClassifierUnsafeBindingInMultipleListenersFailsFirstTest() throws {
             listeners: [listener(), listener(pid: 77, address: "::1")],
             endpoint: healthyEndpoint()
         ),
-        .fail(.nonLoopbackListener(address: "::1", port: 9333))
+        .fail(.nonLoopbackListener(address: "::1", port: 9222))
     )
 }
 
 func launcherClassifierListenerPIDMismatchFailsTest() throws {
     try expectEqual(
         classify(processes: [chrome()], listeners: [listener(pid: 73)], endpoint: healthyEndpoint()),
-        .fail(.foreignListener(pid: 73, port: 9333))
+        .fail(.foreignListener(pid: 73, port: 9222))
     )
 }
 
@@ -189,7 +189,7 @@ func launcherClassifierWrongProfileChromeFailsTest() throws {
 func launcherClassifierWrongProfileChromeWithEqualDuplicatesFailsTest() throws {
     let process = wrongProfileChrome(arguments: [
         "--remote-debugging-address=127.0.0.1",
-        "--remote-debugging-port=9333",
+        "--remote-debugging-port=9222",
         "--user-data-dir=/Users/tester/other-profile",
         "--user-data-dir", "/Users/tester/other-profile",
         "--no-first-run",
@@ -204,7 +204,7 @@ func launcherClassifierWrongProfileChromeWithEqualDuplicatesFailsTest() throws {
 func launcherClassifierWrongProfileChromeWithDisagreeingDuplicatesIsForeignTest() throws {
     let process = wrongProfileChrome(arguments: [
         "--remote-debugging-address=127.0.0.1",
-        "--remote-debugging-port=9333",
+        "--remote-debugging-port=9222",
         "--user-data-dir=/Users/tester/other-profile",
         "--user-data-dir", "/Users/tester/another-profile",
         "--no-first-run",
@@ -212,13 +212,13 @@ func launcherClassifierWrongProfileChromeWithDisagreeingDuplicatesIsForeignTest(
     ])
     try expectEqual(
         classify(processes: [process], listeners: [listener()], endpoint: healthyEndpoint()),
-        .fail(.foreignListener(pid: 41, port: 9333))
+        .fail(.foreignListener(pid: 41, port: 9222))
     )
 }
 
 func launcherClassifierDedicatedProfileMissingAddressFailsTest() throws {
     let process = chrome(arguments: [
-        "--remote-debugging-port=9333",
+        "--remote-debugging-port=9222",
         "--user-data-dir=/Users/tester/chrome-cdp-profile",
         "--no-first-run",
         "--no-default-browser-check"
@@ -274,7 +274,7 @@ func launcherClassifierWrongProfilePrecedesForeignListenerTest() throws {
 func launcherClassifierPairedArgumentsAreExpectedTest() throws {
     let process = chrome(arguments: [
         "--remote-debugging-address", "127.0.0.1",
-        "--remote-debugging-port", "9333",
+        "--remote-debugging-port", "9222",
         "--user-data-dir", "/Users/tester/chrome-cdp-profile",
         "--no-first-run",
         "--no-default-browser-check"
@@ -289,8 +289,8 @@ func launcherClassifierEqualArgumentDuplicatesAreExpectedTest() throws {
     let process = chrome(arguments: [
         "--remote-debugging-address=127.0.0.1",
         "--remote-debugging-address", "127.0.0.1",
-        "--remote-debugging-port=9333",
-        "--remote-debugging-port", "9333",
+        "--remote-debugging-port=9222",
+        "--remote-debugging-port", "9222",
         "--user-data-dir=/Users/tester/chrome-cdp-profile",
         "--user-data-dir", "/Users/tester/chrome-cdp-profile",
         "--no-first-run",
@@ -306,7 +306,7 @@ func launcherClassifierDisagreeingAddressDuplicatesFailTest() throws {
     let process = chrome(arguments: [
         "--remote-debugging-address=127.0.0.1",
         "--remote-debugging-address", "0.0.0.0",
-        "--remote-debugging-port=9333",
+        "--remote-debugging-port=9222",
         "--user-data-dir=/Users/tester/chrome-cdp-profile",
         "--no-first-run",
         "--no-default-browser-check"
@@ -320,7 +320,7 @@ func launcherClassifierDisagreeingAddressDuplicatesFailTest() throws {
 func launcherClassifierDisagreeingPortDuplicatesFailTest() throws {
     let process = chrome(arguments: [
         "--remote-debugging-address=127.0.0.1",
-        "--remote-debugging-port=9333",
+        "--remote-debugging-port=9222",
         "--remote-debugging-port", "9223",
         "--user-data-dir=/Users/tester/chrome-cdp-profile",
         "--no-first-run",
@@ -335,7 +335,7 @@ func launcherClassifierDisagreeingPortDuplicatesFailTest() throws {
 func launcherClassifierDisagreeingDedicatedProfileDuplicatesFailTest() throws {
     let process = chrome(arguments: [
         "--remote-debugging-address=127.0.0.1",
-        "--remote-debugging-port=9333",
+        "--remote-debugging-port=9222",
         "--user-data-dir=/Users/tester/chrome-cdp-profile",
         "--user-data-dir", "/Users/tester/other-profile",
         "--no-first-run",

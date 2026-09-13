@@ -1,3 +1,4 @@
+import ChromeCDPCore
 @_spi(Testing) import ChromeCDPMac
 import ChromeCDPTestSupport
 import Darwin
@@ -196,6 +197,26 @@ func processInspectorSkipsProtectedProcessWhoseKernelArgumentsAreUnavailableTest
     try expectEqual(try inspector.inspect(), [])
 }
 
+func processInspectorSkipsProcessWhoseExecutablePathIsUnresolvableTest() throws {
+    // proc_pidpath reports ENOENT for live processes whose executable image is no
+    // longer resolvable; such a process can never match the validated Chrome path.
+    let inspector = ProcessInspector(
+        candidatePIDs: { [41, 42] },
+        executablePath: { pid in
+            if pid == 41 {
+                throw POSIXError(.ENOENT)
+            }
+            return "/bin/example"
+        },
+        argumentData: { _ in kernelArgumentsFixture(executable: "/bin/example", arguments: ["example"]) }
+    )
+
+    try expectEqual(
+        try inspector.inspect(),
+        [ProcessObservation(pid: 42, executablePath: "/bin/example", arguments: ["example"])]
+    )
+}
+
 private func expectProcessArgumentParseFailure(_ operation: () throws -> Void) throws {
     do {
         try operation()
@@ -223,6 +244,7 @@ func processInspectorTests() throws {
     try processInspectorSkipsVanishedPIDButRejectsAccessibleMalformedArgumentsTest()
     try processInspectorReadsCurrentExecutablePathTest()
     try processInspectorSkipsProtectedProcessWhoseKernelArgumentsAreUnavailableTest()
+    try processInspectorSkipsProcessWhoseExecutablePathIsUnresolvableTest()
 }
 
 func registerProcessInspectorTests(_ runner: inout TestRunner) {
@@ -242,4 +264,5 @@ func registerProcessInspectorTests(_ runner: inout TestRunner) {
     runner.register("ProcessInspectorTests.SkipsVanishedPIDButRejectsAccessibleMalformedArguments", processInspectorSkipsVanishedPIDButRejectsAccessibleMalformedArgumentsTest)
     runner.register("ProcessInspectorTests.ReadsCurrentExecutablePath", processInspectorReadsCurrentExecutablePathTest)
     runner.register("ProcessInspectorTests.SkipsProtectedProcessWhoseKernelArgumentsAreUnavailable", processInspectorSkipsProtectedProcessWhoseKernelArgumentsAreUnavailableTest)
+    runner.register("ProcessInspectorTests.SkipsProcessWhoseExecutablePathIsUnresolvable", processInspectorSkipsProcessWhoseExecutablePathIsUnresolvableTest)
 }

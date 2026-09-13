@@ -252,6 +252,9 @@ public struct ProcessInspector: Sendable {
 
     private static func isGoneOrInaccessible(_ error: Error) -> Bool {
         guard let posix = error as? POSIXError else { return false }
-        return posix.code == .ESRCH || posix.code == .EPERM || posix.code == .EACCES || posix.code == .EINVAL
+        // ENOENT: proc_pidpath cannot resolve the executable image of a live process
+        // (deleted or replaced on disk), so it can never match the validated Chrome path.
+        return posix.code == .ESRCH || posix.code == .EPERM || posix.code == .EACCES
+            || posix.code == .EINVAL || posix.code == .ENOENT
     }
 }

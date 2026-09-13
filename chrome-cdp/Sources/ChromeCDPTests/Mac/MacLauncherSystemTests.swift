@@ -77,7 +77,7 @@ func macLauncherSystemUsesExactOpenCommandTest() throws {
     try expectEqual(command.1, [
         "-na", "Google Chrome", "--args",
         "--remote-debugging-address=127.0.0.1",
-        "--remote-debugging-port=9333",
+        "--remote-debugging-port=9222",
         "--user-data-dir=/Users/tester/chrome-cdp-profile",
         "--no-first-run",
         "--no-default-browser-check"
@@ -129,9 +129,9 @@ func macLauncherSystemMapsActivationRefusalTest() throws {
 func macLauncherSystemComposesSnapshotTest() throws {
     let profile = ProfileObservation.valid(mode: 0o700)
     let processes = [ProcessObservation(pid: 71, executablePath: "/chrome", arguments: ["Chrome"])]
-    let listeners = [ListenerBinding(pid: 71, address: "127.0.0.1", port: 9333)]
+    let listeners = [ListenerBinding(pid: 71, address: "127.0.0.1", port: 9222)]
     let endpoint = EndpointObservation.healthy(
-        webSocketURL: URL(string: "ws://127.0.0.1:9333/devtools/browser/id")!,
+        webSocketURL: URL(string: "ws://127.0.0.1:9222/devtools/browser/id")!,
         pageTargetCount: 1
     )
     let system = makeMacSystem(
@@ -151,6 +151,45 @@ func macLauncherSystemComposesSnapshotTest() throws {
         listeners: listeners,
         endpoint: endpoint
     ))
+}
+
+private final class SnapshotStageRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stages: [String] = []
+
+    func record(_ stage: String) {
+        lock.withLock { stages.append(stage) }
+    }
+
+    func recorded() -> [String] {
+        lock.withLock { stages }
+    }
+}
+
+func macLauncherSystemSamplesListenersBeforeProcessesTest() throws {
+    // Chrome that starts mid-snapshot must be observable as a process without a
+    // listener (retryable) rather than a listener without a process (hard failure).
+    let recorder = SnapshotStageRecorder()
+    let system = makeMacSystem(
+        inspectProfile: { _ in
+            recorder.record("profile")
+            return .valid(mode: 0o700)
+        },
+        inspectProcesses: {
+            recorder.record("processes")
+            return []
+        },
+        inspectListeners: { _ in
+            recorder.record("listeners")
+            return []
+        }
+    )
+
+    let _: SystemSnapshot = try awaitValue {
+        try await system.snapshot(configuration: macSystemConfiguration)
+    }
+
+    try expectEqual(recorder.recorded(), ["profile", "listeners", "processes"])
 }
 
 func macLauncherSystemMapsObservationErrorsTest() throws {
@@ -381,6 +420,7 @@ func macLauncherSystemTests() throws {
     try macLauncherSystemActivatesOnlyExactPIDTest()
     try macLauncherSystemMapsActivationRefusalTest()
     try macLauncherSystemComposesSnapshotTest()
+    try macLauncherSystemSamplesListenersBeforeProcessesTest()
     try macLauncherSystemMapsObservationErrorsTest()
     try macLauncherSystemMapsTargetErrorsTest()
     try macLauncherSystemPropagatesTargetCancellationTest()
@@ -398,7 +438,8 @@ func registerMacLauncherSystemTests(_ runner: inout TestRunner) {
     runner.register("MacLauncherSystemTests.ActivatesOnlyExactPID", macLauncherSystemActivatesOnlyExactPIDTest)
     runner.register("MacLauncherSystemTests.MapsActivationRefusal", macLauncherSystemMapsActivationRefusalTest)
     runner.register("MacLauncherSystemTests.ComposesSnapshot", macLauncherSystemComposesSnapshotTest)
-    runner.register("MacLauncherSystemTests.MapsObservationErrors", macLauncherSystemMapsObservationErrorsTest)
+    runner.register("MacLauncherSystemTests.SamplesListenersBeforeProcesses", macLauncherSystemSamplesListenersBeforeProcessesTest)
+runner.register("MacLauncherSystemTests.MapsObservationErrors", macLauncherSystemMapsObservationErrorsTest)
     runner.register("MacLauncherSystemTests.MapsTargetErrors", macLauncherSystemMapsTargetErrorsTest)
     runner.register("MacLauncherSystemTests.PropagatesTargetCancellation", macLauncherSystemPropagatesTargetCancellationTest)
     runner.register("MacLauncherSystemTests.MapsUnsafeProfilePreparation", macLauncherSystemMapsUnsafeProfilePreparationTest)

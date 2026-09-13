@@ -217,7 +217,7 @@ private func expectedProcess(pid: Int32) -> ProcessObservation {
         arguments: [
             "--user-data-dir=\(runnerConfiguration.profileURL.path)",
             "--remote-debugging-address=127.0.0.1",
-            "--remote-debugging-port=9333",
+            "--remote-debugging-port=9222",
             "--no-first-run",
             "--no-default-browser-check",
         ]
@@ -236,7 +236,7 @@ private func snapshot(
 private func startingSnapshot(pid: Int32, failure: EndpointFailure = .unavailable) -> SystemSnapshot {
     snapshot(
         processes: [expectedProcess(pid: pid)],
-        listeners: [ListenerBinding(pid: pid, address: "127.0.0.1", port: 9333)],
+        listeners: [ListenerBinding(pid: pid, address: "127.0.0.1", port: 9222)],
         endpoint: failure == .unavailable ? .unavailable : .invalid(failure)
     )
 }
@@ -244,9 +244,9 @@ private func startingSnapshot(pid: Int32, failure: EndpointFailure = .unavailabl
 private func readySnapshot(pid: Int32, pageCount: Int = 1) -> SystemSnapshot {
     snapshot(
         processes: [expectedProcess(pid: pid)],
-        listeners: [ListenerBinding(pid: pid, address: "127.0.0.1", port: 9333)],
+        listeners: [ListenerBinding(pid: pid, address: "127.0.0.1", port: 9222)],
         endpoint: .healthy(
-            webSocketURL: URL(string: "ws://127.0.0.1:9333/devtools/browser/test")!,
+            webSocketURL: URL(string: "ws://127.0.0.1:9222/devtools/browser/test")!,
             pageTargetCount: pageCount
         )
     )
@@ -491,19 +491,19 @@ func launcherRunnerConflictsProduceNoBrowserEffectsTest() throws {
     )
     let conflicts: [SystemSnapshot] = [
         snapshot(profile: .symlink),
-        snapshot(listeners: [ListenerBinding(pid: 401, address: "127.0.0.1", port: 9333)]),
-        snapshot(listeners: [ListenerBinding(pid: 401, address: "0.0.0.0", port: 9333)]),
+        snapshot(listeners: [ListenerBinding(pid: 401, address: "127.0.0.1", port: 9222)]),
+        snapshot(listeners: [ListenerBinding(pid: 401, address: "0.0.0.0", port: 9222)]),
         snapshot(
             processes: [wrongProfileProcess],
-            listeners: [ListenerBinding(pid: 402, address: "127.0.0.1", port: 9333)]
+            listeners: [ListenerBinding(pid: 402, address: "127.0.0.1", port: 9222)]
         ),
         snapshot(
             processes: [foreignProcess],
-            listeners: [ListenerBinding(pid: 401, address: "127.0.0.1", port: 9333)]
+            listeners: [ListenerBinding(pid: 401, address: "127.0.0.1", port: 9222)]
         ),
         snapshot(
             processes: [expectedProcess(pid: 403)],
-            listeners: [ListenerBinding(pid: 403, address: "127.0.0.1", port: 9333)],
+            listeners: [ListenerBinding(pid: 403, address: "127.0.0.1", port: 9222)],
             endpoint: .invalid(.invalidWebSocket)
         ),
     ]

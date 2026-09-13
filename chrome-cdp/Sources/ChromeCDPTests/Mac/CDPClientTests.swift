@@ -299,8 +299,8 @@ private func cdpSession() -> URLSession {
 
 private func cdpResponses(version: String, targets: String) -> [String: CDPStubStore.Stub] {
     [
-        "http://127.0.0.1:9333/json/version": .init(status: 200, data: Data(version.utf8)),
-        "http://127.0.0.1:9333/json/list": .init(status: 200, data: Data(targets.utf8))
+        "http://127.0.0.1:9222/json/version": .init(status: 200, data: Data(version.utf8)),
+        "http://127.0.0.1:9222/json/list": .init(status: 200, data: Data(targets.utf8))
     ]
 }
 
@@ -402,7 +402,7 @@ func testSupportContainsNonCooperativeTimeoutInChildProcessTest() throws {
 
 func cdpClientAcceptsChromeVersionAndCountsOnlyPageTargetsTest() throws {
     CDPStubStore.shared.reset(cdpResponses(
-        version: #"{"Browser":"Chrome/126.0.0.0","webSocketDebuggerUrl":"ws://127.0.0.1:9333/devtools/browser/id"}"#,
+        version: #"{"Browser":"Chrome/126.0.0.0","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/id"}"#,
         targets: #"[{"id":"page-1","type":"page"},{"id":"worker-1","type":"service_worker"},{"id":"page-2","type":"page"}]"#
     ))
 
@@ -410,13 +410,13 @@ func cdpClientAcceptsChromeVersionAndCountsOnlyPageTargetsTest() throws {
 
     try expectEqual(
         observation,
-        .healthy(webSocketURL: URL(string: "ws://127.0.0.1:9333/devtools/browser/id")!, pageTargetCount: 2)
+        .healthy(webSocketURL: URL(string: "ws://127.0.0.1:9222/devtools/browser/id")!, pageTargetCount: 2)
     )
 }
 
 func cdpClientUsesOnlyFixedSecureVersionAndListRequestsTest() throws {
     CDPStubStore.shared.reset(cdpResponses(
-        version: #"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9333/devtools/browser/id"}"#,
+        version: #"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/id"}"#,
         targets: "[]"
     ))
 
@@ -424,8 +424,8 @@ func cdpClientUsesOnlyFixedSecureVersionAndListRequestsTest() throws {
 
     let requests = CDPStubStore.shared.recordedRequests()
     try expectEqual(requests.map { $0.url?.relativeString }, [
-        "http://127.0.0.1:9333/json/version",
-        "http://127.0.0.1:9333/json/list"
+        "http://127.0.0.1:9222/json/version",
+        "http://127.0.0.1:9222/json/list"
     ])
     try expectEqual(requests.map(\.httpMethod), ["GET", "GET"])
     for request in requests {
@@ -436,8 +436,8 @@ func cdpClientUsesOnlyFixedSecureVersionAndListRequestsTest() throws {
 }
 
 func cdpClientMapsVersionAndListHTTPFailuresToUnavailableTest() throws {
-    let version = #"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9333/devtools/browser/id"}"#
-    for failedURL in ["http://127.0.0.1:9333/json/version", "http://127.0.0.1:9333/json/list"] {
+    let version = #"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/id"}"#
+    for failedURL in ["http://127.0.0.1:9222/json/version", "http://127.0.0.1:9222/json/list"] {
         var responses = cdpResponses(version: version, targets: "[]")
         responses[failedURL] = .init(status: 503, data: Data())
         CDPStubStore.shared.reset(responses)
@@ -451,10 +451,10 @@ func cdpClientMapsVersionAndListHTTPFailuresToUnavailableTest() throws {
 
 func cdpClientRejectsRedirectWithoutFollowingTargetTest() throws {
     CDPStubStore.shared.reset([
-        "http://127.0.0.1:9333/json/version": .init(
+        "http://127.0.0.1:9222/json/version": .init(
             status: 302,
             data: Data(),
-            headers: ["Location": "http://127.0.0.1:9333/not-cdp"]
+            headers: ["Location": "http://127.0.0.1:9222/not-cdp"]
         )
     ])
 
@@ -464,16 +464,16 @@ func cdpClientRejectsRedirectWithoutFollowingTargetTest() throws {
     )
     try expectEqual(
         CDPStubStore.shared.recordedRequests().map { $0.url?.relativeString },
-        ["http://127.0.0.1:9333/json/version"]
+        ["http://127.0.0.1:9222/json/version"]
     )
 }
 
 func cdpClientRejectsAlternateResponseURLTest() throws {
     CDPStubStore.shared.reset([
-        "http://127.0.0.1:9333/json/version": .init(
+        "http://127.0.0.1:9222/json/version": .init(
             status: 200,
-            data: Data(#"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9333/devtools/browser/id"}"#.utf8),
-            responseURL: URL(string: "http://127.0.0.1:9333/not-version")
+            data: Data(#"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/id"}"#.utf8),
+            responseURL: URL(string: "http://127.0.0.1:9222/not-version")
         )
     ])
 
@@ -485,7 +485,7 @@ func cdpClientRejectsAlternateResponseURLTest() throws {
 
 func cdpClientMapsTransportAndDelayedResponsesToUnavailableTest() throws {
     for stub in [CDPStubStore.Stub.failure(.cannotConnectToHost), .init(status: 200, data: Data(), delay: 0.2), .hanging] {
-        CDPStubStore.shared.reset(["http://127.0.0.1:9333/json/version": stub])
+        CDPStubStore.shared.reset(["http://127.0.0.1:9222/json/version": stub])
         try expectEqual(
             try awaitValue(timeout: 0.5) { await CDPClient(session: cdpSession()).inspect(configuration: cdpConfiguration) },
             .unavailable
@@ -494,11 +494,11 @@ func cdpClientMapsTransportAndDelayedResponsesToUnavailableTest() throws {
 }
 
 func cdpStubCancelsDelayedCallbacksBeforeLaterTestStateTest() throws {
-    let versionURL = "http://127.0.0.1:9333/json/version"
+    let versionURL = "http://127.0.0.1:9222/json/version"
     CDPStubStore.shared.reset([
         versionURL: .init(
             status: 200,
-            data: Data(#"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9333/devtools/browser/id"}"#.utf8),
+            data: Data(#"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/id"}"#.utf8),
             delay: 0.2
         )
     ])
@@ -508,25 +508,25 @@ func cdpStubCancelsDelayedCallbacksBeforeLaterTestStateTest() throws {
     )
 
     CDPStubStore.shared.reset(cdpResponses(
-        version: #"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9333/devtools/browser/id"}"#,
+        version: #"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/id"}"#,
         targets: "[]"
     ))
     try expectEqual(
         try awaitValue { await CDPClient(session: cdpSession()).inspect(configuration: cdpConfiguration) },
-        .healthy(webSocketURL: URL(string: "ws://127.0.0.1:9333/devtools/browser/id")!, pageTargetCount: 0)
+        .healthy(webSocketURL: URL(string: "ws://127.0.0.1:9222/devtools/browser/id")!, pageTargetCount: 0)
     )
     usleep(300_000)
     try expectEqual(
         CDPStubStore.shared.recordedDeliveries(),
         [
-            "http://127.0.0.1:9333/json/version",
-            "http://127.0.0.1:9333/json/list"
+            "http://127.0.0.1:9222/json/version",
+            "http://127.0.0.1:9222/json/list"
         ]
     )
 }
 
 func cdpStubWaitsForClaimedDeliveryBeforeShutdownReturnsTest() throws {
-    let url = URL(string: "http://127.0.0.1:9333/json/version")!
+    let url = URL(string: "http://127.0.0.1:9222/json/version")!
     let barrier = DeliveryBarrier()
     let capture = ProtocolCapture()
     let shutdownMarked = DispatchSemaphore(value: 0)
@@ -595,7 +595,7 @@ func cdpClientRejectsMalformedVersionJSONTest() throws {
 
 func cdpClientRejectsNonChromeBrowserTest() throws {
     CDPStubStore.shared.reset(cdpResponses(
-        version: #"{"Browser":"Chromium/126","webSocketDebuggerUrl":"ws://127.0.0.1:9333/devtools/browser/id"}"#,
+        version: #"{"Browser":"Chromium/126","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/id"}"#,
         targets: "[]"
     ))
 
@@ -607,9 +607,9 @@ func cdpClientRejectsNonChromeBrowserTest() throws {
 
 func cdpClientRejectsUnsafeWebSocketURLsTest() throws {
     let invalidURLs: [(String, EndpointFailure)] = [
-        ("http://127.0.0.1:9333/devtools/browser/id", .invalidWebSocket),
-        ("ws://public.example:9333/devtools/browser/id", .nonLoopbackWebSocket),
-        ("ws://0.0.0.0:9333/devtools/browser/id", .nonLoopbackWebSocket),
+        ("http://127.0.0.1:9222/devtools/browser/id", .invalidWebSocket),
+        ("ws://public.example:9222/devtools/browser/id", .nonLoopbackWebSocket),
+        ("ws://0.0.0.0:9222/devtools/browser/id", .nonLoopbackWebSocket),
         ("ws://127.0.0.1:9223/devtools/browser/id", .wrongWebSocketPort)
     ]
 
@@ -629,10 +629,10 @@ func cdpClientRejectsUnsafeWebSocketURLsTest() throws {
 func cdpClientAcceptsDocumentedLoopbackWebSocketHostsTest() throws {
     for host in ["127.0.0.1", "localhost", "[::1]"] {
         CDPStubStore.shared.reset(cdpResponses(
-            version: "{\"Browser\":\"Chrome/126\",\"webSocketDebuggerUrl\":\"ws://\(host):9333/devtools/browser/id\"}",
+            version: "{\"Browser\":\"Chrome/126\",\"webSocketDebuggerUrl\":\"ws://\(host):9222/devtools/browser/id\"}",
             targets: "[]"
         ))
-        let expectedURL = URL(string: "ws://\(host):9333/devtools/browser/id")!
+        let expectedURL = URL(string: "ws://\(host):9222/devtools/browser/id")!
         try expectEqual(
             try awaitValue { await CDPClient(session: cdpSession()).inspect(configuration: cdpConfiguration) },
             .healthy(webSocketURL: expectedURL, pageTargetCount: 0)
@@ -642,7 +642,7 @@ func cdpClientAcceptsDocumentedLoopbackWebSocketHostsTest() throws {
 
 func cdpClientRejectsMalformedTargetListTest() throws {
     CDPStubStore.shared.reset(cdpResponses(
-        version: #"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9333/devtools/browser/id"}"#,
+        version: #"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/id"}"#,
         targets: #"[{"id":"page-1"}]"#
     ))
 
@@ -654,19 +654,19 @@ func cdpClientRejectsMalformedTargetListTest() throws {
 
 func cdpClientReportsZeroPagesWhenOnlyNonPageTargetsExistTest() throws {
     CDPStubStore.shared.reset(cdpResponses(
-        version: #"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9333/devtools/browser/id"}"#,
+        version: #"{"Browser":"Chrome/126","webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/browser/id"}"#,
         targets: #"[{"id":"worker","type":"service_worker"}]"#
     ))
 
     try expectEqual(
         try awaitValue { await CDPClient(session: cdpSession()).inspect(configuration: cdpConfiguration) },
-        .healthy(webSocketURL: URL(string: "ws://127.0.0.1:9333/devtools/browser/id")!, pageTargetCount: 0)
+        .healthy(webSocketURL: URL(string: "ws://127.0.0.1:9222/devtools/browser/id")!, pageTargetCount: 0)
     )
 }
 
 func cdpClientCreatesBlankTargetWithFixedPutEndpointTest() throws {
     CDPStubStore.shared.reset([
-        "http://127.0.0.1:9333/json/new?about:blank": .init(
+        "http://127.0.0.1:9222/json/new?about:blank": .init(
             status: 200,
             data: Data(#"{"id":"page-1","type":"page"}"#.utf8)
         )
@@ -676,7 +676,7 @@ func cdpClientCreatesBlankTargetWithFixedPutEndpointTest() throws {
 
     let requests = CDPStubStore.shared.recordedRequests()
     try expectEqual(requests.count, 1)
-    try expectEqual(requests[0].url?.relativeString, "http://127.0.0.1:9333/json/new?about:blank")
+    try expectEqual(requests[0].url?.relativeString, "http://127.0.0.1:9222/json/new?about:blank")
     try expectEqual(requests[0].httpMethod, "PUT")
     try expectEqual(requests[0].timeoutInterval > 0 && requests[0].timeoutInterval < 0.2, true)
     try expectEqual(requests[0].cachePolicy, .reloadIgnoringLocalCacheData)
@@ -684,7 +684,7 @@ func cdpClientCreatesBlankTargetWithFixedPutEndpointTest() throws {
 }
 
 func cdpClientCreateBlankTargetPropagatesCancellationTest() throws {
-    let endpoint = "http://127.0.0.1:9333/json/new?about:blank"
+    let endpoint = "http://127.0.0.1:9222/json/new?about:blank"
     let requestStarted = DispatchSemaphore(value: 0)
     CDPStubLifecycleHooks.shared.install(
         beforeDelivery: {},
@@ -717,12 +717,12 @@ func cdpClientCreateBlankTargetPropagatesCancellationTest() throws {
 }
 
 func cdpClientMapsCreateHTTPTransportAndRedirectFailuresTest() throws {
-    let endpoint = "http://127.0.0.1:9333/json/new?about:blank"
+    let endpoint = "http://127.0.0.1:9222/json/new?about:blank"
     let stubs: [CDPStubStore.Stub] = [
         .init(status: 500, data: Data()),
         .failure(.cannotConnectToHost),
-        .init(status: 302, data: Data(), headers: ["Location": "http://127.0.0.1:9333/not-cdp"]),
-        .init(status: 200, data: Data(#"{"type":"page"}"#.utf8), responseURL: URL(string: "http://127.0.0.1:9333/not-new")),
+        .init(status: 302, data: Data(), headers: ["Location": "http://127.0.0.1:9222/not-cdp"]),
+        .init(status: 200, data: Data(#"{"type":"page"}"#.utf8), responseURL: URL(string: "http://127.0.0.1:9222/not-new")),
         .hanging
     ]
     for stub in stubs {
@@ -740,7 +740,7 @@ func cdpClientMapsCreateHTTPTransportAndRedirectFailuresTest() throws {
 
 func cdpClientRejectsMalformedCreateJSONTest() throws {
     CDPStubStore.shared.reset([
-        "http://127.0.0.1:9333/json/new?about:blank": .init(status: 200, data: Data("not json".utf8))
+        "http://127.0.0.1:9222/json/new?about:blank": .init(status: 200, data: Data("not json".utf8))
     ])
 
     do {
@@ -755,7 +755,7 @@ func cdpClientRejectsMalformedCreateJSONTest() throws {
 
 func cdpClientRejectsNonPageBlankTargetResponseTest() throws {
     CDPStubStore.shared.reset([
-        "http://127.0.0.1:9333/json/new?about:blank": .init(status: 200, data: Data(#"{"id":"worker","type":"service_worker"}"#.utf8))
+        "http://127.0.0.1:9222/json/new?about:blank": .init(status: 200, data: Data(#"{"id":"worker","type":"service_worker"}"#.utf8))
     ])
 
     do {

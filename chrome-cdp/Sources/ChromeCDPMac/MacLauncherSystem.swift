@@ -122,8 +122,11 @@ public struct MacLauncherSystem: LauncherSystem, Sendable {
     public func snapshot(configuration: LauncherConfiguration) async throws -> SystemSnapshot {
         do {
             let profile = try inspectProfile(configuration.profileURL)
-            let processes = try inspectProcesses()
+            // Listeners are sampled before processes so a Chrome that starts mid-snapshot
+            // appears as a process without a listener (retryable readiness wait) instead of
+            // a listener without a process (unrecoverable foreign-listener failure).
             let listeners = try inspectListeners(configuration)
+            let processes = try inspectProcesses()
             let endpoint = await inspectEndpoint(configuration)
             return SystemSnapshot(
                 profile: profile,

@@ -2,7 +2,7 @@
 
 `Chrome CDP.app` is a Spotlight-launchable macOS app that starts or reuses a visible Google Chrome window prepared for local AI browser automation.
 
-It uses a persistent, dedicated Chrome profile at `$HOME/chrome-cdp-profile` and exposes CDP only on `127.0.0.1:9333`. No browser extension, Apple ID, paid certificate, default-browser change, or headless mode is required.
+It uses a persistent, dedicated Chrome profile at `$HOME/chrome-cdp-profile` and exposes CDP only on `127.0.0.1:9222`. No browser extension, Apple ID, paid certificate, default-browser change, or headless mode is required.
 
 ## Use it
 
@@ -11,20 +11,20 @@ It uses a persistent, dedicated Chrome profile at `$HOME/chrome-cdp-profile` and
 3. Attach an isolated `agent-browser` session explicitly:
 
 ```bash
-agent-browser --session my-task --cdp 9333 get url
-agent-browser --session my-task --cdp 9333 snapshot -i
+agent-browser --session my-task --cdp 9222 get url
+agent-browser --session my-task --cdp 9222 snapshot -i
 agent-browser close --session my-task
 ```
 
 The equivalent persistent connection form is:
 
 ```bash
-agent-browser --session my-task connect 9333
+agent-browser --session my-task connect 9222
 agent-browser --session my-task snapshot -i
 agent-browser close --session my-task
 ```
 
-Closing an attached `agent-browser` session disconnects automation; it does not close the headed Chrome instance. `--auto-connect` is not the supported path because it may not discover a non-default port. Use `--cdp 9333` or `connect 9333`.
+Closing an attached `agent-browser` session disconnects automation; it does not close the headed Chrome instance. Explicit `--cdp 9222` or `connect 9222` stays the supported path; `--auto-connect` discovery is not relied on.
 
 ## Profile safety
 
@@ -37,7 +37,7 @@ Do not point automation at the live normal-Chrome user-data root. Chrome profile
 - Chrome app: `/Applications/Google Chrome.app`
 - Visible, headed Chrome
 - Profile: `$HOME/chrome-cdp-profile`, current-user owned, non-symlink, mode `0700`
-- CDP: `127.0.0.1:9333`
+- CDP: `127.0.0.1:9222`
 - Readiness and launch-lock deadlines: 10 seconds
 - Launch: `/usr/bin/open -na "Google Chrome" --args ...`
 - Installed app: `/Applications/Chrome CDP.app`
@@ -72,11 +72,10 @@ Rollback replaces only `/Applications/Chrome CDP.app`; it does not stop Chrome o
 
 ## Troubleshooting
 
-- **Port 9333 is in use:** close or reconfigure the process that owns it, then launch Chrome CDP again. The app will not terminate it.
+- **Port 9222 is in use:** close or reconfigure the process that owns it, then launch Chrome CDP again. The app will not terminate it.
 - **Chrome is missing:** install Google Chrome at `/Applications/Google Chrome.app`.
 - **Profile rejected:** `$HOME/chrome-cdp-profile` must be a real directory owned by the current user. The launcher safely repairs only that directory's mode to `0700`.
 - **Readiness timeout:** inspect the visible Chrome window, then retry. The launcher does not restart a conflicting process.
-- **`--auto-connect` finds nothing:** use `agent-browser --cdp 9333 ...`.
-- **Port 9222 is occupied:** that does not affect this installation; port 9333 is intentionally used to coexist with local software already bound to 9222.
+- **`--auto-connect` finds nothing:** use `agent-browser --cdp 9222 ...`.
 
 See [validation-2026-08-09.md](docs/validation-2026-08-09.md) for the redacted live result and [review-2026-08-09.md](docs/review-2026-08-09.md) for the implementation review record.
