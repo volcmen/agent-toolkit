@@ -276,7 +276,12 @@ export const createLocalMcp = (
       ShowOutputSchema,
       value,
       (result) => result.completion
-        ? `Consultation ${result.requestId} is complete: ${compactText(result.completion.summary)}`
+        ? JSON.stringify({
+          requestId: result.requestId,
+          state: result.state,
+          completionSource: result.completionSource,
+          completion: result.completion,
+        })
         : `Consultation ${result.requestId} has no completed result yet.`,
     );
   }));

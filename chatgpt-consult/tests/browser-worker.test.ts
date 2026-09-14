@@ -2,6 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { ContextService } from "../src/context/selection";
+import { ConsultationService } from "../src/core/service";
+import { createLocalMcp } from "../src/mcp/local";
 import type {
   AuthenticationProbeInput,
   BrowserAutomationHooks,
@@ -240,6 +244,41 @@ afterEach(async () => {
 });
 
 describe("browser job coordinator", () => {
+  test("a rendered citation response reaches the MCP client with every completion field", async () => {
+    const value = {
+      ...completion,
+      answer: 'Use the formula =A1="READY".',
+      evidence: ["Example Docs\n+2\nSource details"],
+      recommendations: ["Keep the quoted formula intact."],
+    };
+    const automation = new FakeAutomation(async (input, hooks) => {
+      await hooks.beforeSubmission();
+      await hooks.submissionConfirmed(CONVERSATION_URL);
+      return {
+        kind: "completed", conversationUrl: CONVERSATION_URL,
+        responseText: responseEnvelope(input.requestId, 0, value).replaceAll("\\n", "\n"),
+      };
+    });
+    const harness = await makeHarness({ automation });
+    expect((await harness.job.run(harness.requestId, OWNER_A)).kind).toBe("completed");
+    const service = new ConsultationService(harness.project, harness.store, new ContextService(harness.project, harness.store));
+    const server = createLocalMcp(service);
+    const client = new Client({ name: "browser-delivery-test", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    try {
+      const shown = await client.callTool({ name: "consult_show", arguments: { request_id: harness.requestId } });
+      expect(shown.isError).not.toBe(true);
+      expect(shown.structuredContent).toMatchObject({ state: "completed", completionSource: "browser", completion: value });
+      const text = shown.content.find((item) => item.type === "text");
+      expect(JSON.parse(text?.type === "text" ? text.text : "")).toMatchObject({ completion: value });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   test("keeps a rate-limit reason without clearing an uncertain submission or resending", async () => {
     const automation = new FakeAutomation(async (_input, hooks) => {
       await hooks.beforeSubmission();

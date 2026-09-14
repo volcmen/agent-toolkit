@@ -1133,7 +1133,7 @@ describe("local MCP", () => {
     }
   });
 
-  test("keeps human result text concise while preserving the normalized structured completion", async () => {
+  test("delivers the full normalized completion to clients that consume only text content", async () => {
     const { service } = await makeFixture();
     const started = await service.start({
       goal: "Summarize safely",
@@ -1166,8 +1166,12 @@ describe("local MCP", () => {
       });
       const text = shown.content[0];
       expect(text?.type).toBe("text");
-      expect(text && "text" in text ? text.text.length : Number.MAX_SAFE_INTEGER)
-        .toBeLessThan(512);
+      expect(JSON.parse(text?.type === "text" ? text.text : "")).toEqual({
+        requestId: started.requestId,
+        state: "completed",
+        completionSource: "manual",
+        completion: structured(shown).completion,
+      });
     } finally {
       await client.close();
       await server.close();

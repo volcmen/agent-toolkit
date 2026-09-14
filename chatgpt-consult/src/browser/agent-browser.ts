@@ -21,9 +21,8 @@ import { HARD_BUDGET, type BrowserFailureReason, type SubmissionCertainty } from
 import {
   BROWSER_REQUEST_BEGIN,
   BROWSER_REQUEST_END,
-  BROWSER_RESULT_BEGIN,
   BROWSER_RESULT_END,
-  BrowserCompletionEnvelopeSchema,
+  parseBrowserCompletionEnvelope,
 } from "./protocol.js";
 import {
   unthrottlePage,
@@ -682,32 +681,18 @@ const recovery = (
 });
 
 const responseBelongsToRequest = (text: string, requestId: string): boolean => {
-  const begin = text.indexOf(BROWSER_RESULT_BEGIN);
-  const end = text.indexOf(BROWSER_RESULT_END);
-  if (begin === -1 || end === -1
-    || begin !== text.lastIndexOf(BROWSER_RESULT_BEGIN)
-    || end !== text.lastIndexOf(BROWSER_RESULT_END)) {
-    return false;
-  }
-  const payloadStart = begin + BROWSER_RESULT_BEGIN.length;
-  if (end <= payloadStart) return false;
   try {
-    const parsed: unknown = JSON.parse(text.slice(payloadStart, end).trim());
-    const envelope = BrowserCompletionEnvelopeSchema.safeParse(parsed);
-    return envelope.success && envelope.data.requestId === requestId;
+    return parseBrowserCompletionEnvelope(text).requestId === requestId;
   } catch {
     return false;
   }
 };
 
 const responseIsFinalButUnusable = (text: string): boolean => {
-  const begin = text.indexOf(BROWSER_RESULT_BEGIN);
-  const end = text.indexOf(BROWSER_RESULT_END);
-  if (end === -1) return false;
-  if (begin === -1 || end <= begin + BROWSER_RESULT_BEGIN.length) return true;
+  if (!text.includes(BROWSER_RESULT_END)) return false;
   try {
-    const parsed: unknown = JSON.parse(text.slice(begin + BROWSER_RESULT_BEGIN.length, end).trim());
-    return !BrowserCompletionEnvelopeSchema.safeParse(parsed).success;
+    parseBrowserCompletionEnvelope(text);
+    return false;
   } catch {
     return true;
   }

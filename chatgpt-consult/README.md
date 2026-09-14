@@ -151,6 +151,14 @@ consult publish <id>
 Run `publish` only after explicit approval; optionally select the destination
 with `--output`.
 
+Browser answers use a fenced result block so ChatGPT's Markdown rendering
+preserves JSON escapes, quoted formulas, and code. Sources belong in evidence
+strings as titles and URLs. Collection tolerates rendered line breaks and tabs
+inside strings, while still validating the complete schema, request ID, revision,
+and conversation. It does not guess missing quotes or accept an unrelated answer.
+`consult_show` returns every completion field in both MCP text content and
+structured content, including for clients that consume only text.
+
 ## Manual recovery
 
 The bounded manual path remains available without browser automation:

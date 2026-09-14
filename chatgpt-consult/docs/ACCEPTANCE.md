@@ -10,9 +10,7 @@ headed browser.
 - [x] `python3 bun-global-tools/sync.py check --deep` verifies Bun-owned
       `agent-browser` 0.35.1 and its `~/.bun/bin` command path.
 - [x] `bun run check` passes; only explicitly opt-in live tests are skipped.
-- [x] `python3 scripts/plugins.py check` passes from the scoped push branch.
-      The main development checkout has unrelated existing `claude-core`
-      failures; see the dated record below.
+- [x] `python3 scripts/plugins.py check` passes from `main`.
 - [x] `chatgpt-consult doctor --json` reports the browser-backed required
       checks without requiring a tunnel.
 - [x] The local MCP still exposes exactly `consult_start`, `consult_status`,
@@ -88,6 +86,33 @@ off by default; remove retained fixtures after inspecting them.
 Testing `serve chatgpt`, its loopback health endpoint, a Secure MCP Tunnel, or
 ChatGPT Developer Mode is a separate compatibility exercise. None is a
 prerequisite for browser-backed acceptance, and none is started automatically.
+
+## Response delivery record — 2026-09-14
+
+- Three previously answered Claude Code consultations had failed with
+  `invalid_response`. Their saved response envelopes contained literal citation
+  line breaks inside JSON strings; one also contained two formulas with
+  unescaped quotation marks. The existing authenticated Project chats worked.
+- Two existing answers were collected from their original conversations with
+  the corrected parser. The remaining answer was recovered through validated
+  manual import after escaping the two formula literals. All three are now
+  completed, with their browser/manual provenance preserved and exactly one
+  submission event each. No original request was resent.
+- A fresh local stdio MCP client using Claude Code's configured launch command
+  retrieved all three full results. Text and structured completions matched
+  exactly. Private requests and answer contents remain outside this repository.
+- Regression coverage exercises citation whitespace, fenced payloads, quoted
+  code, invalid identities and revisions, malformed envelopes, polling and
+  event collection, collection without submission, and delivery through MCP.
+  All 312 affected tests pass; independent review reports no findings.
+- A separate synthetic attachment check stopped with `submission_uncertain`
+  and was cancelled without a resend. Attachment acceptance remains pending.
+- A subsequent text-only format check reached `rate_limited` and was cancelled
+  without a resend. Live testing stopped and the shared cooldown was retained.
+  The new prompt's fenced rendering has regression coverage but remains
+  unverified against a newly generated live response. No login was requested.
+- The complete workspace gate passed on `main`, including all project suites.
+  Both agents' installed plugins were refreshed and content status verified.
 
 ## Acceptance record — 2026-09-13
 

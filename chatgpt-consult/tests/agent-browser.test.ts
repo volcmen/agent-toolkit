@@ -2941,8 +2941,11 @@ describe("AgentBrowserAutomation", () => {
     expect(harness.fake.calls).toHaveLength(18);
   });
 
-  test("collect-only completes immediately from an already-present answer without polling", async () => {
-    const response = browserCompletionEnvelope(AUTOMATION_REQUEST_ID, "resumed");
+  test.each(["strict", "rendered citations", "fenced"])("collect-only delivers an already-present %s answer without resubmitting", async (format) => {
+    const raw = browserCompletionEnvelope(AUTOMATION_REQUEST_ID, "resumed\nExample Docs\n+2");
+    const response = format === "rendered citations" ? raw.replaceAll("\\n", "\n")
+      : format === "fenced" ? raw.replace(`${BROWSER_RESULT_BEGIN}\n`, `${BROWSER_RESULT_BEGIN}\n\`\`\`json\n`)
+        .replace(`\n${BROWSER_RESULT_END}`, `\n\`\`\`\n${BROWSER_RESULT_END}`) : raw;
     const harness = createAutomationHarness([
       { status: 0, output: automationJson() },
       { status: 0, output: urlJson(CONVERSATION_URL) },
@@ -4163,6 +4166,38 @@ describe("AgentBrowserAutomation event-driven collection", () => {
       collectionPath: "event",
     });
     expect(harness.now()).toBe(2_000);
+  });
+
+  test("event collection delivers citation line breaks instead of rejecting the final answer", async () => {
+    const { factory, sockets } = createCdpFactory();
+    const response = ownEnvelope("Reviewed\nExample Docs\n+2").replaceAll("\\n", "\n");
+    const script: ScriptEntry[] = [
+      ...eventPreSubmissionScript(),
+      () => {
+        sockets[0]!.emitMessage(cdpFrameMessage(turnFrame("stream-item", CONVERSATION_ID)));
+        sockets[0]!.emitMessage(cdpFrameMessage(turnFrame("done", CONVERSATION_ID)));
+        return { status: 0, output: urlJson(CONVERSATION_URL) };
+      },
+      { status: 0, output: urlJson(CONVERSATION_URL) },
+      { status: 0, output: textJson(response) },
+    ];
+    const harness = createAutomationHarness(script, { cdpPageClientFactory: factory });
+
+    expect(await harness.automation.run(await createAutomationInput(), harness.hooks)).toEqual({
+      kind: "completed", conversationUrl: CONVERSATION_URL, responseText: response, collectionPath: "event",
+    });
+  });
+
+  test("polling collection delivers citation line breaks after stable reads", async () => {
+    const response = ownEnvelope("Reviewed\nExample Docs\n+2").replaceAll("\\n", "\n");
+    const script = rootSuccessScript();
+    script[15] = { status: 0, output: textJson(response) };
+    script[17] = { status: 0, output: textJson(response) };
+    const harness = createAutomationHarness(script);
+
+    expect(await harness.automation.run(await createAutomationInput(), harness.hooks)).toEqual({
+      kind: "completed", conversationUrl: CONVERSATION_URL, responseText: response,
+    });
   });
 
   test("returns invalid_response once the settle window elapses without ever finding the envelope", async () => {

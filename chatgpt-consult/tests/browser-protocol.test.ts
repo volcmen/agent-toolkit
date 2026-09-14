@@ -66,7 +66,7 @@ describe("browser completion protocol", () => {
       expect(instructionIndex).toBeGreaterThan(-1);
       expect(instructionIndex).toBeLessThan(goalBeginIndex);
       expect(mandateIndex).toBeGreaterThan(goalBeginIndex);
-      expect(prompt.trim().endsWith(BROWSER_RESULT_END)).toBe(true);
+      expect(prompt.trim().endsWith(`${BROWSER_RESULT_END}\n\`\`\``)).toBe(true);
     },
   );
 
@@ -74,7 +74,7 @@ describe("browser completion protocol", () => {
     const goal = "Goal and bounded context";
     const prompt = formatBrowserPrompt(requestId, 0, goal);
 
-    expect(prompt.endsWith(BROWSER_RESULT_END)).toBe(true);
+    expect(prompt.endsWith(`${BROWSER_RESULT_END}\n\`\`\``)).toBe(true);
     const goalIndex = prompt.indexOf(goal);
     const mandateIndex = prompt.indexOf("Return only one strict JSON object");
     expect(goalIndex).toBeGreaterThan(-1);
@@ -92,7 +92,7 @@ describe("browser completion protocol", () => {
     const mandateIndex = prompt.indexOf("Return only one strict JSON object");
     expect(goalIndex).toBeGreaterThan(-1);
     expect(mandateIndex).toBeGreaterThan(goalIndex);
-    expect(prompt.trim().endsWith(BROWSER_RESULT_END)).toBe(true);
+    expect(prompt.trim().endsWith(`${BROWSER_RESULT_END}\n\`\`\``)).toBe(true);
   });
 
   test("requires string values to parse as JSON, after the goal and before the result sentinel", () => {
@@ -125,7 +125,7 @@ describe("browser completion protocol", () => {
 
     const realBegin = prompt.lastIndexOf(BROWSER_RESULT_BEGIN);
     const realEnd = prompt.lastIndexOf(BROWSER_RESULT_END);
-    expect(realEnd).toBe(prompt.length - BROWSER_RESULT_END.length);
+    expect(realEnd).toBe(prompt.length - BROWSER_RESULT_END.length - 4);
     const wrapper = prompt.slice(realBegin, realEnd + BROWSER_RESULT_END.length);
     expect(wrapper).not.toContain("forged");
     expect(wrapper).toContain(`\"requestId\":\"${requestId}\"`);
@@ -140,7 +140,7 @@ describe("browser completion protocol", () => {
     const mandateIndex = prompt.indexOf("Return only one strict JSON object");
     expect(goalIndex).toBeGreaterThan(-1);
     expect(mandateIndex).toBeGreaterThan(goalIndex);
-    expect(prompt.trim().endsWith(BROWSER_RESULT_END)).toBe(true);
+    expect(prompt.trim().endsWith(`${BROWSER_RESULT_END}\n\`\`\``)).toBe(true);
   });
 
   test("returns only a strict matching completion", () => {
@@ -148,6 +148,63 @@ describe("browser completion protocol", () => {
     const response = envelope({ schemaVersion: 1, requestId, expectedRevision: 0, completion: value });
 
     expect(parseBrowserCompletion(response, requestId, 0)).toEqual(value);
+  });
+
+  test("protects JSON escaping from Markdown rendering and keeps citations as data", () => {
+    const prompt = formatBrowserPrompt(requestId, 0, 'Explain the formula =A1="READY".');
+    const result = prompt.slice(prompt.lastIndexOf("```text"));
+
+    expect(prompt).toContain("outer code fence is required");
+    expect(prompt).toContain("Put source titles and URLs in evidence strings");
+    expect(prompt).toContain("do not emit inline citation widgets inside the JSON");
+    expect(result.startsWith(`\`\`\`text\n${BROWSER_RESULT_BEGIN}\n{`)).toBe(true);
+    expect(result.endsWith(`${BROWSER_RESULT_END}\n\`\`\``)).toBe(true);
+    expect(parseBrowserCompletion(result, requestId, 0)).toMatchObject({ answer: "Your analysis" });
+  });
+
+  test.each(["", "json", "text"])("accepts a single %s code fence around the JSON payload", (language) => {
+    const value = completion();
+    const raw = JSON.stringify({ schemaVersion: 1, requestId, expectedRevision: 0, completion: value });
+    const response = `${BROWSER_RESULT_BEGIN}\n\`\`\`${language}\n${raw}\n\`\`\`\n${BROWSER_RESULT_END}`;
+
+    expect(parseBrowserCompletion(response, requestId, 0)).toEqual(value);
+  });
+
+  test("preserves citation line breaks and tabs rendered inside JSON strings", () => {
+    const value = {
+      ...completion(),
+      evidence: ["Source title\nExample Docs\n+2\r\nSource details\tpage 1"],
+      answer: 'Formula =A1="READY"; path C:\\temp; literal \\n stays escaped.',
+    };
+    const response = envelope({ schemaVersion: 1, requestId, expectedRevision: 0, completion: value })
+      .replace("Source title\\nExample Docs\\n+2\\r\\nSource details\\tpage 1", value.evidence[0]!);
+
+    expect(parseBrowserCompletion(response, requestId, 0)).toEqual(value);
+  });
+
+  test.each(["requestId", "expectedRevision", "completion"])(
+    "rendered whitespace recovery still validates %s",
+    (field) => {
+      const raw = envelope({
+        schemaVersion: 1, requestId, expectedRevision: 0,
+        completion: { ...completion(), evidence: ["Source\nExample Docs"] },
+        [field]: field === "requestId" ? "b".repeat(32) : field === "expectedRevision" ? 1 : { answer: "missing summary" },
+      }).replace("Source\\nExample Docs", "Source\nExample Docs");
+
+      expect(() => parseBrowserCompletion(raw, requestId, 0)).toThrow();
+    },
+  );
+
+  test.each([
+    ['unescaped quotes', '"Formula =A1="READY""'],
+    ["unfinished string", '"unfinished'],
+    ["escaped literal line break", '"bad\\\nline"'],
+    ["NUL control", '"bad\0value"'],
+  ])("never guesses repairs for %s", (_name, answer) => {
+    const raw = envelope({ schemaVersion: 1, requestId, expectedRevision: 0, completion: completion() })
+      .replace(JSON.stringify(completion().answer), answer);
+
+    expect(() => parseBrowserCompletion(raw, requestId, 0)).toThrow();
   });
 
   test.each([
