@@ -25,6 +25,8 @@ existing review only for the same base/head and scope; after a fix inspect the
 delta and affected interactions. A tiny auth/config/CI change can be high risk;
 file count and extension do not establish safety. Check acceptance criteria,
 failure paths, test assertions, and description claims against what changed.
+Each required hunk rests on the lowest rung of the minimalism ladder that holds
+(`~/.claude/skills/engineering/references/minimalism.md`); F9 owns the rest.
 
 ## Verify only what remains unproven
 
