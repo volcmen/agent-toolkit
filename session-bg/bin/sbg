@@ -5,6 +5,8 @@ Usage:
   sbg [--theme NAME|auto] [--fps N] [--opacity F] [--density F] [--dry-run] -- COMMAND [ARGS...]
   sbg --list
   sbg palette [--theme-file PATH]
+  sbg install            # PATH shims so plain `claude` / `codex` start inside sbg
+  sbg doctor             # environment report plus the tail of the tattoy log
 
 Each zellij pane gets its own effect and seed (derived from ZELLIJ_PANE_ID), so
 four panes running `sbg auto -- claude` animate differently.
@@ -19,11 +21,14 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "configs" / "tattoy.toml.tmpl"
 EFFECTS = ("matrix", "plasma", "waves", "stars")
+SHIMS = ("claude", "codex")
+FAST_EXIT_SECONDS = 5.0
 CUBE_LEVELS = (0, 95, 135, 175, 215, 255)
 
 
@@ -172,13 +177,101 @@ def command_line(argv: list[str]) -> str:
     return str(script)
 
 
+def shim_dir() -> Path:
+    override = os.environ.get("SBG_SHIM_DIR")
+    if override:
+        return Path(override)
+    base = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
+    return Path(base) / "sbg" / "shims"
+
+
+def install_shims() -> Path:
+    target = shim_dir()
+    target.mkdir(parents=True, exist_ok=True)
+    shim = ROOT / "bin" / "sbg-shim"
+    for name in SHIMS:
+        link = target / name
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(shim)
+    return target
+
+
+def path_has_shims(path: str = "") -> bool:
+    target = shim_dir()
+    for entry in (path or os.environ.get("PATH", "")).split(os.pathsep):
+        if entry and Path(entry).resolve() == target.resolve():
+            return True
+        if entry and any((Path(entry) / name).is_file() and os.access(Path(entry) / name, os.X_OK) for name in SHIMS):
+            return False
+    return False
+
+
+def plain(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def log_tail(lines: int = 20) -> str:
+    log = cache_dir() / "tattoy.log"
+    if not log.is_file():
+        return ""
+    return plain("\n".join(log.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]))
+
+
+def doctor() -> int:
+    tattoy = shutil.which("tattoy")
+    print(f"tattoy: {tattoy or 'MISSING (brew install tattoy-org/tap/tattoy)'}")
+    try:
+        print(f"plugin: {plugin_binary()}")
+    except SystemExit as exc:
+        print(f"plugin: MISSING ({exc})")
+    palette = tattoy_config_dir() / "palette.toml"
+    print(f"palette: {palette if palette.is_file() else 'MISSING (run `sbg palette`)'}")
+    shims = shim_dir()
+    linked = all((shims / name).is_symlink() for name in SHIMS)
+    print(f"shims: {shims} ({'linked' if linked else 'not installed; run `sbg install`'})")
+    print(f"PATH order: {'shims first' if path_has_shims() else 'real binaries win; prepend ' + str(shims) + ' to PATH'}")
+    for name in SHIMS:
+        print(f"which {name}: {shutil.which(name) or 'not found'}")
+    for key in ("ZELLIJ_PANE_ID", "KITTY_WINDOW_ID", "TERM", "SBG_ACTIVE", "SBG_AUTO", "SBG_THEME", "CLAUDECODE"):
+        if key in os.environ:
+            print(f"env {key}={os.environ[key]}")
+    tail = log_tail()
+    print(f"log: {cache_dir() / 'tattoy.log'}")
+    if tail:
+        print(tail)
+    return 0 if tattoy and linked else 1
+
+
+def run_tattoy(tattoy: str, argv: list[str], env: dict[str, str]) -> int:
+    started = time.monotonic()
+    log = cache_dir() / "tattoy.log"
+    mark = log.stat().st_size if log.is_file() else 0
+    try:
+        code = subprocess.run(argv, env=env, check=False).returncode
+    except KeyboardInterrupt:
+        code = 130
+    elapsed = time.monotonic() - started
+    if code != 0 or elapsed < FAST_EXIT_SECONDS:
+        fresh = ""
+        if log.is_file():
+            with log.open("rb") as handle:
+                handle.seek(mark)
+                fresh = plain(handle.read().decode("utf-8", errors="replace").strip())
+        print(f"sbg: tattoy exited with status {code} after {elapsed:.1f}s; command was {shlex.join(argv)}", file=sys.stderr)
+        if fresh:
+            print(fresh, file=sys.stderr)
+        print(f"sbg: see `sbg doctor` and {log}", file=sys.stderr)
+    return code
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="sbg", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("theme", nargs="?", default="auto", help="matrix|plasma|waves|stars|auto (default auto)")
+    parser.add_argument("theme", nargs="?", default="auto", help="matrix|plasma|waves|stars|auto (default auto), or palette|install|doctor")
     parser.add_argument("--fps", type=int, default=int(os.environ.get("SBG_FPS", "12")))
     parser.add_argument("--opacity", type=float, default=float(os.environ.get("SBG_OPACITY", "0.6")))
     parser.add_argument("--density", type=float, default=float(os.environ.get("SBG_DENSITY", "1.0")))
-    parser.add_argument("--log-level", default=os.environ.get("SBG_LOG_LEVEL", "off"))
+    parser.add_argument("--log-level", default=os.environ.get("SBG_LOG_LEVEL", "warn"))
     parser.add_argument("--list", action="store_true", help="list effects and exit")
     parser.add_argument("--dry-run", action="store_true", help="print the tattoy invocation and exit")
     parser.add_argument("--theme-file", type=Path, help="kitty theme file for `sbg palette`")
@@ -191,6 +284,19 @@ def main() -> int:
 
     if args.list:
         print("\n".join(EFFECTS))
+        return 0
+    if args.theme == "doctor":
+        return doctor()
+    if args.theme == "install":
+        shims = install_shims()
+        Path.home().joinpath(".local", "bin").mkdir(parents=True, exist_ok=True)
+        link = Path.home() / ".local" / "bin" / "sbg"
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(ROOT / "bin" / "sbg")
+        print(f"linked ~/.local/bin/sbg and {shims}/{{{','.join(SHIMS)}}}")
+        if not path_has_shims():
+            print(f"prepend {shims} to PATH after every other PATH edit in your shell init, e.g. fish: fish_add_path --path --move --prepend {shims}")
         return 0
     if args.theme == "palette":
         palette = ensure_palette(args.theme_file, force=True)
@@ -227,8 +333,7 @@ def main() -> int:
         print(f"SBG_EFFECT={effect} SBG_SEED={env['SBG_SEED']} SBG_FPS={args.fps} SBG_DENSITY={args.density} SBG_ACTIVE=1")
         print(shlex.join(argv))
         return 0
-    os.execve(tattoy, argv, env)
-    return 1
+    return run_tattoy(tattoy, argv, env)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""PATH shim: `claude` / `codex` resolve here first and start inside sbg.
+
+Install as a symlink named after the wrapped command in a directory that
+precedes the real binary on PATH (see `sbg install`). Interactive TTY sessions
+are wrapped; everything else executes the real binary unchanged.
+"""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+BATCH_FLAGS = {"-p", "--print", "-v", "-V", "--version", "-h", "--help"}
+BATCH_SUBCOMMANDS = {
+    "claude": {
+        "mcp", "plugin", "plugins", "doctor", "update", "upgrade", "install", "auth", "setup-token",
+        "agents", "worktree", "logs", "rm", "stop", "kill", "respawn", "gateway", "import", "fix",
+        "auto-mode", "configuration", "installation",
+    },
+    "codex": {
+        "exec", "login", "logout", "mcp", "plugin", "app-server", "completion", "update", "doctor",
+        "sandbox", "debug", "apply", "features", "help", "cloud", "exec-server", "migrate-rollouts",
+        "archive", "unarchive", "delete",
+    },
+}
+
+
+def real_binary(name: str, shim_dir: Path) -> Path | None:
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        directory = Path(entry)
+        try:
+            same = directory.resolve() == shim_dir
+        except OSError:
+            same = False
+        if same:
+            continue
+        candidate = directory / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            try:
+                if candidate.resolve() == Path(__file__).resolve():
+                    continue
+            except OSError:
+                pass
+            return candidate
+    return None
+
+
+def should_wrap(name: str, args: list[str], env: dict[str, str], tty: bool) -> bool:
+    if env.get("SBG_AUTO") == "0" or env.get("SBG_ACTIVE") or not tty:
+        return False
+    if any(arg in BATCH_FLAGS for arg in args):
+        return False
+    first = next((arg for arg in args if not arg.startswith("-")), None)
+    if first is not None and first in BATCH_SUBCOMMANDS.get(name, set()):
+        return False
+    return True
+
+
+def main() -> int:
+    name = Path(sys.argv[0]).name
+    shim_dir = Path(os.path.abspath(sys.argv[0])).parent
+    args = sys.argv[1:]
+    real = real_binary(name, shim_dir)
+    if real is None:
+        sys.exit(f"{name}: real binary not found on PATH outside {shim_dir}")
+    tty = sys.stdin.isatty() and sys.stdout.isatty()
+    dry = "SBG_SHIM_DRY_RUN" in os.environ
+    if not should_wrap(name, args, os.environ, tty or dry):
+        if dry:
+            print(f"passthrough: {real} {' '.join(args)}")
+            return 0
+        os.execv(str(real), [str(real), *args])
+    sbg = Path(__file__).resolve().parent / "sbg"
+    theme = os.environ.get("SBG_THEME", "auto")
+    argv = [str(sbg), *(["--dry-run"] if dry else []), theme, "--", str(real), *args]
+    os.execv(str(sbg), argv)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

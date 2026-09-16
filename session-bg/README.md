@@ -25,9 +25,9 @@ ln -s "$PWD/../bin/sbg" ~/.local/bin/sbg     # or add bin/ to PATH
 sbg palette                                  # palette.toml from ~/.config/kitty/current-theme.conf
 ```
 
-`scripts/install.sh` does the two links, builds the plugin if needed, and adds
-`fish/sbg-auto.fish` to `~/.config/fish/conf.d/` so plain `claude` and `codex`
-open inside sbg automatically (see below).
+`scripts/install.sh` builds the plugin if needed and runs `sbg install`, which
+links `~/.local/bin/sbg` and the PATH shims `~/.local/share/sbg/shims/{claude,codex}`
+so plain `claude` and `codex` open inside sbg automatically (see below).
 
 `sbg palette` writes Tattoy's `palette.toml` from your kitty theme so the first
 run needs no interactive palette capture. Outside kitty, run
@@ -55,15 +55,28 @@ Environment overrides: `SBG_FPS`, `SBG_OPACITY`, `SBG_DENSITY` (0.1–3.0),
 `SBG_LOG_LEVEL` (writes `~/.cache/sbg/tattoy.log`), `SBG_FX` (plugin path),
 `SBG_TATTOY_CONFIG_DIR`, `SBG_KITTY_THEME`.
 
-## Automatic wrapping (fish)
+## Automatic wrapping (PATH shims, shell-agnostic)
 
-`fish/sbg-auto.fish` defines `claude` and `codex` functions that call
-`sbg auto -- <cmd> <args>` for interactive sessions and fall back to the real
-binary when: stdin/stdout is not a TTY, `-p/--print/--version/--help` is
-present, the first word is a batch subcommand (`claude mcp`, `codex exec`, …),
+`sbg install` symlinks `claude` and `codex` in `~/.local/share/sbg/shims/` to
+`bin/sbg-shim`. Put that directory first on PATH (after every other PATH edit in
+your shell init; fish: `fish_add_path --path --move --prepend ~/.local/share/sbg/shims`).
+The shim finds the real binary further down PATH and runs
+`sbg auto -- /real/path/claude <args>` for interactive sessions. It executes the
+real binary unchanged when: stdin/stdout is not a TTY, `-p/--print/--version/--help`
+is present, the first word is a batch subcommand (`claude mcp`, `codex exec`, …),
 `SBG_AUTO=0`, or the shell is already inside an sbg session (`SBG_ACTIVE`).
-`set -gx SBG_THEME waves` forces one effect. Prompts with spaces work:
-`claude "fix the tests"` is wrapped through a generated script in `~/.cache/sbg/`.
+`SBG_THEME=waves` forces one effect. Prompts with spaces work: `claude "fix the
+tests"` is wrapped through a generated script in `~/.cache/sbg/`.
+
+No shell functions or aliases are involved, so `command -v claude`, scripts, and
+hooks all see the shim; `SBG_AUTO=0 claude` or `~/.local/bin/claude` bypass it.
+
+## Troubleshooting
+
+`sbg doctor` prints the tattoy/plugin/palette/shim state, PATH order, `which
+claude`, and the tail of `~/.cache/sbg/tattoy.log` (default log level `warn`).
+When tattoy exits within 5 s or with a non-zero status, `sbg` prints the exit
+status, the exact command, and the new log lines to stderr before returning.
 
 ## How the plugin works
 

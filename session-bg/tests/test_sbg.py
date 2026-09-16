@@ -140,38 +140,73 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result.stdout.split(), list(sbg.EFFECTS))
 
 
-@unittest.skipUnless(shutil.which("fish"), "fish not installed")
-class FishWrapTests(unittest.TestCase):
-    def fish(self, *args, env=None):
-        script = f"source {ROOT / 'fish' / 'sbg-auto.fish'}; " + " ".join(args)
-        merged = dict(os.environ)
-        merged.pop("SBG_ACTIVE", None)
-        merged.pop("SBG_AUTO", None)
-        merged.pop("SBG_THEME", None)
-        merged.update(SBG_AUTO_DRY_RUN="1", SBG_FX=str(SBG), PATH=f"{ROOT / 'bin'}:{os.environ['PATH']}", **(env or {}))
-        return subprocess.run(["fish", "-c", script], capture_output=True, text=True, env=merged, check=False, stdin=subprocess.DEVNULL)
+class ShimTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.shims = root / "shims"
+        self.real = root / "real"
+        self.shims.mkdir()
+        self.real.mkdir()
+        for name in ("claude", "codex"):
+            (self.shims / name).symlink_to(ROOT / "bin" / "sbg-shim")
+            fake = self.real / name
+            fake.write_text("#!/bin/sh\necho real\n")
+            fake.chmod(0o755)
 
-    def test_interactive_claude_is_wrapped(self):
-        result = self.fish("claude", "'fix the tests'")
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def shim(self, name, *args, env=None):
+        merged = dict(os.environ)
+        for key in ("SBG_ACTIVE", "SBG_AUTO", "SBG_THEME"):
+            merged.pop(key, None)
+        merged.update(SBG_SHIM_DRY_RUN="1", SBG_FX=str(SBG), PATH=f"{self.shims}:{self.real}:{os.environ['PATH']}")
+        merged.update(env or {})
+        return subprocess.run([str(self.shims / name), *args], capture_output=True, text=True, env=merged, check=False, stdin=subprocess.DEVNULL)
+
+    def test_interactive_claude_is_wrapped_with_the_real_binary(self):
+        result = self.shim("claude", "fix the tests")
         self.assertIn("SBG_EFFECT=", result.stdout, result.stderr)
         self.assertIn("--command", result.stdout)
+        script = Path(result.stdout.split("--command ")[1].strip())
+        self.assertIn(f"{self.real / 'claude'} 'fix the tests'", script.read_text())
 
     def test_codex_resume_is_wrapped(self):
-        result = self.fish("codex", "resume")
-        self.assertIn("--command 'codex resume'", result.stdout, result.stderr)
+        result = self.shim("codex", "resume")
+        self.assertIn(f"--command '{self.real / 'codex'} resume'", result.stdout, result.stderr)
 
     def test_batch_flags_and_subcommands_pass_through(self):
         for call in (("claude", "--version"), ("claude", "-p", "hi"), ("claude", "mcp", "list"), ("codex", "exec", "hi"), ("codex", "--help")):
-            result = self.fish(*call)
-            self.assertTrue(result.stdout.startswith("passthrough:"), (call, result.stdout, result.stderr))
+            result = self.shim(*call)
+            self.assertTrue(result.stdout.startswith(f"passthrough: {self.real / call[0]}"), (call, result.stdout, result.stderr))
 
     def test_disabled_or_nested_passes_through(self):
-        self.assertTrue(self.fish("claude", env={"SBG_AUTO": "0"}).stdout.startswith("passthrough:"))
-        self.assertTrue(self.fish("claude", env={"SBG_ACTIVE": "1"}).stdout.startswith("passthrough:"))
+        self.assertTrue(self.shim("claude", env={"SBG_AUTO": "0"}).stdout.startswith("passthrough:"))
+        self.assertTrue(self.shim("claude", env={"SBG_ACTIVE": "1"}).stdout.startswith("passthrough:"))
 
     def test_theme_override(self):
-        result = self.fish("codex", env={"SBG_THEME": "stars"})
+        result = self.shim("codex", env={"SBG_THEME": "stars"})
         self.assertIn("SBG_EFFECT=stars", result.stdout, result.stderr)
+
+    def test_missing_real_binary_is_an_error(self):
+        result = self.shim("claude", env={"PATH": f"{self.shims}:{Path(sys.executable).parent}"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("real binary not found", result.stderr)
+
+
+class InstallTests(unittest.TestCase):
+    def test_install_links_shims_and_doctor_reports_them(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ, SBG_SHIM_DIR=f"{tmp}/shims", SBG_FX=str(SBG), HOME=tmp, SBG_TATTOY_CONFIG_DIR=f"{tmp}/tattoy", XDG_CACHE_HOME=f"{tmp}/cache")
+            result = subprocess.run([sys.executable, str(SBG), "install"], capture_output=True, text=True, env=env, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(os.readlink(f"{tmp}/shims/claude"), str(ROOT / "bin" / "sbg-shim"))
+            self.assertTrue(Path(tmp, ".local", "bin", "sbg").is_symlink())
+            env["PATH"] = f"{tmp}/shims:{os.environ['PATH']}"
+            doctor = subprocess.run([sys.executable, str(SBG), "doctor"], capture_output=True, text=True, env=env, check=False)
+            self.assertIn("(linked)", doctor.stdout)
+            self.assertIn("PATH order: shims first", doctor.stdout)
 
 
 if __name__ == "__main__":
