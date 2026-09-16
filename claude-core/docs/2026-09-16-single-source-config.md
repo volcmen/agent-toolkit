@@ -73,6 +73,16 @@ and "claude-core owns these keys" is only checkable as exact equality.
   (`scripts/session-metrics.py --days 7`). After-metrics need new sessions; re-run
   `--days 1` after a day of use.
 
+## Environment finding during verification
+
+The first workspace gate run failed in `codex-pair` and `qwen-gsd` with `mise ERROR … config
+not trusted`. Swapping the baseline `SKILL.md` files back reproduced the same failures, so the
+edits were not the cause: `~/.local/share/mise/shims/python3` was a stale shim (python is not
+mise-managed) and mise 2026.9.9, installed 2026-09-15, aborts under the sandboxed `HOME` those
+tests use. `mise reshim` kept the stale shims; deleting the `python*`/`pip*` shim files fixed
+both suites. The ledger keeps that red run as a preserved first failure for its tree, so the
+final evidence is the green run against the follow-up commit.
+
 ## Rollback
 
 Settings: copy the pre-cutover snapshot back. Links: `manage.py uninstall` removes only links
