@@ -121,9 +121,10 @@ class CatalogValidation(unittest.TestCase):
 
 
 class TestCounts(unittest.TestCase):
-    def test_counts_unittest_and_bun_summaries_only(self) -> None:
-        output = "ok   dispatch keeps consent\nRan 29 tests in 7.3s\nOK\n 12 pass\n 0 fail\nall checks passed\n"
-        self.assertEqual(pl.count_tests(output), 41)
+    def test_the_last_runner_summary_wins(self) -> None:
+        self.assertEqual(pl.count_tests("ok   dispatch keeps consent\nRan 29 tests in 7.3s\nOK\n"), 29)
+        bun = "✓ a\n✓ b\n\n 1078 pass\n 0 fail\nRan 1078 tests across 40 files. [3.20s]\n"
+        self.assertEqual(pl.count_tests(bun), 1078)
 
     def test_check_scripts_without_a_runner_summary_count_nothing(self) -> None:
         self.assertEqual(pl.count_tests("ok   resume omits -C\nall codex-pair checks passed\n"), 0)

@@ -309,13 +309,17 @@ TEST_COUNT_PATTERNS = (re.compile(r"Ran (\d+) tests?"), re.compile(r"(?m)^\s*(\d
 
 
 def count_tests(output: str) -> int:
-    """Sum the test counts a child check printed, in the shapes verify-run.py recognizes.
+    """Return the test count from a child check's last runner summary, or 0.
 
     The umbrella gate swallows successful child output, so without this the evidence
-    ledger records a green run as VACUOUS. Only real runner summaries count; a check
+    ledger records a green run as VACUOUS. Only the last runner summary counts: bun
+    prints both "N pass" and "Ran N tests across F files" for one run, and a check
     script's own "ok" lines are not tests.
     """
-    return sum(int(match) for pattern in TEST_COUNT_PATTERNS for match in pattern.findall(output))
+    matches = [m for pattern in TEST_COUNT_PATTERNS for m in pattern.finditer(output)]
+    if not matches:
+        return 0
+    return int(max(matches, key=lambda m: m.start()).group(1))
 
 
 # (project dir, command run from inside that dir)

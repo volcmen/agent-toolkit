@@ -98,8 +98,9 @@ Landed from that:
 
 - `scripts/plugins.py check` now ends with a unittest-shaped `Ran N tests` / `OK` summary
   aggregated from the child suites' own runner output (`count_tests`), so the evidence ledger
-  records the workspace gate with counts instead of `VACUOUS`. Check-script `ok` lines are
-  not counted as tests.
+  records the workspace gate with counts instead of `VACUOUS`. Each child contributes its
+  last runner summary only (bun prints both `N pass` and `Ran N tests`, the latter including
+  skips); check-script `ok` lines are not tests. First honest total: 1588.
 - `statusline.py` cached git state for 5 s while the status line refreshes every 5 s, so
   nearly every refresh spawned three `git` processes; the cache now lives 20 s.
 - `hooks/guard-red-write.py` answers `permissionDecision: ask` when it cannot read the hook
