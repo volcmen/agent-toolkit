@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -94,10 +95,20 @@ class ConfigTests(unittest.TestCase):
             self.assertIn("opacity = 0.50", text)
             self.assertIn("show_startup_logo = false", text)
 
-    def test_whitespace_arguments_are_rejected(self):
-        with self.assertRaises(SystemExit):
-            sbg.command_line(["sh", "-c", "echo hi"])
+    def test_plain_arguments_pass_straight_through(self):
         self.assertEqual(sbg.command_line(["claude", "--resume"]), "claude --resume")
+
+    def test_whitespace_arguments_become_a_wrapper_script(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["XDG_CACHE_HOME"] = tmp
+            try:
+                line = sbg.command_line(["claude", "fix the tests", "--model", "opus"])
+            finally:
+                del os.environ["XDG_CACHE_HOME"]
+            script = Path(line)
+            self.assertTrue(script.is_file())
+            self.assertTrue(os.access(script, os.X_OK))
+            self.assertEqual(script.read_text(encoding="utf-8"), "#!/bin/sh\nexec claude 'fix the tests' --model opus\n")
 
 
 class CliTests(unittest.TestCase):
@@ -111,6 +122,10 @@ class CliTests(unittest.TestCase):
         self.assertIn("SBG_EFFECT=matrix", result.stdout)
         self.assertIn("--command 'claude --resume'", result.stdout)
 
+    def test_dry_run_marks_the_session_active(self):
+        result = self.run_sbg("--dry-run", "stars", "--", "codex", env={"SBG_FX": str(SBG)})
+        self.assertIn("SBG_ACTIVE=1", result.stdout)
+
     def test_auto_theme_with_double_dash_only(self):
         result = self.run_sbg("--dry-run", "--", "codex", env={"SBG_FX": str(SBG), "ZELLIJ_PANE_ID": "7"})
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -123,6 +138,38 @@ class CliTests(unittest.TestCase):
     def test_list(self):
         result = self.run_sbg("--list")
         self.assertEqual(result.stdout.split(), list(sbg.EFFECTS))
+
+
+@unittest.skipUnless(shutil.which("fish"), "fish not installed")
+class FishWrapTests(unittest.TestCase):
+    def fish(self, *args, env=None):
+        script = f"source {ROOT / 'fish' / 'sbg-auto.fish'}; " + " ".join(args)
+        merged = dict(os.environ, SBG_AUTO_DRY_RUN="1", SBG_FX=str(SBG), PATH=f"{ROOT / 'bin'}:{os.environ['PATH']}", **(env or {}))
+        merged.pop("SBG_ACTIVE", None)
+        merged.pop("SBG_AUTO", None)
+        return subprocess.run(["fish", "-c", script], capture_output=True, text=True, env=merged, check=False, stdin=subprocess.DEVNULL)
+
+    def test_interactive_claude_is_wrapped(self):
+        result = self.fish("claude", "'fix the tests'")
+        self.assertIn("SBG_EFFECT=", result.stdout, result.stderr)
+        self.assertIn("--command", result.stdout)
+
+    def test_codex_resume_is_wrapped(self):
+        result = self.fish("codex", "resume")
+        self.assertIn("--command codex resume", result.stdout, result.stderr)
+
+    def test_batch_flags_and_subcommands_pass_through(self):
+        for call in (("claude", "--version"), ("claude", "-p", "hi"), ("claude", "mcp", "list"), ("codex", "exec", "hi"), ("codex", "--help")):
+            result = self.fish(*call)
+            self.assertTrue(result.stdout.startswith("passthrough:"), (call, result.stdout, result.stderr))
+
+    def test_disabled_or_nested_passes_through(self):
+        self.assertTrue(self.fish("claude", env={"SBG_AUTO": "0"}).stdout.startswith("passthrough:"))
+        self.assertTrue(self.fish("claude", env={"SBG_ACTIVE": "1"}).stdout.startswith("passthrough:"))
+
+    def test_theme_override(self):
+        result = self.fish("codex", env={"SBG_THEME": "stars"})
+        self.assertIn("SBG_EFFECT=stars", result.stdout, result.stderr)
 
 
 if __name__ == "__main__":

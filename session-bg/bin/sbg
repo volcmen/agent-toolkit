@@ -156,10 +156,20 @@ def ensure_palette(theme_file: Path | None, force: bool = False) -> Path | None:
 
 
 def command_line(argv: list[str]) -> str:
-    for arg in argv:
-        if re.search(r"\s", arg):
-            sys.exit(f"sbg: tattoy splits --command on whitespace; argument {arg!r} cannot be passed safely")
-    return " ".join(argv)
+    """Return the string for tattoy's --command, which is split on whitespace.
+
+    Arguments that contain whitespace or shell metacharacters are wrapped in a
+    tiny generated script so prompts like `claude "fix the tests"` survive.
+    """
+    if all(re.fullmatch(r"[A-Za-z0-9_@%+=:,./-]+", arg) for arg in argv):
+        return " ".join(argv)
+    body = "#!/bin/sh\nexec " + shlex.join(argv) + "\n"
+    digest = hashlib.sha256(body.encode()).hexdigest()[:16]
+    script = cache_dir() / f"cmd-{digest}.sh"
+    if not script.exists() or script.read_text(encoding="utf-8") != body:
+        script.write_text(body, encoding="utf-8")
+        script.chmod(0o755)
+    return str(script)
 
 
 def main() -> int:
@@ -210,10 +220,11 @@ def main() -> int:
         SBG_SEED=str(seed_for(pane_identity())),
         SBG_FPS=str(args.fps),
         SBG_DENSITY=str(args.density),
+        SBG_ACTIVE="1",
     )
     argv = [tattoy, "--main-config", str(config), "--disable-indicator", "--command", command_line(command)]
     if args.dry_run:
-        print(f"SBG_EFFECT={effect} SBG_SEED={env['SBG_SEED']} SBG_FPS={args.fps} SBG_DENSITY={args.density}")
+        print(f"SBG_EFFECT={effect} SBG_SEED={env['SBG_SEED']} SBG_FPS={args.fps} SBG_DENSITY={args.density} SBG_ACTIVE=1")
         print(shlex.join(argv))
         return 0
     os.execve(tattoy, argv, env)

@@ -25,6 +25,10 @@ ln -s "$PWD/../bin/sbg" ~/.local/bin/sbg     # or add bin/ to PATH
 sbg palette                                  # palette.toml from ~/.config/kitty/current-theme.conf
 ```
 
+`scripts/install.sh` does the two links, builds the plugin if needed, and adds
+`fish/sbg-auto.fish` to `~/.config/fish/conf.d/` so plain `claude` and `codex`
+open inside sbg automatically (see below).
+
 `sbg palette` writes Tattoy's `palette.toml` from your kitty theme so the first
 run needs no interactive palette capture. Outside kitty, run
 `tattoy --capture-palette` once instead.
@@ -50,6 +54,16 @@ Tattoy keys: `Alt+t` toggle effects, `Alt+s` scrollback mode (`Esc` exits),
 Environment overrides: `SBG_FPS`, `SBG_OPACITY`, `SBG_DENSITY` (0.1–3.0),
 `SBG_LOG_LEVEL` (writes `~/.cache/sbg/tattoy.log`), `SBG_FX` (plugin path),
 `SBG_TATTOY_CONFIG_DIR`, `SBG_KITTY_THEME`.
+
+## Automatic wrapping (fish)
+
+`fish/sbg-auto.fish` defines `claude` and `codex` functions that call
+`sbg auto -- <cmd> <args>` for interactive sessions and fall back to the real
+binary when: stdin/stdout is not a TTY, `-p/--print/--version/--help` is
+present, the first word is a batch subcommand (`claude mcp`, `codex exec`, …),
+`SBG_AUTO=0`, or the shell is already inside an sbg session (`SBG_ACTIVE`).
+`set -gx SBG_THEME waves` forces one effect. Prompts with spaces work:
+`claude "fix the tests"` is wrapped through a generated script in `~/.cache/sbg/`.
 
 ## How the plugin works
 
@@ -78,6 +92,4 @@ python3 scripts/bench.py 4 10  # CPU of 4 concurrent instances at 200x60
   (`/tui fullscreen`) and Codex (alt-screen) are unaffected.
 - Tattoy does not yet forward OSC 52 (clipboard) — kitty's native selection
   copy still works.
-- Tattoy splits `--command` on whitespace; arguments containing spaces are
-  rejected by `sbg`.
 - zellij does not forward focus events, so unfocused panes keep animating.
