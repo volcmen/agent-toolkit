@@ -144,9 +144,11 @@ class CliTests(unittest.TestCase):
 class FishWrapTests(unittest.TestCase):
     def fish(self, *args, env=None):
         script = f"source {ROOT / 'fish' / 'sbg-auto.fish'}; " + " ".join(args)
-        merged = dict(os.environ, SBG_AUTO_DRY_RUN="1", SBG_FX=str(SBG), PATH=f"{ROOT / 'bin'}:{os.environ['PATH']}", **(env or {}))
+        merged = dict(os.environ)
         merged.pop("SBG_ACTIVE", None)
         merged.pop("SBG_AUTO", None)
+        merged.pop("SBG_THEME", None)
+        merged.update(SBG_AUTO_DRY_RUN="1", SBG_FX=str(SBG), PATH=f"{ROOT / 'bin'}:{os.environ['PATH']}", **(env or {}))
         return subprocess.run(["fish", "-c", script], capture_output=True, text=True, env=merged, check=False, stdin=subprocess.DEVNULL)
 
     def test_interactive_claude_is_wrapped(self):
@@ -156,7 +158,7 @@ class FishWrapTests(unittest.TestCase):
 
     def test_codex_resume_is_wrapped(self):
         result = self.fish("codex", "resume")
-        self.assertIn("--command codex resume", result.stdout, result.stderr)
+        self.assertIn("--command 'codex resume'", result.stdout, result.stderr)
 
     def test_batch_flags_and_subcommands_pass_through(self):
         for call in (("claude", "--version"), ("claude", "-p", "hi"), ("claude", "mcp", "list"), ("codex", "exec", "hi"), ("codex", "--help")):
