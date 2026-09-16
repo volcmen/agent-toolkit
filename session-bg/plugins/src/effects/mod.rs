@@ -10,6 +10,7 @@ pub trait Effect {
     fn resize(&mut self, width: u16, height: u16, rng: &mut Rng);
     fn step(&mut self, dt: f32, rng: &mut Rng);
     fn render(&self, out: &mut Vec<Glyph>);
+    fn set_density(&mut self, _density: f32) {}
 }
 
 pub const NAMES: &[&str] = &["matrix", "plasma", "waves", "stars"];

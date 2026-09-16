@@ -7,14 +7,19 @@ Usage:
   sbg palette [--theme-file PATH]
   sbg install            # PATH shims so plain `claude` / `codex` start inside sbg
   sbg doctor             # environment report plus the tail of the tattoy log
+  sbg set [KEY=VALUE ...]  # write/merge this pane's override.json; no args prints it
+  sbg state [--json]       # merged session/status/override/error view for this pane
 
 Each zellij pane gets its own effect and seed (derived from ZELLIJ_PANE_ID), so
-four panes running `sbg auto -- claude` animate differently.
+four panes running `sbg auto -- claude` animate differently. Pane state lives
+under $SBG_STATE (default ~/.cache/sbg/panes/<pane identity>), created at
+launch and pruned after 24h of inactivity.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -27,9 +32,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "configs" / "tattoy.toml.tmpl"
 EFFECTS = ("matrix", "plasma", "waves", "stars")
+MODES = ("start", "idle", "thinking", "tool", "waiting", "error", "compacting")
+PARAM_RANGES = {
+    "density": (0.1, 3.0),
+    "speed": (0.25, 3.0),
+    "hue": (-1.0, 1.0),
+    "opacity": (0.05, 1.0),
+}
+STATE_FILES = ("session", "status", "override", "error")
 SHIMS = ("claude", "codex")
 FAST_EXIT_SECONDS = 5.0
 CUBE_LEVELS = (0, 95, 135, 175, 215, 255)
+PANE_STALE_SECONDS = 24 * 60 * 60
 
 
 def tattoy_config_dir() -> Path:
@@ -63,6 +77,143 @@ def plugin_binary() -> Path:
 
 def pane_identity() -> str:
     return os.environ.get("ZELLIJ_PANE_ID") or os.environ.get("KITTY_WINDOW_ID") or str(os.getppid())
+
+
+def pane_dir() -> Path:
+    override = os.environ.get("SBG_STATE")
+    if override:
+        return Path(override)
+    return cache_dir() / "panes" / pane_identity()
+
+
+def prune_stale_panes(current: Path) -> None:
+    panes_root = cache_dir() / "panes"
+    if not panes_root.is_dir():
+        return
+    now = time.time()
+    current_resolved = current.resolve()
+    for entry in panes_root.iterdir():
+        try:
+            if not entry.is_dir() or entry.resolve() == current_resolved:
+                continue
+            newest = entry.stat().st_mtime
+            for item in entry.rglob("*"):
+                if item.is_file():
+                    newest = max(newest, item.stat().st_mtime)
+            if now - newest > PANE_STALE_SECONDS:
+                shutil.rmtree(entry)
+        except OSError:
+            continue
+
+
+def atomic_write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".tmp{os.getpid()}")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def read_json_file(path: Path):
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return "<invalid>"
+
+
+def merged_state(state_dir: Path) -> dict:
+    return {name: read_json_file(state_dir / f"{name}.json") for name in STATE_FILES}
+
+
+def parse_bool_value(value: str) -> bool:
+    lowered = value.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    raise ValueError(f"invalid boolean {value!r}; use true or false")
+
+
+def validate_set_args(args: list[str]) -> tuple[dict, dict]:
+    direct: dict = {}
+    params: dict = {}
+    for item in args:
+        if "=" not in item:
+            raise ValueError(f"invalid argument {item!r}; expected key=value")
+        key, _, value = item.partition("=")
+        if key == "effect":
+            direct["effect"] = None if value == "" else value
+            if direct["effect"] is not None and direct["effect"] not in EFFECTS:
+                raise ValueError(f"invalid effect {value!r}; choose from {', '.join(EFFECTS)} or empty")
+        elif key == "script":
+            direct["script"] = None if value == "" else str(Path(value).expanduser())
+        elif key == "mode":
+            direct["mode"] = None if value == "" else value
+            if direct["mode"] is not None and direct["mode"] not in MODES:
+                raise ValueError(f"invalid mode {value!r}; choose from {', '.join(MODES)} or empty")
+        elif key in ("frozen", "enabled"):
+            direct[key] = parse_bool_value(value)
+        elif key == "palette":
+            params["palette"] = value
+        elif key in PARAM_RANGES:
+            try:
+                number = float(value)
+            except ValueError as exc:
+                raise ValueError(f"invalid {key} {value!r}; expected a number") from exc
+            low, high = PARAM_RANGES[key]
+            if not (low <= number <= high):
+                raise ValueError(f"invalid {key} {value!r}; expected {low}-{high}")
+            params[key] = number
+        else:
+            raise ValueError(f"unknown key {key!r}")
+    return direct, params
+
+
+def cmd_set(args: list[str]) -> int:
+    state_dir = pane_dir()
+    override_path = state_dir / "override.json"
+    if not args:
+        existing = read_json_file(override_path)
+        print(json.dumps(existing if isinstance(existing, dict) else {}, indent=2, sort_keys=True))
+        return 0
+    try:
+        direct, params = validate_set_args(args)
+    except ValueError as exc:
+        print(f"sbg: {exc}", file=sys.stderr)
+        return 2
+    existing = read_json_file(override_path)
+    data = existing if isinstance(existing, dict) else {}
+    data.update(direct)
+    existing_params = data.get("params")
+    existing_params = dict(existing_params) if isinstance(existing_params, dict) else {}
+    existing_params.update(params)
+    data["params"] = existing_params
+    data["v"] = 1
+    data["ts"] = time.time()
+    atomic_write_json(override_path, data)
+    return 0
+
+
+def cmd_state(args: list[str]) -> int:
+    as_json = "--json" in args
+    state_dir = pane_dir()
+    values = merged_state(state_dir)
+    if as_json:
+        payload = {"pane": pane_identity(), "dir": str(state_dir), **values}
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    for name in STATE_FILES:
+        value = values[name]
+        if value is None:
+            continue
+        if value == "<invalid>":
+            print(f"{name}.json: <invalid>")
+            continue
+        age = time.time() - (state_dir / f"{name}.json").stat().st_mtime
+        print(f"{name}.json (age {age:.1f}s)")
+        print(json.dumps(value, indent=2, sort_keys=True))
+    return 0
 
 
 def choose_effect(theme: str) -> str:
@@ -236,6 +387,21 @@ def doctor() -> int:
     for key in ("ZELLIJ_PANE_ID", "KITTY_WINDOW_ID", "TERM", "SBG_ACTIVE", "SBG_AUTO", "SBG_THEME", "CLAUDECODE"):
         if key in os.environ:
             print(f"env {key}={os.environ[key]}")
+    state_dir = pane_dir()
+    exists = state_dir.is_dir()
+    print(f"pane dir: {state_dir} ({'exists' if exists else 'missing'})")
+    if exists:
+        values = merged_state(state_dir)
+        session = values["session"] if isinstance(values["session"], dict) else {}
+        status = values["status"] if isinstance(values["status"], dict) else {}
+        override = values["override"] if isinstance(values["override"], dict) else {}
+        error = values["error"] if isinstance(values["error"], dict) else {}
+        mode = override.get("mode") or session.get("mode")
+        context_pct = status.get("context_pct")
+        effect = override.get("effect")
+        script = override.get("script")
+        message = error.get("message")
+        print(f"state: mode={mode} context_pct={context_pct} effect={effect} script={script} error={message}")
     tail = log_tail()
     print(f"log: {cache_dir() / 'tattoy.log'}")
     if tail:
@@ -266,6 +432,12 @@ def run_tattoy(tattoy: str, argv: list[str], env: dict[str, str]) -> int:
 
 
 def main() -> int:
+    raw = sys.argv[1:]
+    if raw and raw[0] == "set":
+        return cmd_set(raw[1:])
+    if raw and raw[0] == "state":
+        return cmd_state(raw[1:])
+
     parser = argparse.ArgumentParser(prog="sbg", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("theme", nargs="?", default="auto", help="matrix|plasma|waves|stars|auto (default auto), or palette|install|doctor")
     parser.add_argument("--fps", type=int, default=int(os.environ.get("SBG_FPS", "12")))
@@ -320,17 +492,30 @@ def main() -> int:
     if tattoy is None:
         sys.exit("sbg: tattoy not on PATH; install with `brew install tattoy-org/tap/tattoy`")
 
+    pane = pane_identity()
+    state_dir = pane_dir()
+    state_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        prune_stale_panes(state_dir)
+    except OSError:
+        pass
+
     env = dict(os.environ)
     env.update(
         SBG_EFFECT=effect,
-        SBG_SEED=str(seed_for(pane_identity())),
+        SBG_SEED=str(seed_for(pane)),
         SBG_FPS=str(args.fps),
         SBG_DENSITY=str(args.density),
         SBG_ACTIVE="1",
+        SBG_PANE=pane,
+        SBG_STATE=str(state_dir),
     )
     argv = [tattoy, "--main-config", str(config), "--disable-indicator", "--command", command_line(command)]
     if args.dry_run:
-        print(f"SBG_EFFECT={effect} SBG_SEED={env['SBG_SEED']} SBG_FPS={args.fps} SBG_DENSITY={args.density} SBG_ACTIVE=1")
+        print(
+            f"SBG_EFFECT={effect} SBG_SEED={env['SBG_SEED']} SBG_FPS={args.fps} "
+            f"SBG_DENSITY={args.density} SBG_ACTIVE=1 SBG_PANE={pane} SBG_STATE={state_dir}"
+        )
         print(shlex.join(argv))
         return 0
     return run_tattoy(tattoy, argv, env)

@@ -64,6 +64,10 @@ impl Effect for Waves {
         }
     }
 
+    fn set_density(&mut self, density: f32) {
+        self.density = density.clamp(0.1, 3.0);
+    }
+
     fn step(&mut self, dt: f32, _rng: &mut Rng) {
         self.t += dt;
     }

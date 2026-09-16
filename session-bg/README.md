@@ -78,6 +78,38 @@ claude`, and the tail of `~/.cache/sbg/tattoy.log` (default log level `warn`).
 When tattoy exits within 5 s or with a non-zero status, `sbg` prints the exit
 status, the exact command, and the new log lines to stderr before returning.
 
+## Live state: hooks, context usage, `sbg set`
+
+Every launch creates a pane directory (`SBG_STATE`, default
+`~/.cache/sbg/panes/<pane>`) that `sbg-fx` polls each frame. Three writers,
+one file each, atomic renames, no locks:
+
+| File | Writer | Content |
+|---|---|---|
+| `session.json` | `plugin/scripts/sbg_state.py` (Claude Code + Codex hooks) | `mode` (`start idle thinking tool waiting error compacting end`), `tool`, `tool_kind`, `subagents`, `prompt`, `seq` |
+| `status.json` | claude-core `statusline.py` (Claude only) | `context_pct`, `tokens`, `context_size`, `cost_usd`, `model`, `branch` |
+| `override.json` | `sbg set` / the `/bg` skill | `effect`, `script`, `mode` pin, `frozen`, `enabled`, `params.{density,speed,hue,opacity,palette}` |
+
+Default reaction (ceilings: speed 0.25–3, brightness ≤ 1.35, sparsity ≤ 40 %):
+context 0→100 % warms the hue and raises density; `thinking` speeds up; `tool`
+gives a short burst tinted by tool kind; `waiting` (permission or idle prompt)
+slows down and pulses brighter; `error` flashes red and fades; `compacting`
+dissolves; `idle` calms; subagents add density. Hooks are edge events, so
+`tool` decays to `thinking` after 20 s and everything decays to `idle` after
+120 s. Effects switch instantly when `override.json.effect` changes.
+
+```sh
+sbg set effect=stars density=0.6 hue=0.1   # live, from any shell in the pane
+sbg set mode=waiting                       # pin a mode; `sbg set mode=` unpins
+sbg set enabled=false                      # blank the background
+sbg state                                  # merged view of the three files
+```
+
+The hooks ship as the `session-bg` plugin of the `ai-workspace` marketplace
+(`~/Personal/ai/plugins.json`), one `hooks/hooks.json` for both agents; the
+hook script exits immediately when `SBG_STATE` is unset, so sessions outside
+sbg pay nothing.
+
 ## How the plugin works
 
 `sbg-fx` speaks Tattoy's JSON plugin protocol on stdio. Tattoy sends

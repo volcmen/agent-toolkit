@@ -1,0 +1,187 @@
+{
+  "description": "Feed live session state to session-bg's per-pane control channel.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" start",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" start",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" thinking",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" thinking",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" tool",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" tool",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" thinking",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" thinking",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" error",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" error",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" error",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" error",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" waiting",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" waiting",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" waiting",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" waiting",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" subagent-start",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" subagent-start",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" subagent-stop",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" subagent-stop",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" compacting",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" compacting",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" thinking",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" thinking",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" idle",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" idle",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" idle",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" idle",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" end",
+            "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" end",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}

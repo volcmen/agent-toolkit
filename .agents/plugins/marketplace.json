@@ -72,6 +72,24 @@
         "codex"
       ],
       "license": "MIT"
+    },
+    {
+      "name": "session-bg",
+      "source": "./session-bg/plugin",
+      "description": "Drives per-pane animated terminal backgrounds from live Claude Code / Codex session state.",
+      "version": "1.0.0",
+      "displayName": "Session BG",
+      "category": "Developer Tools",
+      "keywords": [
+        "terminal",
+        "background",
+        "animation",
+        "tattoy",
+        "session-state",
+        "claude-code",
+        "codex"
+      ],
+      "license": "MIT"
     }
   ]
 }

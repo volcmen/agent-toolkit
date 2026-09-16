@@ -59,3 +59,28 @@ pub fn hex(rgb: u32) -> [f32; 3] {
         (rgb & 0xff) as f32 / 255.0,
     ]
 }
+
+pub fn shift_hue(rgb: [f32; 3], turns: f32) -> [f32; 3] {
+    if turns.abs() < 1e-4 {
+        return rgb;
+    }
+    let angle = turns * std::f32::consts::TAU;
+    let (sin, cos) = angle.sin_cos();
+    let y = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
+    let i = 0.596 * rgb[0] - 0.274 * rgb[1] - 0.322 * rgb[2];
+    let q = 0.211 * rgb[0] - 0.523 * rgb[1] + 0.312 * rgb[2];
+    let i2 = i * cos - q * sin;
+    let q2 = i * sin + q * cos;
+    [
+        (y + 0.956 * i2 + 0.621 * q2).clamp(0.0, 1.0),
+        (y - 0.272 * i2 - 0.647 * q2).clamp(0.0, 1.0),
+        (y - 1.106 * i2 + 1.703 * q2).clamp(0.0, 1.0),
+    ]
+}
+
+pub fn modulate(rgb: [f32; 3], hue: f32, bright: f32, tint: [f32; 3], tint_k: f32) -> [f32; 3] {
+    let shifted = shift_hue(rgb, hue);
+    let luma = 0.299 * shifted[0] + 0.587 * shifted[1] + 0.114 * shifted[2];
+    let tinted = mix(shifted, scale(tint, (luma * 1.6).max(0.35)), tint_k * 0.8);
+    scale(tinted, bright)
+}

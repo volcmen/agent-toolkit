@@ -179,6 +179,34 @@ def main() -> None:
     sep = "  "
     print(sep.join(seg1))
     print(sep.join(seg2))
+    publish_session_bg(data, pct, tin, size, cost, g.get("branch"))
+
+
+def publish_session_bg(data, pct, tin, size, cost, branch) -> None:
+    """Feed context usage to session-bg (sbg) when this session runs inside it."""
+    state_dir = os.environ.get("SBG_STATE")
+    if not state_dir:
+        return
+    try:
+        import time
+        payload = {
+            "v": 1,
+            "ts": time.time(),
+            "context_pct": pct,
+            "tokens": tin,
+            "context_size": size,
+            "cost_usd": cost,
+            "duration_ms": int(get(data, "cost", "total_duration_ms", default=0) or 0),
+            "model": get(data, "model", "display_name"),
+            "branch": branch,
+        }
+        target = os.path.join(state_dir, "status.json")
+        tmp = f"{target}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        os.replace(tmp, target)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

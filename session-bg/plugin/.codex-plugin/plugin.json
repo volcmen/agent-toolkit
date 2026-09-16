@@ -1,0 +1,35 @@
+{
+  "name": "session-bg",
+  "version": "1.0.0",
+  "description": "Drives per-pane animated terminal backgrounds from live Claude Code / Codex session state.",
+  "author": {
+    "name": "David David"
+  },
+  "license": "MIT",
+  "keywords": [
+    "terminal",
+    "background",
+    "animation",
+    "tattoy",
+    "session-state",
+    "claude-code",
+    "codex"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Session BG",
+    "shortDescription": "Live per-pane animated terminal backgrounds driven by session state.",
+    "longDescription": "Feeds live Claude Code / Codex session state (mode, active tool, subagent count, prompts) into a per-pane control channel that the sbg-fx Tattoy plugin reads to drive an animated terminal background \u2014 idle, thinking, running a tool, waiting on a prompt, compacting, and more.",
+    "developerName": "David David",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Show the current session-bg state for this pane.",
+      "Switch this pane's background effect.",
+      "Tune the background animation's density, speed, and hue."
+    ]
+  }
+}

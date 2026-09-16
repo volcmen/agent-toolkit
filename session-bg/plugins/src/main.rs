@@ -1,6 +1,7 @@
 mod effects;
 mod frame;
 mod rng;
+mod state;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -143,10 +144,15 @@ fn main() {
 
     let frame = Duration::from_secs_f32(1.0 / settings.fps);
     let mut size = (0u16, 0u16);
+    let started = Instant::now();
     let mut last = Instant::now();
     let mut next = last;
     let mut glyphs = Vec::new();
     let stdout = std::io::stdout();
+    let mut watcher = state::Watcher::from_env();
+    let mut current_effect = settings.effect.clone();
+    let mut density = settings.density;
+    let mut blanked = false;
     loop {
         next += frame;
         let now = Instant::now();
@@ -158,24 +164,65 @@ fn main() {
         let dt = last.elapsed().as_secs_f32().min(0.25);
         last = Instant::now();
 
-        let snapshot = {
+
+        let occupancy = {
             let guard = shared.lock().expect("shared state poisoned");
             if guard.closed {
                 return;
             }
             guard.occupancy.clone()
         };
-        if snapshot.width == 0 || snapshot.height == 0 {
+        if occupancy.width == 0 || occupancy.height == 0 {
             continue;
         }
-        if (snapshot.width, snapshot.height) != size {
-            size = (snapshot.width, snapshot.height);
+        if (occupancy.width, occupancy.height) != size {
+            size = (occupancy.width, occupancy.height);
             effect.resize(size.0, size.1, &mut rng);
         }
-        effect.step(dt, &mut rng);
+        let snapshot = watcher.poll().clone();
+        if snapshot.changed {
+            let wanted = snapshot
+                .override_
+                .effect
+                .clone()
+                .unwrap_or_else(|| settings.effect.clone());
+            if wanted != current_effect {
+                if let Some(mut fresh) = effects::create(&wanted, density) {
+                    if size != (0, 0) {
+                        fresh.resize(size.0, size.1, &mut rng);
+                    }
+                    effect = fresh;
+                    current_effect = wanted;
+                } else {
+                    eprintln!("sbg-fx: ignoring unknown effect override {wanted:?}");
+                }
+            }
+        }
+        let modulation = state::modulation(&snapshot, state::now_secs(), started.elapsed().as_secs_f32());
+        if !snapshot.override_.enabled {
+            if !blanked {
+                blanked = true;
+                let message = tattoy_protocol::PluginOutputMessages::OutputCells(Vec::new());
+                let mut out = stdout.lock();
+                if serde_json::to_writer(&mut out, &message).is_err() || out.write_all(b"\n").is_err() || out.flush().is_err() {
+                    return;
+                }
+            }
+            continue;
+        }
+        blanked = false;
+        let wanted_density = (settings.density * modulation.density).clamp(0.1, 3.0);
+        if (wanted_density - density).abs() > 0.01 {
+            density = wanted_density;
+            effect.set_density(density);
+        }
+        effect.step(dt * modulation.speed, &mut rng);
         glyphs.clear();
         effect.render(&mut glyphs);
-        let cells = to_cells(&effects::visible(&glyphs, &snapshot));
+        for g in &mut glyphs {
+            g.rgb = frame::modulate(g.rgb, modulation.hue, modulation.bright, modulation.tint, modulation.tint_k);
+        }
+        let cells = to_cells(&effects::visible(&glyphs, &occupancy));
         let message = tattoy_protocol::PluginOutputMessages::OutputCells(cells);
         let mut out = stdout.lock();
         let ok = serde_json::to_writer(&mut out, &message).is_ok()

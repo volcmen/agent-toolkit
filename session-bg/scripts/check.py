@@ -16,6 +16,7 @@ def main() -> int:
         (["cargo", "clippy", "--release", "--quiet", "--", "-D", "warnings"], ROOT / "plugins"),
         (["cargo", "test", "--quiet"], ROOT / "plugins"),
         ([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"], ROOT),
+        ([sys.executable, "scripts/state-smoke.py"], ROOT),
     ]
     if shutil.which("tattoy"):
         commands.append(([sys.executable, "scripts/smoke.py"], ROOT))
