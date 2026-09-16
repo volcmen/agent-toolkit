@@ -53,6 +53,7 @@ test-codex-pair: bash codex-pair/scripts/check.sh
 test-chatgpt-consult: bun run --cwd chatgpt-consult check
 test-qwen-gsd: python3 qwen-gsd/scripts/check.py
 test-chrome-cdp: python3 chrome-cdp/scripts/check.py
+test-session-bg: python3 session-bg/scripts/check.py
 ```
 
 The workspace root installs nothing: its scripts are Python standard library

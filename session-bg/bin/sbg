@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Launch a command inside Tattoy with a per-pane animated background.
+
+Usage:
+  sbg [--theme NAME|auto] [--fps N] [--opacity F] [--density F] [--dry-run] -- COMMAND [ARGS...]
+  sbg --list
+  sbg palette [--theme-file PATH]
+
+Each zellij pane gets its own effect and seed (derived from ZELLIJ_PANE_ID), so
+four panes running `sbg auto -- claude` animate differently.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+TEMPLATE = ROOT / "configs" / "tattoy.toml.tmpl"
+EFFECTS = ("matrix", "plasma", "waves", "stars")
+CUBE_LEVELS = (0, 95, 135, 175, 215, 255)
+
+
+def tattoy_config_dir() -> Path:
+    """Return Tattoy's config directory for this OS (mirrors the `dirs` crate)."""
+    override = os.environ.get("SBG_TATTOY_CONFIG_DIR")
+    if override:
+        return Path(override)
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "tattoy"
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "tattoy"
+
+
+def cache_dir() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"
+    path = Path(base) / "sbg"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def plugin_binary() -> Path:
+    candidates = [
+        os.environ.get("SBG_FX"),
+        ROOT / "plugins" / "target" / "release" / "sbg-fx",
+        shutil.which("sbg-fx"),
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
+            return Path(candidate).resolve()
+    sys.exit("sbg: plugin binary not found; run `cargo build --release` in plugins/ or set SBG_FX")
+
+
+def pane_identity() -> str:
+    return os.environ.get("ZELLIJ_PANE_ID") or os.environ.get("KITTY_WINDOW_ID") or str(os.getppid())
+
+
+def choose_effect(theme: str) -> str:
+    if theme != "auto":
+        if theme not in EFFECTS:
+            sys.exit(f"sbg: unknown theme {theme!r}; choose from {', '.join(EFFECTS)} or auto")
+        return theme
+    digest = hashlib.sha256(pane_identity().encode()).digest()
+    return EFFECTS[digest[0] % len(EFFECTS)]
+
+
+def seed_for(identity: str) -> int:
+    return int.from_bytes(hashlib.sha256(identity.encode()).digest()[:8], "big")
+
+
+def render_config(effect: str, plugin: Path, fps: int, opacity: float, log_level: str) -> Path:
+    text = TEMPLATE.read_text(encoding="utf-8")
+    log_path = cache_dir() / "tattoy.log"
+    values = {
+        "log_level": log_level,
+        "log_path": str(log_path),
+        "frame_rate": str(fps),
+        "effect": effect,
+        "plugin": str(plugin),
+        "opacity": f"{opacity:.2f}",
+    }
+    rendered = text
+    for key, value in values.items():
+        rendered = rendered.replace(f"@@{key}@@", value)
+    if "@@" in rendered:
+        sys.exit("sbg: config template has an unfilled placeholder")
+    target = cache_dir() / f"tattoy-{effect}-{fps}-{int(opacity * 100)}-{log_level}.toml"
+    if not target.exists() or target.read_text(encoding="utf-8") != rendered:
+        target.write_text(rendered, encoding="utf-8")
+    return target
+
+
+def kitty_theme_file() -> Path | None:
+    for candidate in (
+        os.environ.get("SBG_KITTY_THEME"),
+        Path.home() / ".config" / "kitty" / "current-theme.conf",
+        Path.home() / ".config" / "kitty" / "kitty.conf",
+    ):
+        if candidate and Path(candidate).is_file():
+            return Path(candidate)
+    return None
+
+
+def parse_kitty_colors(text: str) -> dict[str, tuple[int, int, int]]:
+    colors: dict[str, tuple[int, int, int]] = {}
+    for line in text.splitlines():
+        match = re.match(r"^\s*(color\d+|foreground|background)\s+#?([0-9a-fA-F]{6})\s*$", line)
+        if match:
+            value = int(match.group(2), 16)
+            colors[match.group(1)] = (value >> 16 & 0xFF, value >> 8 & 0xFF, value & 0xFF)
+    return colors
+
+
+def xterm_default(index: int) -> tuple[int, int, int]:
+    if index < 16:
+        base = [
+            (0, 0, 0), (205, 0, 0), (0, 205, 0), (205, 205, 0), (0, 0, 238), (205, 0, 205), (0, 205, 205), (229, 229, 229),
+            (127, 127, 127), (255, 0, 0), (0, 255, 0), (255, 255, 0), (92, 92, 255), (255, 0, 255), (0, 255, 255), (255, 255, 255),
+        ]
+        return base[index]
+    if index < 232:
+        cube = index - 16
+        return (CUBE_LEVELS[cube // 36], CUBE_LEVELS[cube // 6 % 6], CUBE_LEVELS[cube % 6])
+    gray = 8 + (index - 232) * 10
+    return (gray, gray, gray)
+
+
+def build_palette(colors: dict[str, tuple[int, int, int]]) -> str:
+    lines = []
+    for index in range(256):
+        rgb = colors.get(f"color{index}", xterm_default(index))
+        lines.append(f"{index} = [{rgb[0]}, {rgb[1]}, {rgb[2]}]")
+    fg = colors.get("foreground", (229, 229, 229))
+    bg = colors.get("background", (0, 0, 0))
+    lines.append(f"foreground = [{fg[0]}, {fg[1]}, {fg[2]}]")
+    lines.append(f"background = [{bg[0]}, {bg[1]}, {bg[2]}]")
+    return "\n".join(lines) + "\n"
+
+
+def ensure_palette(theme_file: Path | None, force: bool = False) -> Path | None:
+    config_dir = tattoy_config_dir()
+    config_dir.mkdir(parents=True, exist_ok=True)
+    palette = config_dir / "palette.toml"
+    if palette.exists() and not force:
+        return palette
+    theme = theme_file or kitty_theme_file()
+    if theme is None:
+        return None
+    palette.write_text(build_palette(parse_kitty_colors(theme.read_text(encoding="utf-8"))), encoding="utf-8")
+    return palette
+
+
+def command_line(argv: list[str]) -> str:
+    for arg in argv:
+        if re.search(r"\s", arg):
+            sys.exit(f"sbg: tattoy splits --command on whitespace; argument {arg!r} cannot be passed safely")
+    return " ".join(argv)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="sbg", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("theme", nargs="?", default="auto", help="matrix|plasma|waves|stars|auto (default auto)")
+    parser.add_argument("--fps", type=int, default=int(os.environ.get("SBG_FPS", "12")))
+    parser.add_argument("--opacity", type=float, default=float(os.environ.get("SBG_OPACITY", "0.6")))
+    parser.add_argument("--density", type=float, default=float(os.environ.get("SBG_DENSITY", "1.0")))
+    parser.add_argument("--log-level", default=os.environ.get("SBG_LOG_LEVEL", "off"))
+    parser.add_argument("--list", action="store_true", help="list effects and exit")
+    parser.add_argument("--dry-run", action="store_true", help="print the tattoy invocation and exit")
+    parser.add_argument("--theme-file", type=Path, help="kitty theme file for `sbg palette`")
+    argv = sys.argv[1:]
+    command: list[str] = []
+    if "--" in argv:
+        split = argv.index("--")
+        argv, command = argv[:split], argv[split + 1 :]
+    args = parser.parse_args(argv)
+
+    if args.list:
+        print("\n".join(EFFECTS))
+        return 0
+    if args.theme == "palette":
+        palette = ensure_palette(args.theme_file, force=True)
+        if palette is None:
+            sys.exit("sbg: no kitty theme found; run `tattoy --capture-palette` in the terminal instead")
+        print(f"palette written to {palette}")
+        return 0
+
+    if not command:
+        parser.error("missing command, e.g. `sbg auto -- claude`")
+    if not (1 <= args.fps <= 60):
+        parser.error("--fps must be between 1 and 60")
+    if not (0.05 <= args.opacity <= 1.0):
+        parser.error("--opacity must be between 0.05 and 1.0")
+
+    effect = choose_effect(args.theme)
+    plugin = plugin_binary()
+    config = render_config(effect, plugin, args.fps, args.opacity, args.log_level)
+    ensure_palette(None)
+    tattoy = shutil.which("tattoy")
+    if tattoy is None:
+        sys.exit("sbg: tattoy not on PATH; install with `brew install tattoy-org/tap/tattoy`")
+
+    env = dict(os.environ)
+    env.update(
+        SBG_EFFECT=effect,
+        SBG_SEED=str(seed_for(pane_identity())),
+        SBG_FPS=str(args.fps),
+        SBG_DENSITY=str(args.density),
+    )
+    argv = [tattoy, "--main-config", str(config), "--disable-indicator", "--command", command_line(command)]
+    if args.dry_run:
+        print(f"SBG_EFFECT={effect} SBG_SEED={env['SBG_SEED']} SBG_FPS={args.fps} SBG_DENSITY={args.density}")
+        print(shlex.join(argv))
+        return 0
+    os.execve(tattoy, argv, env)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

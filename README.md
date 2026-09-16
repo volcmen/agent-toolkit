@@ -19,6 +19,7 @@ their own projects and use their product-native installation workflows.
 - [`bun-global-tools`](bun-global-tools/): exact-pinned Bun global CLI tools,
   lifecycle trust policy, and npm-global drift detection.
 - [`chrome-cdp`](chrome-cdp/): safe Spotlight launcher for a headed, dedicated-profile Chrome CDP session.
+- [`session-bg`](session-bg/): per-pane animated ASCII backgrounds for Claude Code / Codex sessions via Tattoy.
 
 Each project owns its implementation, tests, and documentation; plugin projects
 also own their plugin directories. The repository root owns the shared
@@ -142,6 +143,7 @@ validation commands above.
 ├── chrome-cdp/
 ├── codex-pair/
 ├── qwen-gsd/
+├── session-bg/
 └── wiki/
 ```
 

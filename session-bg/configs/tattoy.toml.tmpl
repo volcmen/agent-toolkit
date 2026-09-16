@@ -1,0 +1,65 @@
+log_level = "@@log_level@@"
+log_path = "@@log_path@@"
+frame_rate = @@frame_rate@@
+show_tattoy_indicator = false
+show_startup_logo = false
+scrollback_size = 5000
+
+[notifications]
+enabled = true
+opacity = 0.9
+level = "warn"
+duration = 4.0
+
+[color]
+saturation = 0.0
+brightness = 0.0
+hue = 0.0
+
+[text_contrast]
+enabled = true
+target_contrast = 2.0
+apply_to_readable_text_only = true
+
+[minimap]
+enabled = false
+animation_speed = 0.15
+max_width = 10
+
+[shader]
+enabled = false
+opacity = 0.75
+layer = -10
+render = true
+render_shader_colours_to_text = false
+path = "shaders/soft_shadows.glsl"
+
+[animated_cursor]
+enabled = false
+opacity = 1.0
+path = "shaders/cursors/smear_fade.glsl"
+cursor_scale = 0.0
+
+[bg_command]
+enabled = false
+command = ["echo", "Hello World"]
+expect_exit = false
+opacity = 0.75
+layer = -5
+
+[[plugins]]
+name = "sbg-@@effect@@"
+path = "@@plugin@@"
+enabled = true
+layer = -5
+opacity = @@opacity@@
+
+[keybindings]
+toggle_tattoy = { mods = "ALT", key = "t" }
+toggle_scrolling = { mods = "ALT", key = "s" }
+toggle_minimap = { mods = "ALT", key = "M" }
+scroll_up = { key = "UpArrow" }
+scroll_down = { key = "DownArrow" }
+scroll_exit = { key = "Escape" }
+shader_prev = { mods = "ALT|SHIFT", key = "(" }
+shader_next = { mods = "ALT|SHIFT", key = ")" }

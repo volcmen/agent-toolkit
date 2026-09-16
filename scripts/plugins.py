@@ -330,6 +330,7 @@ PROJECT_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ("claude-core", [sys.executable, "scripts/manage.py", "check"]),
     ("qwen-gsd", [sys.executable, "scripts/check.py"]),
     ("chrome-cdp", [sys.executable, "scripts/check.py"]),
+    ("session-bg", [sys.executable, "scripts/check.py"]),
 )
 
 
