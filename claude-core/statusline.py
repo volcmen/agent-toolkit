@@ -48,7 +48,7 @@ def git_info(cwd: str, session_id: str) -> dict:
     safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", session_id)[:64]
     cache = os.path.join(tempfile.gettempdir(), f"ntc-statusline-{safe_id}")
     try:
-        if time.time() - os.path.getmtime(cache) < 5:
+        if time.time() - os.path.getmtime(cache) < 20:
             return json.loads(open(cache).read())
     except (OSError, ValueError):
         pass

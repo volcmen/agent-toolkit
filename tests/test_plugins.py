@@ -120,6 +120,53 @@ class CatalogValidation(unittest.TestCase):
                 self.load(catalog(plugins=[]), Path(tmp))
 
 
+class TestCounts(unittest.TestCase):
+    def test_counts_unittest_and_bun_summaries_only(self) -> None:
+        output = "ok   dispatch keeps consent\nRan 29 tests in 7.3s\nOK\n 12 pass\n 0 fail\nall checks passed\n"
+        self.assertEqual(pl.count_tests(output), 41)
+
+    def test_check_scripts_without_a_runner_summary_count_nothing(self) -> None:
+        self.assertEqual(pl.count_tests("ok   resume omits -C\nall codex-pair checks passed\n"), 0)
+
+    def test_check_prints_a_ledger_parseable_aggregate(self) -> None:
+        outputs = {
+            "test_plugins.py": "Ran 53 tests in 2.4s\nOK\n",
+            "manage.py": "Ran 196 tests in 90.0s\nOK\n",
+            "check.sh": "ok   something\nall codex-pair checks passed\n",
+        }
+
+        def fake_run(command, cwd=None, capture_output=False, text=False, check=False, env=None):
+            key = next((k for k in outputs if any(k in str(part) for part in command)), "")
+            return mock.Mock(returncode=0, stdout="", stderr=outputs.get(key, ""))
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "tests").mkdir()
+            (root / "tests" / "test_plugins.py").write_text("", encoding="utf-8")
+            for name in ("claude-core", "codex-pair"):
+                (root / name).mkdir()
+            checks = (
+                ("claude-core", ["python3", "scripts/manage.py", "check"]),
+                ("codex-pair", ["bash", "scripts/check.sh"]),
+            )
+            output = io.StringIO()
+            with (
+                mock.patch.object(pl, "ROOT", root),
+                mock.patch.object(pl, "CLAUDE_MARKETPLACE", root / "a.json"),
+                mock.patch.object(pl, "CODEX_MARKETPLACE", root / "b.json"),
+                mock.patch.object(pl, "PROJECT_CHECKS", checks),
+                mock.patch.object(pl, "load_catalog", return_value=catalog()),
+                mock.patch.object(pl, "check_plugin", return_value=[]),
+                mock.patch.object(pl.subprocess, "run", side_effect=fake_run),
+                redirect_stdout(output),
+            ):
+                pl.write_json(root / "a.json", pl.render_marketplace(catalog()), False)
+                pl.write_json(root / "b.json", pl.render_marketplace(catalog()), False)
+                rc = pl.cmd_check(argparse.Namespace(fast=False))
+            self.assertEqual(rc, 0, output.getvalue())
+            self.assertRegex(output.getvalue(), r"\nRan 249 tests in \d+\.\d+s\n\nOK\n")
+
+
 class Rendering(unittest.TestCase):
     def test_both_agents_get_the_same_marketplace(self) -> None:
         rendered = pl.render_marketplace(catalog())

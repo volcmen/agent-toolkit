@@ -129,18 +129,23 @@ def reason(command):
     return None
 
 
-def main():
+def decision(permission, why):
+    return json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": permission,
+        "permissionDecisionReason": why,
+    }})
+
+
+def main(stdin=None):
     try:
-        command = json.load(sys.stdin).get("tool_input", {}).get("command", "") or ""
+        command = json.load(stdin or sys.stdin).get("tool_input", {}).get("command", "") or ""
     except (ValueError, AttributeError):
+        print(decision("ask", "guard-red-write could not read the command payload; confirm this Bash call by hand."))
         return 0
     why = reason(command)
     if why:
-        print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": "Blocked by guard-red-write: " + why,
-        }}))
+        print(decision("deny", "Blocked by guard-red-write: " + why))
     return 0
 
 

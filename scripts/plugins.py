@@ -31,6 +31,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -304,6 +305,19 @@ def check_plugin(entry: dict[str, Any]) -> list[str]:
     return problems
 
 
+TEST_COUNT_PATTERNS = (re.compile(r"Ran (\d+) tests?"), re.compile(r"(?m)^\s*(\d+) pass\s*$"))
+
+
+def count_tests(output: str) -> int:
+    """Sum the test counts a child check printed, in the shapes verify-run.py recognizes.
+
+    The umbrella gate swallows successful child output, so without this the evidence
+    ledger records a green run as VACUOUS. Only real runner summaries count; a check
+    script's own "ok" lines are not tests.
+    """
+    return sum(int(match) for pattern in TEST_COUNT_PATTERNS for match in pattern.findall(output))
+
+
 # (project dir, command run from inside that dir)
 PROJECT_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ("wiki", [sys.executable, "scripts/check.py"]),
@@ -341,12 +355,15 @@ def cmd_check(args: argparse.Namespace) -> int:
         print(f"  - {problem}")
 
     if not args.fast:
+        started = time.monotonic()
+        tests_ran = 0
         suite = ROOT / "tests" / "test_plugins.py"
         if suite.is_file():
             result = subprocess.run(
                 [sys.executable, str(suite)], cwd=ROOT, capture_output=True, text=True, check=False
             )
             ok = result.returncode == 0
+            tests_ran += count_tests(result.stdout + result.stderr)
             print(f"{'ok  ' if ok else 'FAIL'} workspace tests")
             if not ok:
                 for line in (result.stdout + result.stderr).strip().splitlines()[-15:]:
@@ -363,12 +380,15 @@ def cmd_check(args: argparse.Namespace) -> int:
                 continue
             result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False)
             ok = result.returncode == 0
+            tests_ran += count_tests(result.stdout + result.stderr)
             print(f"{'ok  ' if ok else 'FAIL'} {name} project checks")
             if not ok:
                 tail = (result.stdout + result.stderr).strip().splitlines()[-15:]
                 for line in tail:
                     print(f"  | {line}")
                 problems.append(f"{name} project checks failed")
+        print(f"\nRan {tests_ran} tests in {time.monotonic() - started:.3f}s\n")
+        print("OK" if not problems else f"FAILED (failures={len(problems)})")
 
     return 1 if problems else 0
 

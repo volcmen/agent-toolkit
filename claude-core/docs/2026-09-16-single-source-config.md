@@ -83,6 +83,34 @@ tests use. `mise reshim` kept the stale shims; deleting the `python*`/`pip*` shi
 both suites. The ledger keeps that red run as a preserved first failure for its tree, so the
 final evidence is the green run against the follow-up commit.
 
+## Second opinions and the follow-up increment
+
+ChatGPT (work project, lean profile) and Codex (`codex-pair shape`, gpt-5.6-sol/xhigh) were
+both asked to red-team a seven-item candidate list under the constraints above. They
+converged: repair verification evidence first, measure first-context composition before
+cutting any instruction text, and do not build a doctor command, a statusline daemon, a hook
+framework, a transcript-driven hard budget, or an MCP fragment until drift is an observed
+problem. Codex added evidence from `metrics/gate-runs-2026-09-06.txt`: a fork's ~50K birth
+context is platform scaffolding — `mcpServers: []` saved nothing and a tools allowlist ~1.5K —
+so the 64.8K median is not addressable from this repo's prose.
+
+Landed from that:
+
+- `scripts/plugins.py check` now ends with a unittest-shaped `Ran N tests` / `OK` summary
+  aggregated from the child suites' own runner output (`count_tests`), so the evidence ledger
+  records the workspace gate with counts instead of `VACUOUS`. Check-script `ok` lines are
+  not counted as tests.
+- `statusline.py` cached git state for 5 s while the status line refreshes every 5 s, so
+  nearly every refresh spawned three `git` processes; the cache now lives 20 s.
+- `hooks/guard-red-write.py` answers `permissionDecision: ask` when it cannot read the hook
+  payload, instead of silently allowing; a readable clean command still produces no output.
+
+Deferred with reasons: MCP-server fragment (`~/.claude.json` also carries mutable app state;
+no observed drift), hook timeout matrix (no failing or slow hook observed; timeouts are
+already 5–30 s), context budget gate (per-session values are too noisy for a blocking check),
+doctor (status already reports live drift). User-side lever outside the repo: eleven claude.ai
+connectors expose only an `authenticate` tool and still cost a name each in every session.
+
 ## Rollback
 
 Settings: copy the pre-cutover snapshot back. Links: `manage.py uninstall` removes only links

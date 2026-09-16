@@ -44,6 +44,26 @@ class CommandGuard(unittest.TestCase):
         self.assertIsNone(guard.reason("cat <<-EOF\n\tgit push -d origin example\n\tEOF\n"))
         self.assertIsNotNone(guard.reason("cat <<- EOF\n\tdocumentation\n\tEOF\ngit push --no-verify origin main\n"))
 
+    def test_unreadable_payload_asks_instead_of_silently_allowing(self):
+        import contextlib, io, json
+        for payload in ("not json", "[]", '{"tool_input": "string"}'):
+            with self.subTest(payload=payload):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertEqual(guard.main(io.StringIO(payload)), 0)
+                self.assertEqual(json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"], "ask")
+
+    def test_clean_payload_stays_silent_and_red_payload_denies(self):
+        import contextlib, io, json
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            guard.main(io.StringIO('{"tool_input": {"command": "git status"}}'))
+        self.assertEqual(out.getvalue(), "")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            guard.main(io.StringIO('{"tool_input": {"command": "git push --no-verify origin main"}}'))
+        self.assertEqual(json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"], "deny")
+
 
 if __name__ == "__main__":
     unittest.main()
