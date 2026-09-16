@@ -5,12 +5,17 @@ mod waves;
 
 use crate::frame::{Glyph, Occupancy};
 use crate::rng::Rng;
+use crate::state::ScriptState;
 
 pub trait Effect {
     fn resize(&mut self, width: u16, height: u16, rng: &mut Rng);
     fn step(&mut self, dt: f32, rng: &mut Rng);
-    fn render(&self, out: &mut Vec<Glyph>);
+    fn render(&mut self, out: &mut Vec<Glyph>);
     fn set_density(&mut self, _density: f32) {}
+    fn set_state(&mut self, _state: &ScriptState) {}
+    fn failed(&self) -> bool {
+        false
+    }
 }
 
 pub const NAMES: &[&str] = &["matrix", "plasma", "waves", "stars"];

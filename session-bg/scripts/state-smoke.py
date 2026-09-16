@@ -3,7 +3,8 @@
 
 Starts the plugin with SBG_STATE pointing at a scratch pane dir, feeds one
 pty_update, samples frames, then writes override.json (effect=stars) and
-session.json (mode=error) and checks that the glyph set and colours change.
+session.json (mode=error) and checks that the glyph set and colours change, then
+switches to a Lua script, breaks it, and checks the last good frame survives.
 """
 from __future__ import annotations
 
@@ -50,6 +51,13 @@ def main() -> int:
         after = frames(proc, 1.0)
         Path(tmp, "session.json").write_text(json.dumps({"v": 1, "mode": "error", "ts": time.time()}))
         tinted = frames(proc, 0.5)
+        script = Path(tmp, "smoke.lua")
+        script.write_text("function render(fx, state)\n  for y = 0, 9 do fx:put(y * 2, y, '@', 1, 1, 1) end\nend\n")
+        Path(tmp, "override.json").write_text(json.dumps({"v": 1, "script": str(script)}))
+        scripted = frames(proc, 1.0)
+        script.write_text("function render(fx, state) this is not lua end\n")
+        broken = frames(proc, 1.5)
+        error_recorded = Path(tmp, "error.json").is_file()
         Path(tmp, "override.json").write_text(json.dumps({"v": 1, "enabled": False}))
         disabled = frames(proc, 0.6)
         proc.stdin.close()
@@ -69,6 +77,9 @@ def main() -> int:
         "katakana before override": any("ｱ" <= ch <= "ﾝ" for ch in glyphs(before)),
         "stars after override": bool(glyphs(after)) and not any("ｱ" <= ch <= "ﾝ" for ch in glyphs(after[-3:])),
         "error mode tints red": redness(tinted[-3:]) > redness(after[-3:]) + 0.1,
+        "script override paints its glyph": bool(scripted) and glyphs(scripted[-3:]) == {"@"},
+        "broken script keeps the last good frames": bool(broken) and glyphs(broken[-3:]) == {"@"},
+        "broken script records error.json": error_recorded,
         "disabled emits a blank frame": bool(disabled) and disabled[-1] == [],
     }
     for name, ok in checks.items():

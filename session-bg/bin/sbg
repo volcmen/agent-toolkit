@@ -2,13 +2,18 @@
 """Launch a command inside Tattoy with a per-pane animated background.
 
 Usage:
-  sbg [--theme NAME|auto] [--fps N] [--opacity F] [--density F] [--dry-run] -- COMMAND [ARGS...]
+  sbg [--theme NAME|auto] [--fps N] [--opacity F] [--density F] [--script PATH] [--dry-run] -- COMMAND [ARGS...]
   sbg --list
   sbg palette [--theme-file PATH]
-  sbg install            # PATH shims so plain `claude` / `codex` start inside sbg
+  sbg install            # PATH shims + copies plugins/fx/*.lua into ~/.config/sbg/fx/
   sbg doctor             # environment report plus the tail of the tattoy log
   sbg set [KEY=VALUE ...]  # write/merge this pane's override.json; no args prints it
   sbg state [--json]       # merged session/status/override/error view for this pane
+  sbg fx list [--json]        # builtins plus scripts in $SBG_FX_DIR (default ~/.config/sbg/fx/)
+  sbg fx new NAME              # copy the template to $SBG_FX_DIR/NAME.lua; refuses to overwrite
+  sbg fx path NAME              # print a script's path
+  sbg fx use NAME|off           # switch this pane to a script or builtin, or clear it
+  sbg fx edit NAME               # open $VISUAL/$EDITOR on an existing script
 
 Each zellij pane gets its own effect and seed (derived from ZELLIJ_PANE_ID), so
 four panes running `sbg auto -- claude` animate differently. Pane state lives
@@ -61,6 +66,28 @@ def cache_dir() -> Path:
     path = Path(base) / "sbg"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def fx_dir() -> Path:
+    override = os.environ.get("SBG_FX_DIR")
+    if override:
+        path = Path(override).expanduser()
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
+        path = Path(base) / "sbg" / "fx"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def shipped_fx_scripts() -> list[Path]:
+    source = ROOT / "plugins" / "fx"
+    if not source.is_dir():
+        return []
+    return sorted(source.glob("*.lua"))
+
+
+def fx_scripts() -> list[Path]:
+    return sorted(fx_dir().glob("*.lua"))
 
 
 def plugin_binary() -> Path:
@@ -214,6 +241,116 @@ def cmd_state(args: list[str]) -> int:
         print(f"{name}.json (age {age:.1f}s)")
         print(json.dumps(value, indent=2, sort_keys=True))
     return 0
+
+
+def cmd_fx_list(args: list[str]) -> int:
+    as_json = "--json" in args
+    scripts = [{"name": p.stem, "path": str(p)} for p in fx_scripts()]
+    if as_json:
+        print(json.dumps({"builtins": list(EFFECTS), "scripts": scripts}, indent=2, sort_keys=True))
+        return 0
+    for name in EFFECTS:
+        print(f"{name}\tbuiltin")
+    for entry in scripts:
+        print(f"{entry['name']}\tscript\t{entry['path']}")
+    return 0
+
+
+def cmd_fx_new(args: list[str]) -> int:
+    if len(args) != 1:
+        print("sbg: usage: sbg fx new NAME", file=sys.stderr)
+        return 2
+    name = args[0]
+    target = fx_dir() / f"{name}.lua"
+    if target.exists():
+        print(f"sbg: {target} already exists; edit it directly or choose another name", file=sys.stderr)
+        return 1
+    template = ROOT / "plugins" / "fx" / "template.lua"
+    if not template.is_file():
+        print(f"sbg: template missing at {template}", file=sys.stderr)
+        return 1
+    shutil.copyfile(template, target)
+    print(str(target))
+    return 0
+
+
+def cmd_fx_path(args: list[str]) -> int:
+    if len(args) != 1:
+        print("sbg: usage: sbg fx path NAME", file=sys.stderr)
+        return 2
+    name = args[0]
+    script = fx_dir() / f"{name}.lua"
+    if script.is_file():
+        print(str(script))
+        return 0
+    if name in EFFECTS:
+        print(f"sbg: {name!r} is a builtin effect with no file; use `sbg fx use {name}`", file=sys.stderr)
+        return 1
+    print(f"sbg: no fx script or builtin named {name!r}", file=sys.stderr)
+    return 1
+
+
+def cmd_fx_use(args: list[str]) -> int:
+    if len(args) != 1:
+        print("sbg: usage: sbg fx use NAME|off", file=sys.stderr)
+        return 2
+    name = args[0]
+    if name == "off":
+        return cmd_set(["script="])
+    script = fx_dir() / f"{name}.lua"
+    if script.is_file():
+        return cmd_set([f"script={script}"])
+    if name in EFFECTS:
+        return cmd_set([f"effect={name}", "script="])
+    print(f"sbg: no fx script or builtin named {name!r}; try `sbg fx list`", file=sys.stderr)
+    return 1
+
+
+def cmd_fx_edit(args: list[str]) -> int:
+    if len(args) != 1:
+        print("sbg: usage: sbg fx edit NAME", file=sys.stderr)
+        return 2
+    name = args[0]
+    script = fx_dir() / f"{name}.lua"
+    if not script.is_file():
+        print(f"sbg: {script} does not exist; run `sbg fx new {name}` first", file=sys.stderr)
+        return 1
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+    if not editor:
+        print("sbg: set $VISUAL or $EDITOR to edit fx scripts", file=sys.stderr)
+        return 1
+    return subprocess.run([*shlex.split(editor), str(script)], check=False).returncode
+
+
+def cmd_fx(args: list[str]) -> int:
+    if not args:
+        print("sbg: usage: sbg fx list|new|path|use|edit ...", file=sys.stderr)
+        return 2
+    sub, rest = args[0], args[1:]
+    if sub == "list":
+        return cmd_fx_list(rest)
+    if sub == "new":
+        return cmd_fx_new(rest)
+    if sub == "path":
+        return cmd_fx_path(rest)
+    if sub == "use":
+        return cmd_fx_use(rest)
+    if sub == "edit":
+        return cmd_fx_edit(rest)
+    print(f"sbg: unknown fx subcommand {sub!r}", file=sys.stderr)
+    return 2
+
+
+def install_fx_scripts() -> list[Path]:
+    target_dir = fx_dir()
+    copied = []
+    for source in shipped_fx_scripts():
+        target = target_dir / source.name
+        if target.exists():
+            continue
+        shutil.copyfile(source, target)
+        copied.append(target)
+    return copied
 
 
 def choose_effect(theme: str) -> str:
@@ -402,6 +539,11 @@ def doctor() -> int:
         script = override.get("script")
         message = error.get("message")
         print(f"state: mode={mode} context_pct={context_pct} effect={effect} script={script} error={message}")
+        error_path = state_dir / "error.json"
+        if error_path.is_file():
+            print(f"error.json: {error_path.read_text(encoding='utf-8').strip()}")
+    scripts = fx_scripts()
+    print(f"fx dir: {fx_dir()} ({len(scripts)} script{'s' if len(scripts) != 1 else ''})")
     tail = log_tail()
     print(f"log: {cache_dir() / 'tattoy.log'}")
     if tail:
@@ -437,6 +579,8 @@ def main() -> int:
         return cmd_set(raw[1:])
     if raw and raw[0] == "state":
         return cmd_state(raw[1:])
+    if raw and raw[0] == "fx":
+        return cmd_fx(raw[1:])
 
     parser = argparse.ArgumentParser(prog="sbg", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("theme", nargs="?", default="auto", help="matrix|plasma|waves|stars|auto (default auto), or palette|install|doctor")
@@ -447,6 +591,7 @@ def main() -> int:
     parser.add_argument("--list", action="store_true", help="list effects and exit")
     parser.add_argument("--dry-run", action="store_true", help="print the tattoy invocation and exit")
     parser.add_argument("--theme-file", type=Path, help="kitty theme file for `sbg palette`")
+    parser.add_argument("--script", type=Path, help="launch with SBG_SCRIPT set to this Lua fx script")
     argv = sys.argv[1:]
     command: list[str] = []
     if "--" in argv:
@@ -469,6 +614,8 @@ def main() -> int:
         print(f"linked ~/.local/bin/sbg and {shims}/{{{','.join(SHIMS)}}}")
         if not path_has_shims():
             print(f"prepend {shims} to PATH after every other PATH edit in your shell init, e.g. fish: fish_add_path --path --move --prepend {shims}")
+        copied = install_fx_scripts()
+        print(f"fx scripts: {fx_dir()} ({len(copied)} new, {len(fx_scripts())} total)")
         return 0
     if args.theme == "palette":
         palette = ensure_palette(args.theme_file, force=True)
@@ -510,11 +657,14 @@ def main() -> int:
         SBG_PANE=pane,
         SBG_STATE=str(state_dir),
     )
+    if args.script:
+        env["SBG_SCRIPT"] = str(args.script.expanduser())
     argv = [tattoy, "--main-config", str(config), "--disable-indicator", "--command", command_line(command)]
     if args.dry_run:
+        script_part = f" SBG_SCRIPT={env['SBG_SCRIPT']}" if args.script else ""
         print(
             f"SBG_EFFECT={effect} SBG_SEED={env['SBG_SEED']} SBG_FPS={args.fps} "
-            f"SBG_DENSITY={args.density} SBG_ACTIVE=1 SBG_PANE={pane} SBG_STATE={state_dir}"
+            f"SBG_DENSITY={args.density} SBG_ACTIVE=1 SBG_PANE={pane} SBG_STATE={state_dir}{script_part}"
         )
         print(shlex.join(argv))
         return 0

@@ -36,10 +36,9 @@ impl Waves {
     fn surface_y(&self, layer: &Layer, x: f32) -> f32 {
         let h = f32::from(self.height);
         let base = h * (1.0 - layer.depth);
-        base
-            - layer.amp
-                * ((x * layer.freq + self.t * layer.speed + layer.phase).sin()
-                    + 0.5 * ((x * layer.freq * 2.3 - self.t * layer.speed * 0.7).sin()))
+        base - layer.amp
+            * ((x * layer.freq + self.t * layer.speed + layer.phase).sin()
+                + 0.5 * ((x * layer.freq * 2.3 - self.t * layer.speed * 0.7).sin()))
     }
 }
 
@@ -72,7 +71,7 @@ impl Effect for Waves {
         self.t += dt;
     }
 
-    fn render(&self, out: &mut Vec<Glyph>) {
+    fn render(&mut self, out: &mut Vec<Glyph>) {
         let h = i32::from(self.height);
         let fill_rows = (2.0 * self.density).round().max(1.0) as i32;
         for x in 0..self.width {

@@ -26,3 +26,15 @@ Per app: `sbg matrix -- claude`, `sbg waves -- codex` in a zellij pane.
 - [ ] kitty selection copy
 - [ ] `Alt+t` toggles the effect off/on
 - [ ] visual: glyph brightness vs. text readability; adjust `--opacity`
+
+## 2026-09-17 — live state + Lua scripting
+
+| Check | Result |
+|---|---|
+| `cargo test --release` | 26 passed (state merge/decay/ceilings, sandbox denial, runaway abort, memory limit, hot reload, fx:put garbage, full-grid perf) |
+| Full-grid 200×60 Lua script, release | p50 2.75 ms, p95 2.98 ms per frame (budget 8 ms) |
+| `scripts/state-smoke.py` | 8/8: effect override, error tint, script override, broken script keeps last good + error.json, disabled blanks |
+| `scripts/bench.py 4 10` builtins | tattoy+sbg-fx total ≈ 17.5 % of one M5 core |
+| `BENCH_SCRIPTS=1 scripts/bench.py 4 10` (Lua ports) | ≈ 6.9 % (sparser frames → less compositing) |
+| Real `claude` via shim, 20 s | SessionStart hook wrote session.json; statusline wrote status.json every 5 s; SessionEnd removed the pane dir |
+| `claude plugin validate` | passes; warns that `Interrupt` (Codex-only) is ignored |

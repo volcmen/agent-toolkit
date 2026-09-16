@@ -1,13 +1,6 @@
 use super::Effect;
-use crate::frame::{hex, mix, scale, Glyph};
+use crate::frame::{hex, mix, scale, Glyph, MATRIX_GLYPHS as GLYPHS};
 use crate::rng::Rng;
-
-const GLYPHS: &[char] = &[
-    'ｱ', 'ｲ', 'ｳ', 'ｴ', 'ｵ', 'ｶ', 'ｷ', 'ｸ', 'ｹ', 'ｺ', 'ｻ', 'ｼ', 'ｽ', 'ｾ', 'ｿ', 'ﾀ', 'ﾁ', 'ﾂ', 'ﾃ',
-    'ﾄ', 'ﾅ', 'ﾆ', 'ﾈ', 'ﾉ', 'ﾊ', 'ﾋ', 'ﾌ', 'ﾍ', 'ﾎ', 'ﾏ', 'ﾐ', 'ﾑ', 'ﾒ', 'ﾓ', 'ﾔ', 'ﾕ', 'ﾖ', 'ﾗ',
-    'ﾘ', 'ﾙ', 'ﾚ', 'ﾜ', 'ﾝ', '0', '1', '2', '3', '5', '7', '8', '9', 'Z', 'X', ':', '=', '*', '+',
-    '<', '>',
-];
 
 struct Drop {
     x: u16,
@@ -50,7 +43,9 @@ impl Matrix {
         } else {
             rng.range(0.0, f32::from(self.height))
         };
-        let glyphs = (0..len + 2).map(|_| GLYPHS[rng.below(GLYPHS.len())]).collect();
+        let glyphs = (0..len + 2)
+            .map(|_| GLYPHS[rng.below(GLYPHS.len())])
+            .collect();
         self.drops.push(Drop {
             x: rng.below(self.width as usize) as u16,
             head,
@@ -92,7 +87,7 @@ impl Effect for Matrix {
         }
     }
 
-    fn render(&self, out: &mut Vec<Glyph>) {
+    fn render(&mut self, out: &mut Vec<Glyph>) {
         let head_col = hex(0xd7ffe0);
         let bright = hex(0x9ece6a);
         let dark = hex(0x1f5a2a);

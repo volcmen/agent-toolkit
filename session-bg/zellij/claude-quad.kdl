@@ -12,7 +12,7 @@ layout {
                 pane command="sbg" { args "waves" "--" "claude"; }
             }
             pane split_direction="horizontal" {
-                pane command="sbg" { args "plasma" "--" "claude"; }
+                pane command="sbg" { args "--script" "~/.config/sbg/fx/pulse.lua" "--" "claude"; }
                 pane command="sbg" { args "stars" "--" "claude"; }
             }
         }

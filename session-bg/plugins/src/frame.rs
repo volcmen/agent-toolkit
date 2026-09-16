@@ -84,3 +84,54 @@ pub fn modulate(rgb: [f32; 3], hue: f32, bright: f32, tint: [f32; 3], tint_k: f3
     let tinted = mix(shifted, scale(tint, (luma * 1.6).max(0.35)), tint_k * 0.8);
     scale(tinted, bright)
 }
+
+pub const MATRIX_GLYPHS: &[char] = &[
+    'ｱ', 'ｲ', 'ｳ', 'ｴ', 'ｵ', 'ｶ', 'ｷ', 'ｸ', 'ｹ', 'ｺ', 'ｻ', 'ｼ', 'ｽ', 'ｾ', 'ｿ', 'ﾀ', 'ﾁ', 'ﾂ', 'ﾃ',
+    'ﾄ', 'ﾅ', 'ﾆ', 'ﾈ', 'ﾉ', 'ﾊ', 'ﾋ', 'ﾌ', 'ﾍ', 'ﾎ', 'ﾏ', 'ﾐ', 'ﾑ', 'ﾒ', 'ﾓ', 'ﾔ', 'ﾕ', 'ﾖ', 'ﾗ',
+    'ﾘ', 'ﾙ', 'ﾚ', 'ﾜ', 'ﾝ', '0', '1', '2', '3', '5', '7', '8', '9', 'Z', 'X', ':', '=', '*', '+',
+    '<', '>',
+];
+
+pub const BLOCK_GLYPHS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+pub const SHADE_GLYPHS: &[char] = &['░', '▒', '▓', '█'];
+
+pub const ASCII_GLYPHS: &[char] = &['.', ':', '-', '=', '+', '*', '#', '%', '@'];
+
+pub const DOT_GLYPHS: &[char] = &['·', '•', '∙', '●'];
+
+pub const BOX_GLYPHS: &[char] = &['─', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼'];
+
+pub const RAMPS: &[(&str, &[u32])] = &[
+    ("matrix", &[0x0b2915, 0x1f5a2a, 0x9ece6a, 0xd7ffe0]),
+    ("ember", &[0x1a0a05, 0x7a2410, 0xe0601a, 0xffd08a]),
+    ("ice", &[0x081828, 0x1f4f7a, 0x2ac3de, 0xdff6ff]),
+    ("tokyonight", &[0x1a1b26, 0x3d59a1, 0x7aa2f7, 0xbb9af7]),
+    ("mono", &[0x101010, 0x505050, 0xa0a0a0, 0xffffff]),
+    ("warn", &[0x2a1000, 0xb35c00, 0xe0af68, 0xfff0c0]),
+];
+
+pub fn ramp(name: &str, t: f32) -> [f32; 3] {
+    let stops = RAMPS
+        .iter()
+        .find(|(key, _)| *key == name)
+        .map(|(_, stops)| *stops)
+        .unwrap_or(RAMPS[4].1);
+    let t = if t.is_finite() {
+        t.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let last = stops.len() - 1;
+    let scaled = t * last as f32;
+    let index = (scaled.floor() as usize).min(last - 1);
+    mix(
+        hex(stops[index]),
+        hex(stops[index + 1]),
+        scaled - index as f32,
+    )
+}
+
+pub fn braille(mask: u32) -> char {
+    char::from_u32(0x2800 + (mask & 0xff)).unwrap_or('⠀')
+}

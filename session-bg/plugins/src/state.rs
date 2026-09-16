@@ -19,13 +19,18 @@ pub const MODES: &[&str] = &[
 pub struct Session {
     pub mode: String,
     pub ts: f64,
+    pub tool: String,
     pub tool_kind: String,
+    pub agent: String,
+    pub prompt: String,
     pub subagents: u32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Status {
     pub context_pct: f32,
+    pub cost_usd: f32,
+    pub model: String,
     pub ts: f64,
 }
 
@@ -39,6 +44,8 @@ pub struct Override {
     pub density: Option<f32>,
     pub speed: Option<f32>,
     pub hue: Option<f32>,
+    pub opacity: Option<f32>,
+    pub palette: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -60,6 +67,8 @@ impl Default for Override {
             density: None,
             speed: None,
             hue: None,
+            opacity: None,
+            palette: None,
         }
     }
 }
@@ -73,6 +82,43 @@ pub struct Modulation {
     pub burst: f32,
     pub tint: [f32; 3],
     pub tint_k: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Params {
+    pub density: f32,
+    pub speed: f32,
+    pub hue: f32,
+    pub opacity: f32,
+    pub palette: String,
+}
+
+impl Default for Params {
+    fn default() -> Self {
+        Self {
+            density: 1.0,
+            speed: 1.0,
+            hue: 0.0,
+            opacity: 1.0,
+            palette: String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ScriptState {
+    pub mode: String,
+    pub tool: String,
+    pub tool_kind: String,
+    pub agent: String,
+    pub context_pct: f32,
+    pub cost: f32,
+    pub model: String,
+    pub prompt: String,
+    pub age: f32,
+    pub changed: bool,
+    pub modulation: Modulation,
+    pub params: Params,
 }
 
 impl Default for Modulation {
@@ -105,7 +151,10 @@ fn parse_session(value: &Value) -> Session {
     Session {
         mode: s(value, "mode").unwrap_or_else(|| "idle".to_owned()),
         ts: f(value, "ts").unwrap_or(0.0),
+        tool: s(value, "tool").unwrap_or_default(),
         tool_kind: s(value, "tool_kind").unwrap_or_default(),
+        agent: s(value, "agent").unwrap_or_default(),
+        prompt: s(value, "prompt").unwrap_or_default(),
         subagents: f(value, "subagents").unwrap_or(0.0).max(0.0) as u32,
     }
 }
@@ -113,6 +162,8 @@ fn parse_session(value: &Value) -> Session {
 fn parse_status(value: &Value) -> Status {
     Status {
         context_pct: f(value, "context_pct").unwrap_or(0.0).clamp(0.0, 100.0) as f32,
+        cost_usd: f(value, "cost_usd").unwrap_or(0.0).max(0.0) as f32,
+        model: s(value, "model").unwrap_or_default(),
         ts: f(value, "ts").unwrap_or(0.0),
     }
 }
@@ -123,11 +174,19 @@ fn parse_override(value: &Value) -> Override {
         effect: s(value, "effect"),
         script: s(value, "script"),
         mode: s(value, "mode").filter(|m| MODES.contains(&m.as_str())),
-        frozen: value.get("frozen").and_then(Value::as_bool).unwrap_or(false),
-        enabled: value.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+        frozen: value
+            .get("frozen")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        enabled: value
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
         density: f(&params, "density").map(|v| v.clamp(0.1, 3.0) as f32),
         speed: f(&params, "speed").map(|v| v.clamp(0.25, 3.0) as f32),
         hue: f(&params, "hue").map(|v| v.clamp(-1.0, 1.0) as f32),
+        opacity: f(&params, "opacity").map(|v| v.clamp(0.0, 1.0) as f32),
+        palette: s(&params, "palette"),
     }
 }
 
@@ -236,7 +295,10 @@ pub fn modulation(snapshot: &Snapshot, now: f64, clock: f32) -> Modulation {
     use std::f32::consts::TAU;
     let mut m = Modulation::default();
     let (mode, age) = effective_mode(snapshot, now);
-    let ctx = snapshot.status.as_ref().map_or(0.0, |st| st.context_pct / 100.0);
+    let ctx = snapshot
+        .status
+        .as_ref()
+        .map_or(0.0, |st| st.context_pct / 100.0);
     m.hue += 0.35 * ctx;
     m.density *= 0.85 + 0.4 * ctx;
     if ctx > 0.9 {
@@ -303,6 +365,34 @@ pub fn modulation(snapshot: &Snapshot, now: f64, clock: f32) -> Modulation {
     m
 }
 
+pub fn script_state(snapshot: &Snapshot, modulation: &Modulation, now: f64) -> ScriptState {
+    let (mode, age) = effective_mode(snapshot, now);
+    let session = snapshot.session.as_ref();
+    let status = snapshot.status.as_ref();
+    let o = &snapshot.override_;
+    let defaults = Params::default();
+    ScriptState {
+        mode,
+        tool: session.map(|s| s.tool.clone()).unwrap_or_default(),
+        tool_kind: session.map(|s| s.tool_kind.clone()).unwrap_or_default(),
+        agent: session.map(|s| s.agent.clone()).unwrap_or_default(),
+        context_pct: status.map_or(0.0, |s| s.context_pct),
+        cost: status.map_or(0.0, |s| s.cost_usd),
+        model: status.map(|s| s.model.clone()).unwrap_or_default(),
+        prompt: session.map(|s| s.prompt.clone()).unwrap_or_default(),
+        age: if age.is_finite() { age } else { -1.0 },
+        changed: snapshot.changed,
+        modulation: *modulation,
+        params: Params {
+            density: o.density.unwrap_or(defaults.density),
+            speed: o.speed.unwrap_or(defaults.speed),
+            hue: o.hue.unwrap_or(defaults.hue),
+            opacity: o.opacity.unwrap_or(defaults.opacity),
+            palette: o.palette.clone().unwrap_or(defaults.palette),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,7 +402,9 @@ mod tests {
         Snapshot {
             session: session.map(|t| parse_session(&parse(t))),
             status: status.map(|t| parse_status(&parse(t))),
-            override_: override_.map(|t| parse_override(&parse(t))).unwrap_or_default(),
+            override_: override_
+                .map(|t| parse_override(&parse(t)))
+                .unwrap_or_default(),
             changed: true,
         }
     }
@@ -334,7 +426,11 @@ mod tests {
 
     #[test]
     fn override_mode_pins_regardless_of_age() {
-        let s = snap(Some(r#"{"mode":"tool","ts":0.0}"#), None, Some(r#"{"mode":"waiting"}"#));
+        let s = snap(
+            Some(r#"{"mode":"tool","ts":0.0}"#),
+            None,
+            Some(r#"{"mode":"waiting"}"#),
+        );
         assert_eq!(effective_mode(&s, 1e9).0, "waiting");
     }
 
@@ -351,7 +447,10 @@ mod tests {
             for pct in [0, 50, 100] {
                 for age in [0.0, 0.5, 5.0, 60.0] {
                     let s = snap(
-                        Some(&format!(r#"{{"mode":"{mode}","ts":{},"subagents":9}}"#, 1000.0 - age)),
+                        Some(&format!(
+                            r#"{{"mode":"{mode}","ts":{},"subagents":9}}"#,
+                            1000.0 - age
+                        )),
                         Some(&format!(r#"{{"context_pct":{pct}}}"#)),
                         Some(r#"{"params":{"density":3.0,"speed":3.0}}"#),
                     );

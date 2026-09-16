@@ -48,7 +48,13 @@ impl Effect for Stars {
         self.stars.clear();
         let n = ((f32::from(width) * f32::from(height) / 28.0) * self.density) as usize;
         let chars = ['·', '·', '·', '•', '✦', '✧', '⋆', '*', '.'];
-        let colors = [hex(0xc0caf5), hex(0xe0af68), hex(0x7dcfff), hex(0xbb9af7), hex(0xa9b1d6)];
+        let colors = [
+            hex(0xc0caf5),
+            hex(0xe0af68),
+            hex(0x7dcfff),
+            hex(0xbb9af7),
+            hex(0xa9b1d6),
+        ];
         for _ in 0..n {
             self.stars.push(Star {
                 x: rng.below(width as usize) as u16,
@@ -84,7 +90,7 @@ impl Effect for Stars {
         }
     }
 
-    fn render(&self, out: &mut Vec<Glyph>) {
+    fn render(&mut self, out: &mut Vec<Glyph>) {
         for s in &self.stars {
             let twinkle = 0.5 + 0.5 * (self.t * s.speed + s.phase).sin();
             let k = 0.18 + 0.5 * twinkle * twinkle;

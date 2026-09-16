@@ -1,15 +1,21 @@
+mod api;
 mod effects;
 mod frame;
+mod noise;
 mod rng;
+mod script;
 mod state;
 
 use std::collections::hash_map::DefaultHasher;
+use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, Write};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use frame::Occupancy;
+use script::{Reporter, ScriptEffect};
 
 struct Shared {
     occupancy: Occupancy,
@@ -19,9 +25,63 @@ struct Shared {
 
 struct Settings {
     effect: String,
+    script: Option<String>,
     seed: u64,
     fps: f32,
     density: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Choice {
+    Builtin(String),
+    Script(String),
+}
+
+fn choose(settings: &Settings, override_: &state::Override) -> Choice {
+    if let Some(path) = &override_.script {
+        return Choice::Script(path.clone());
+    }
+    if let Some(name) = &override_.effect {
+        return Choice::Builtin(name.clone());
+    }
+    if let Some(path) = &settings.script {
+        return Choice::Script(path.clone());
+    }
+    Choice::Builtin(settings.effect.clone())
+}
+
+fn build(
+    choice: &Choice,
+    settings: &Settings,
+    density: f32,
+    reporter: &Reporter,
+) -> Option<Box<dyn effects::Effect>> {
+    match choice {
+        Choice::Builtin(name) => match effects::create(name, density) {
+            Some(effect) => Some(effect),
+            None => {
+                eprintln!("sbg-fx: ignoring unknown effect {name:?}");
+                None
+            }
+        },
+        Choice::Script(path) => {
+            match ScriptEffect::load(&PathBuf::from(path), settings.seed, density, settings.fps) {
+                Ok(effect) => Some(Box::new(effect.with_reporter(reporter.clone()))),
+                Err(message) => {
+                    reporter.error("compile", &message);
+                    eprintln!("sbg-fx: {message}");
+                    None
+                }
+            }
+        }
+    }
+}
+
+fn percentile(samples: &VecDeque<(Instant, f32)>, q: f32) -> f32 {
+    let mut values: Vec<f32> = samples.iter().map(|(_, v)| *v).collect();
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let index = ((values.len() as f32 - 1.0) * q).round() as usize;
+    values.get(index).copied().unwrap_or(0.0)
 }
 
 fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
@@ -45,6 +105,7 @@ fn default_seed() -> u64 {
 fn settings() -> Settings {
     Settings {
         effect: std::env::var("SBG_EFFECT").unwrap_or_else(|_| "matrix".to_owned()),
+        script: std::env::var("SBG_SCRIPT").ok().filter(|v| !v.is_empty()),
         seed: env_or("SBG_SEED", default_seed()),
         fps: env_or("SBG_FPS", 12.0f32).clamp(1.0, 60.0),
         density: env_or("SBG_DENSITY", 1.0f32),
@@ -99,7 +160,13 @@ fn to_cells(glyphs: &[frame::Glyph]) -> Vec<tattoy_protocol::Cell> {
         .collect()
 }
 
-fn preview(effect: &mut dyn effects::Effect, rng: &mut rng::Rng, width: u16, height: u16, frames: usize) -> String {
+fn preview(
+    effect: &mut dyn effects::Effect,
+    rng: &mut rng::Rng,
+    width: u16,
+    height: u16,
+    frames: usize,
+) -> String {
     effect.resize(width, height, rng);
     let mut glyphs = Vec::new();
     for _ in 0..frames {
@@ -118,20 +185,49 @@ fn preview(effect: &mut dyn effects::Effect, rng: &mut rng::Rng, width: u16, hei
 
 fn main() {
     let settings = settings();
-    let Some(mut effect) = effects::create(&settings.effect, settings.density) else {
-        eprintln!(
-            "sbg-fx: unknown SBG_EFFECT {:?}; expected one of {:?}",
-            settings.effect,
-            effects::NAMES
-        );
-        std::process::exit(2);
+    let reporter = Reporter::from_env();
+    let mut watcher = state::Watcher::from_env();
+    let mut snapshot = watcher.poll().clone();
+    let mut density = settings.density;
+    let mut choice = choose(&settings, &snapshot.override_);
+    let mut effect = match build(&choice, &settings, density, &reporter) {
+        Some(effect) => effect,
+        None => {
+            if std::env::var_os("SBG_PREVIEW").is_some() {
+                std::process::exit(2);
+            }
+            choice = Choice::Builtin(settings.effect.clone());
+            match build(&choice, &settings, density, &reporter) {
+                Some(effect) => effect,
+                None => {
+                    eprintln!(
+                        "sbg-fx: unknown SBG_EFFECT {:?}; expected one of {:?}",
+                        settings.effect,
+                        effects::NAMES
+                    );
+                    std::process::exit(2);
+                }
+            }
+        }
     };
     let mut rng = rng::Rng::new(settings.seed);
     if let Ok(frames) = std::env::var("SBG_PREVIEW") {
         let frames = frames.parse().unwrap_or(24);
         let width = env_or("COLUMNS", 100u16);
         let height = env_or("LINES", 30u16);
-        println!("{}", preview(effect.as_mut(), &mut rng, width, height, frames));
+        let neutral = state::script_state(
+            &state::Snapshot::default(),
+            &state::Modulation::default(),
+            state::now_secs(),
+        );
+        effect.set_state(&neutral);
+        println!(
+            "{}",
+            preview(effect.as_mut(), &mut rng, width, height, frames)
+        );
+        if effect.failed() {
+            std::process::exit(2);
+        }
         return;
     }
     let shared = Arc::new(Mutex::new(Shared {
@@ -142,17 +238,17 @@ fn main() {
     let reader = Arc::clone(&shared);
     std::thread::spawn(move || read_stdin(reader));
 
-    let frame = Duration::from_secs_f32(1.0 / settings.fps);
+    let mut frame = Duration::from_secs_f32(1.0 / settings.fps);
     let mut size = (0u16, 0u16);
     let started = Instant::now();
     let mut last = Instant::now();
     let mut next = last;
     let mut glyphs = Vec::new();
     let stdout = std::io::stdout();
-    let mut watcher = state::Watcher::from_env();
-    let mut current_effect = settings.effect.clone();
-    let mut density = settings.density;
     let mut blanked = false;
+    let mut samples: VecDeque<(Instant, f32)> = VecDeque::new();
+    let mut over_since: Option<Instant> = None;
+    let mut throttled = false;
     loop {
         next += frame;
         let now = Instant::now();
@@ -164,7 +260,6 @@ fn main() {
         let dt = last.elapsed().as_secs_f32().min(0.25);
         last = Instant::now();
 
-
         let occupancy = {
             let guard = shared.lock().expect("shared state poisoned");
             if guard.closed {
@@ -175,36 +270,38 @@ fn main() {
         if occupancy.width == 0 || occupancy.height == 0 {
             continue;
         }
-        if (occupancy.width, occupancy.height) != size {
+        let resized = (occupancy.width, occupancy.height) != size;
+        if resized {
             size = (occupancy.width, occupancy.height);
             effect.resize(size.0, size.1, &mut rng);
         }
-        let snapshot = watcher.poll().clone();
+        snapshot = watcher.poll().clone();
         if snapshot.changed {
-            let wanted = snapshot
-                .override_
-                .effect
-                .clone()
-                .unwrap_or_else(|| settings.effect.clone());
-            if wanted != current_effect {
-                if let Some(mut fresh) = effects::create(&wanted, density) {
+            let wanted = choose(&settings, &snapshot.override_);
+            if wanted != choice {
+                if let Some(mut fresh) = build(&wanted, &settings, density, &reporter) {
                     if size != (0, 0) {
                         fresh.resize(size.0, size.1, &mut rng);
                     }
                     effect = fresh;
-                    current_effect = wanted;
-                } else {
-                    eprintln!("sbg-fx: ignoring unknown effect override {wanted:?}");
+                    choice = wanted;
+                    samples.clear();
+                    over_since = None;
                 }
             }
         }
-        let modulation = state::modulation(&snapshot, state::now_secs(), started.elapsed().as_secs_f32());
+        let clock = started.elapsed().as_secs_f32();
+        let wall = state::now_secs();
+        let modulation = state::modulation(&snapshot, wall, clock);
         if !snapshot.override_.enabled {
             if !blanked {
                 blanked = true;
                 let message = tattoy_protocol::PluginOutputMessages::OutputCells(Vec::new());
                 let mut out = stdout.lock();
-                if serde_json::to_writer(&mut out, &message).is_err() || out.write_all(b"\n").is_err() || out.flush().is_err() {
+                if serde_json::to_writer(&mut out, &message).is_err()
+                    || out.write_all(b"\n").is_err()
+                    || out.flush().is_err()
+                {
                     return;
                 }
             }
@@ -216,11 +313,21 @@ fn main() {
             density = wanted_density;
             effect.set_density(density);
         }
+        effect.set_state(&state::script_state(&snapshot, &modulation, wall));
+        let scripted = matches!(choice, Choice::Script(_));
+        let measured = Instant::now();
         effect.step(dt * modulation.speed, &mut rng);
         glyphs.clear();
         effect.render(&mut glyphs);
+        let cost = measured.elapsed().as_secs_f32();
         for g in &mut glyphs {
-            g.rgb = frame::modulate(g.rgb, modulation.hue, modulation.bright, modulation.tint, modulation.tint_k);
+            g.rgb = frame::modulate(
+                g.rgb,
+                modulation.hue,
+                modulation.bright,
+                modulation.tint,
+                modulation.tint_k,
+            );
         }
         let cells = to_cells(&effects::visible(&glyphs, &occupancy));
         let message = tattoy_protocol::PluginOutputMessages::OutputCells(cells);
@@ -228,8 +335,62 @@ fn main() {
         let ok = serde_json::to_writer(&mut out, &message).is_ok()
             && out.write_all(b"\n").is_ok()
             && out.flush().is_ok();
+        drop(out);
         if !ok {
             return;
+        }
+        if !scripted {
+            continue;
+        }
+        let mut fallback = effect.failed();
+        samples.push_back((last, cost));
+        while samples
+            .front()
+            .is_some_and(|(at, _)| at.elapsed() > Duration::from_secs(2))
+        {
+            samples.pop_front();
+        }
+        if samples.len() >= 8 {
+            let budget = frame.as_secs_f32();
+            let p95 = percentile(&samples, 0.95);
+            if p95 > budget * 3.0 {
+                reporter.log(&format!(
+                    "script p95 {:.1} ms over 3x the {:.1} ms frame budget; falling back to the builtin effect",
+                    p95 * 1000.0,
+                    budget * 1000.0
+                ));
+                fallback = true;
+            } else if p95 > budget * 0.3 {
+                let since = *over_since.get_or_insert(last);
+                if !throttled && since.elapsed() >= Duration::from_secs(2) {
+                    throttled = true;
+                    frame *= 2;
+                    reporter.log(&format!(
+                        "script p95 {:.1} ms over 30% of the frame budget; halving this pane to {:.1} fps",
+                        p95 * 1000.0,
+                        1.0 / frame.as_secs_f32()
+                    ));
+                }
+            } else {
+                over_since = None;
+            }
+        }
+        if fallback {
+            let wanted = Choice::Builtin(
+                snapshot
+                    .override_
+                    .effect
+                    .clone()
+                    .unwrap_or_else(|| settings.effect.clone()),
+            );
+            if let Some(mut fresh) = build(&wanted, &settings, density, &reporter) {
+                fresh.resize(size.0, size.1, &mut rng);
+                effect = fresh;
+                choice = wanted;
+                samples.clear();
+                over_since = None;
+                reporter.log("running the builtin effect");
+            }
         }
     }
 }

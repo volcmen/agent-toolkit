@@ -110,6 +110,49 @@ The hooks ship as the `session-bg` plugin of the `ai-workspace` marketplace
 hook script exits immediately when `SBG_STATE` is unset, so sessions outside
 sbg pay nothing.
 
+## Scripting animations (Lua)
+
+Any pane can run a user-authored animation instead of a compiled effect.
+Scripts live at `~/.config/sbg/fx/*.lua` (`$SBG_FX_DIR` overrides the
+directory) and export three functions:
+
+```lua
+function init(ctx)          end   -- ctx = {w, h, seed, density, fps}
+function step(dt, state)    end   -- dt already scaled by state.mod.speed
+function render(fx, state)  end   -- fx:put(x, y, ch, r, g, b), fx:clear(), fx:count()
+```
+
+`state` carries the same live signals as the builtins react to (`mode`,
+`tool_kind`, `context_pct`, `mod.burst`, …); `sbg` exposes a seeded RNG,
+value noise, colour ramps and mixing, and glyph sets (matrix katakana,
+blocks, shades, braille, ascii, dots, box). The sandbox has no
+`io`/`os`/`require`/`load`; a runaway script is capped and, if it stays
+slow, falls back to the builtin effect. Full reference:
+`plugin/skills/bg/references/lua-api.md`.
+
+```sh
+sbg fx list                 # builtins, plus scripts in the fx dir
+sbg fx new my-effect          # copy the annotated template, refuses to overwrite
+sbg fx edit my-effect           # open $VISUAL/$EDITOR on it
+sbg fx use my-effect               # switch this pane to it, live
+sbg fx use matrix                    # or switch to a builtin by name
+sbg fx use off                         # clear the script override
+sbg --script ~/.config/sbg/fx/pulse.lua -- claude   # launch straight into a script
+```
+
+`sbg install` copies the shipped ports (`matrix`, `plasma`, `waves`,
+`stars`, plus `context-bars` and `pulse`) and the template into
+`~/.config/sbg/fx/` without overwriting anything already there.
+
+**Hot reload and fallback:** `sbg-fx` stats each script's mtime and size
+every frame; on a change it compiles and initializes the new version in a
+scratch state and only swaps in on success. A script that fails to load or
+throws keeps the last good version running — the failure is recorded in
+`<SBG_STATE>/error.json` and shown by `sbg doctor` and `sbg state`.
+
+The `/bg` skill (`plugin/skills/bg/`) covers day-to-day control and
+authoring guidance for both Claude Code and Codex.
+
 ## How the plugin works
 
 `sbg-fx` speaks Tattoy's JSON plugin protocol on stdio. Tattoy sends

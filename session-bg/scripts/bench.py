@@ -29,6 +29,8 @@ def spawn(effect: str, seconds: int) -> tuple[int, int]:
     config = dry.stdout.splitlines()[1].split()[2]
     argv = [shutil.which("tattoy"), "--main-config", config, "--disable-indicator", "--command", str(ROOT / "scripts" / "bench-child.sh")]
     env = dict(os.environ, TERM="xterm-kitty", COLORTERM="truecolor", SBG_EFFECT=effect, SBG_SEED="1", SBG_FPS="12", BENCH_SECONDS=str(seconds))
+    if os.environ.get("BENCH_SCRIPTS"):
+        env["SBG_SCRIPT"] = str(ROOT / "plugins" / "fx" / f"{effect}.lua")
     pid, fd = pty.fork()
     if pid == 0:
         fcntl.ioctl(sys.stdin.fileno(), termios.TIOCSWINSZ, struct.pack("HHHH", 60, 200, 0, 0))

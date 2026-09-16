@@ -60,7 +60,7 @@ impl Effect for Plasma {
         self.t += dt;
     }
 
-    fn render(&self, out: &mut Vec<Glyph>) {
+    fn render(&mut self, out: &mut Vec<Glyph>) {
         let threshold = (0.3 - 0.2 * (self.density - 1.0)).clamp(0.05, 0.9);
         let cold = hex(0x3d59a1);
         let warm = hex(0xbb9af7);
