@@ -17,10 +17,13 @@ the official plugin: `/codex:rescue --background`.
 
 ## Paths — resolve once, use everywhere
 
-In Claude Code, resolve the installed plugin rather than assuming a checkout path:
+Resolve the bundle from this skill's own location, never from an assumed checkout path.
+The host announces the directory containing this `SKILL.md`; it may be a symlink, so
+resolve it first:
 
 ```bash
-S="$CLAUDE_PLUGIN_ROOT/scripts"
+SKILL_DIR=$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "<directory containing this SKILL.md>")
+S="$SKILL_DIR/../../scripts"
 ```
 
 `inspect.sh` is free and read-only (`show`, `status`, `list`) and may be pre-approved by the

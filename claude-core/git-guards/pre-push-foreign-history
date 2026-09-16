@@ -1,0 +1,210 @@
+#!/bin/sh
+# LOCAL ACCIDENT GUARD — not an authorization control.
+# It cannot bind an autonomous process that owns this filesystem, config and
+# credentials. Authorization lives in the agent's RED WRITE rule and, when
+# available, in server-side branch ownership. This only stops accidents.
+#
+# Blocks, fail-closed:
+#   R1  any remote ref deletion
+#   R2  any existing tag being moved
+#   R3  any update to a branch whose history carries another author
+#       (their MR branch: even a plain fast-forward commit of mine there makes
+#        me a committer on their MR and voids my approval eligibility)
+#   R4  a non-fast-forward update to a branch that is not exclusively mine
+#   R5  publishing a commit authored by someone else and committed by me
+#   R6  any case the guard cannot verify
+#   R7  a code change with no green, non-vacuous, current run recorded against
+#       the tree being pushed (advisory by default; blocking when
+#       `git config --bool guard.requireVerify true`)
+#
+# R7 reads the ledger `verify-run.py` writes. That ledger is written by the same
+# user this guard protects, so R7 is evidence, not proof: it catches the stale
+# tree, the vacuous run, the red-then-green, and the suite that was never run.
+#
+# My identities: user.email plus every `git config --add guard.email <addr>`.
+# A branch I legitimately own that carries foreign-authored commits (a
+# cherry-picked backport) is opted in with `git config --add guard.ownBranch <glob>`.
+set -eu
+
+[ "${GIT_GUARD_OFF:-0}" = "1" ] && exit 0
+
+remote_name="${1:-origin}"
+zero_re='^0*$'
+fail=0
+die_unverified() { fail=1; printf >&2 '\nBLOCKED %s — the guard could not verify this push: %s\n' "$1" "$2"; }
+
+verify_run=$(git config guard.verifyRun 2>/dev/null || true)
+[ -n "$verify_run" ] || verify_run="$HOME/Personal/ai/claude-core/scripts/verify-run.py"
+require_verify=$(git config --bool guard.requireVerify 2>/dev/null || echo false)
+
+# R7 — every changed path is prose, so no run is required. Instruction files,
+# hook and CI definitions, test selection and dependency manifests are
+# verification-sensitive inputs and are deliberately NOT prose.
+changes_are_prose_only() {
+    _base=$1 _tip=$2
+    _paths=$(git diff --name-only --find-renames --diff-filter=ACDMRT "$_base" "$_tip" 2>/dev/null) || return 1
+    [ -n "$_paths" ] || return 0
+    _verdict=$(printf '%s\n' "$_paths" | awk '
+        /(^|\/)(\.claude|\.github|rules|hooks|skills)\// { print "no"; exit }
+        /(^|\/)docs\// { next }
+        /\.(md|txt|rst)$/ { next }
+        /(^|\/)LICENSE(\.|$)/ { next }
+        { print "no"; exit }
+    ')
+    [ -z "$_verdict" ]
+}
+
+verify_gate() {
+    _tip=$1
+    if [ ! -f "$verify_run" ]; then
+        printf 'UNAVAILABLE: no verify-run.py at %s' "$verify_run"
+        return 1
+    fi
+    python3 "$verify_run" --gate "$_tip" 2>&1 | tr '\n' ' '
+}
+
+mine=$(git config user.email || true)
+if [ -z "$mine" ]; then
+    printf >&2 '\nBLOCKED — no user.email configured, so authorship cannot be checked.\n'
+    exit 1
+fi
+identities=$(printf '%s\n' "$mine"; git config --get-all guard.email 2>/dev/null || true)
+
+is_zero() { printf '%s' "$1" | grep -Eq "$zero_re"; }
+is_mine() { printf '%s\n' "$identities" | grep -Fqx "$1"; }
+
+owned_pattern() {
+    git config --get-all guard.ownBranch 2>/dev/null | while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        case "$1" in $p) echo yes ;; esac
+    done
+}
+
+base_ref=""
+for cand in "refs/remotes/$remote_name/HEAD" "refs/remotes/$remote_name/main" "refs/remotes/$remote_name/master"; do
+    if git rev-parse --verify -q "$cand" >/dev/null 2>&1; then base_ref="$cand"; break; fi
+done
+
+foreign_authors() {   # foreign author emails in <base>..<tip>, one per line
+    _tip=$1
+    _base=$(git merge-base "$base_ref" "$_tip" 2>/dev/null) || return 1
+    git log --format='%ae' "$_base..$_tip" 2>/dev/null | sort -u | while IFS= read -r e; do
+        [ -n "$e" ] || continue
+        is_mine "$e" || echo "$e"
+    done
+}
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -n "${remote_ref:-}" ] || continue
+    branch=${remote_ref#refs/heads/}
+
+    # R1 — deletion
+    if is_zero "$local_sha"; then
+        fail=1
+        printf >&2 '\nBLOCKED deletion of %s on %s.\n' "$remote_ref" "$remote_name"
+        printf >&2 '%s\n' 'Deleting a remote ref is not recoverable from here. Do it deliberately, by hand.'
+        continue
+    fi
+
+    # R2 — moving an existing tag
+    case "$remote_ref" in refs/tags/*)
+        if ! is_zero "$remote_sha" && [ "$local_sha" != "$remote_sha" ]; then
+            fail=1
+            printf >&2 '\nBLOCKED tag move: %s (%s -> %s).\n' "$remote_ref" "$remote_sha" "$local_sha"
+            continue
+        fi ;;
+    esac
+
+    if [ -z "$base_ref" ]; then
+        die_unverified "$remote_ref" "no $remote_name default branch to compare against"
+        continue
+    fi
+    if [ -n "$(owned_pattern "$branch")" ]; then continue; fi
+
+    # R3 — the remote branch already carries someone else's work: it is theirs
+    if ! is_zero "$remote_sha" && git rev-parse --verify -q "$remote_sha" >/dev/null 2>&1; then
+        if ! theirs=$(foreign_authors "$remote_sha"); then
+            die_unverified "$remote_ref" "cannot read the history of the remote tip"
+            continue
+        fi
+        if [ -n "$theirs" ]; then
+            fail=1
+            printf >&2 '\nBLOCKED push to %s — that branch is not mine. Authors on it:\n' "$remote_ref"
+            printf >&2 '  %s\n' $theirs
+            printf >&2 '%s\n' 'Any commit of mine there makes me a committer on their MR, which removes my'
+            printf >&2 '%s\n' 'approval eligibility. Ask the branch owner to make the change.'
+            continue
+        fi
+    fi
+
+    # commits this push would publish
+    if is_zero "$remote_sha"; then
+        published=$(git rev-list "$local_sha" --not --remotes="$remote_name" 2>/dev/null) || {
+            die_unverified "$remote_ref" "cannot enumerate the commits being published"; continue; }
+    else
+        published=$(git rev-list "$remote_sha..$local_sha" 2>/dev/null) || {
+            die_unverified "$remote_ref" "cannot enumerate the commits being published"; continue; }
+    fi
+
+    # R4 — non-fast-forward on a branch that is not exclusively mine
+    if ! is_zero "$remote_sha"; then
+        if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+            if ! authors=$(foreign_authors "$local_sha"); then
+                die_unverified "$remote_ref" "cannot establish who wrote this branch"; continue
+            fi
+            if [ -n "$authors" ]; then
+                fail=1
+                printf >&2 '\nBLOCKED non-fast-forward update to %s — it rewrites history containing another author:\n' "$remote_ref"
+                printf >&2 '  %s\n' $authors
+                continue
+            fi
+        fi
+    fi
+
+    # R7 — is there a run recorded against the tree this push publishes?
+    if is_zero "$remote_sha"; then
+        verify_base=$(git merge-base "$base_ref" "$local_sha" 2>/dev/null || true)
+    else
+        verify_base="$remote_sha"
+    fi
+    if [ -n "$verify_base" ]; then
+        if changes_are_prose_only "$verify_base" "$local_sha"; then
+            :
+        else
+            gate=$(verify_gate "$local_sha")
+            case "$gate" in
+                PASS*) ;;
+                *)
+                    if [ "$require_verify" = "true" ]; then
+                        fail=1
+                        printf >&2 '\nBLOCKED push to %s — no usable run is recorded for this tree.\n' "$remote_ref"
+                    else
+                        printf >&2 '\nUNVERIFIED push to %s — no usable run is recorded for this tree.\n' "$remote_ref"
+                    fi
+                    printf >&2 '  %s\n' "$gate"
+                    printf >&2 '%s\n' 'Record one:  python3 '"$verify_run"' --scope unit -- <your test command>'
+                    printf >&2 '%s\n' 'Make it blocking in this clone:  git config --bool guard.requireVerify true'
+                    ;;
+            esac
+        fi
+    else
+        printf >&2 '\nUNVERIFIED push to %s — no base to compare the change against.\n' "$remote_ref"
+    fi
+
+    # R5 — foreign author, me as committer
+    [ -n "$published" ] || continue
+    stolen=$(printf '%s\n' "$published" | git log --stdin --no-walk --format='%h %ae %ce %s' 2>/dev/null) || {
+        die_unverified "$remote_ref" "cannot read the identities of the commits being published"; continue; }
+    stolen=$(printf '%s\n' "$stolen" | awk -v me="$mine" 'NF>=3 && $3 == me && $2 != me')
+    if [ -n "$stolen" ]; then
+        fail=1
+        printf >&2 '\nBLOCKED push to %s — commits authored by someone else, committed by me:\n' "$remote_ref"
+        printf '%s\n' "$stolen" | head -8 >&2
+        printf >&2 '%s\n' 'A rebase or cherry-pick keeps the author and restamps the committer, so this'
+        printf >&2 '%s\n' 'records me as a committer on their MR and voids my approval eligibility there.'
+        printf >&2 '%s\n' 'The branch owner runs the rebase. For a backport branch that is genuinely mine:'
+        printf >&2 '%s\n' '  git config --add guard.ownBranch <branch-glob>'
+    fi
+done
+
+exit $fail

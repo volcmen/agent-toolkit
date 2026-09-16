@@ -14,11 +14,12 @@ add no framework or dependency unless the slice cannot work without it.
 Before invoking a helper, set `QGS_ROOT` to the directory containing this
 `SKILL.md`.
 
-- In Claude Code, use
-  `QGS_ROOT="$CLAUDE_PLUGIN_ROOT/skills/qwen-gsd-slice"`.
-- In Codex, use the absolute directory that directly contains the loaded
-  `SKILL.md` (not the directory above it). Codex exposes the file path when it
-  lists or loads a skill.
+Both hosts expose the path when they load a skill; use the directory that directly
+contains the loaded `SKILL.md` (not the directory above it), resolving symlinks:
+
+```bash
+QGS_ROOT=$(python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "<directory containing this SKILL.md>")
+```
 
 Set it again in each new shell process, then verify it:
 

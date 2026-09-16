@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import shutil
@@ -22,24 +23,34 @@ import manage  # noqa: E402
 
 
 def build_fixture(tmp: Path) -> tuple[Path, Path]:
-    root = tmp / "repo"
-    home = tmp / "claude"
-    home.mkdir()
-    for rel in manage.MANAGED_FILES:
+    workspace = tmp / "workspace"
+    root = workspace / "repo"
+    home = tmp / "home" / ".claude"
+    home.mkdir(parents=True)
+    for rel in (*manage.MANAGED_FILES, *(rel for rel, _ in manage.EXTERNAL_MANAGED_FILES)):
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"{rel}\nsee ~/.claude/rules/\n", encoding="utf-8")
     for rel, names in manage.REQUIRED_DIRECTORY_FILES.items():
+        base = workspace if rel in manage.WORKSPACE_DIRECTORIES else root
         for name in names:
-            path = root / rel / name
+            path = base / rel / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(f"{rel}/{name}\n", encoding="utf-8")
+    for rel, _ in manage.WORKSPACE_MANAGED:
+        if rel in manage.WORKSPACE_DIRECTORIES:
+            continue
+        path = workspace / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{rel}\n", encoding="utf-8")
     (root / "CLAUDE.md").write_text(
         "read `~/.claude/rules/code-style.md` and $HOME/.claude/skills/mr-preflight/failure-modes.md\n",
         encoding="utf-8",
     )
     for rel in manage.EXECUTABLES:
         (root / rel).chmod(0o755)
+    (root / "settings").mkdir(exist_ok=True)
+    shutil.copy2(ROOT / "settings" / "managed.json", root / "settings" / "managed.json")
     shutil.copytree(ROOT / "agents", root / "agents")
     (root / "scripts").mkdir(exist_ok=True)
     shutil.copy2(ROOT / "scripts" / "render.py", root / "scripts" / "render.py")
@@ -49,7 +60,10 @@ def build_fixture(tmp: Path) -> tuple[Path, Path]:
 def patched(root: Path, home: Path, backups: Path) -> ExitStack:
     stack = ExitStack()
     stack.enter_context(mock.patch.object(manage, "ROOT", root))
+    stack.enter_context(mock.patch.object(manage, "REPO_ROOT", root.parent))
+    stack.enter_context(mock.patch.object(manage, "HOME", home.parent))
     stack.enter_context(mock.patch.object(manage, "CLAUDE_HOME", home))
+    stack.enter_context(mock.patch.object(manage, "MANAGED_SETTINGS_FRAGMENT", root / "settings" / "managed.json"))
     stack.enter_context(mock.patch.object(manage, "BACKUP_ROOT", backups))
     stack.enter_context(mock.patch.object(manage, "CLAUDE_SOURCE", root / "agents" / "rendered"))
     stack.enter_context(mock.patch.object(manage, "CLAUDE_TARGET", home / "agents"))
@@ -76,7 +90,7 @@ class Package(unittest.TestCase):
                 self.assertIn(rel.rstrip("/"), manage.MANAGED_CONTAINERS, origin)
             else:
                 self.assertTrue(manage.is_managed(rel), origin)
-                self.assertTrue((ROOT / rel).exists(), origin)
+                self.assertTrue(manage.managed_source(rel).exists(), origin)
 
     def test_reference_edges_cover_the_known_hardcoded_callers(self) -> None:
         edges = {(path.relative_to(ROOT).as_posix(), rel) for path, rel in manage.reference_edges()}
@@ -104,10 +118,10 @@ class Package(unittest.TestCase):
     def test_unmanaged_file_reference_is_reported(self) -> None:
         with TemporaryDirectory() as tmp:
             root, home = build_fixture(Path(tmp))
-            (root / "CLAUDE.md").write_text("see ~/.claude/statusline.py\n", encoding="utf-8")
+            (root / "CLAUDE.md").write_text("see ~/.claude/unknown.py\n", encoding="utf-8")
             with patched(root, home, Path(tmp) / "backups"):
                 problems = manage.package_problems()
-        self.assertEqual(problems, ["CLAUDE.md references unmanaged ~/.claude/statusline.py"])
+        self.assertEqual(problems, ["CLAUDE.md references unmanaged ~/.claude/unknown.py"])
 
     def test_unknown_directory_reference_is_reported(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -127,6 +141,24 @@ class Package(unittest.TestCase):
             problems,
             ["CLAUDE.md references ~/.claude/skills/mr-preflight/not-there.md, which does not exist in the repository"],
         )
+
+    def test_managed_inventory_covers_statusline_and_git_guards(self) -> None:
+        for rel in ("statusline.py", "keybindings.json"):
+            self.assertIn(rel, manage.MANAGED_FILES)
+        self.assertEqual(
+            manage.EXTERNAL_MANAGED_FILES,
+            (
+                ("git-guards/install", ".config/git-guards/install"),
+                ("git-guards/pre-push-foreign-history", ".config/git-guards/pre-push-foreign-history"),
+            ),
+        )
+        for rel in ("statusline.py", "git-guards/install", "git-guards/pre-push-foreign-history"):
+            self.assertIn(rel, manage.EXECUTABLES)
+            self.assertTrue((ROOT / rel).stat().st_mode & 0o111, rel)
+        targets = {target for _, target in manage.managed_links()}
+        self.assertIn(manage.CLAUDE_HOME / "statusline.py", targets)
+        self.assertIn(manage.CLAUDE_HOME / "keybindings.json", targets)
+        self.assertIn(manage.HOME / ".config" / "git-guards" / "install", targets)
 
     def test_check_command_runs_unit_suite(self) -> None:
         text = (ROOT / "scripts" / "manage.py").read_text(encoding="utf-8")
@@ -305,25 +337,25 @@ class Lifecycle(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root, home = build_fixture(Path(tmp))
             (home / "rules").mkdir()
-            (home / "rules" / "obsidian-vault.md").symlink_to(Path(tmp) / "vault-rule.md")
+            (home / "rules" / "personal-notes.md").symlink_to(Path(tmp) / "vault-rule.md")
             (home / "skills").mkdir()
             (home / "skills" / "pr-review").symlink_to(Path(tmp) / "pr-review")
-            (home / "settings.json").write_text("{}\n", encoding="utf-8")
+            (home / "settings.json").write_text('{"model": "opus"}\n', encoding="utf-8")
             with patched(root, home, Path(tmp) / "backups"):
                 quiet(manage.cmd_install, None)
                 quiet(manage.cmd_uninstall, None)
-            self.assertEqual(os.readlink(home / "rules" / "obsidian-vault.md"), str(Path(tmp) / "vault-rule.md"))
+            self.assertEqual(os.readlink(home / "rules" / "personal-notes.md"), str(Path(tmp) / "vault-rule.md"))
             self.assertEqual(os.readlink(home / "skills" / "pr-review"), str(Path(tmp) / "pr-review"))
-            self.assertEqual((home / "settings.json").read_text(encoding="utf-8"), "{}\n")
+            self.assertEqual(json.loads((home / "settings.json").read_text(encoding="utf-8"))["model"], "opus")
 
     def test_install_prunes_only_dangling_links_into_the_repository(self) -> None:
         with TemporaryDirectory() as tmp:
             root, home = build_fixture(Path(tmp))
             (home / "rules").mkdir()
             (home / "rules" / "workflow.md").symlink_to(root / "rules" / "workflow.md")
-            (home / "rules" / "relative.md").symlink_to(Path("..") / ".." / "repo" / "rules" / "gone.md")
+            (home / "rules" / "relative.md").symlink_to(os.path.relpath(root / "rules" / "gone.md", home / "rules"))
             (home / "rules" / "foreign.md").symlink_to(Path(tmp) / "elsewhere" / "gone.md")
-            (home / "rules" / "obsidian-vault.md").symlink_to(root / "README.md")
+            (home / "rules" / "personal-notes.md").symlink_to(root / "README.md")
             (root / "README.md").write_text("live\n", encoding="utf-8")
             (home / "rules" / "local.md").write_text("regular\n", encoding="utf-8")
             with patched(root, home, Path(tmp) / "backups"):
@@ -334,7 +366,7 @@ class Lifecycle(unittest.TestCase):
             self.assertFalse((home / "rules" / "workflow.md").is_symlink())
             self.assertFalse((home / "rules" / "relative.md").is_symlink())
             self.assertTrue((home / "rules" / "foreign.md").is_symlink())
-            self.assertTrue((home / "rules" / "obsidian-vault.md").is_symlink())
+            self.assertTrue((home / "rules" / "personal-notes.md").is_symlink())
             self.assertEqual((home / "rules" / "local.md").read_text(encoding="utf-8"), "regular\n")
 
     def test_external_caller_reference_to_a_managed_path_must_resolve(self) -> None:
@@ -350,6 +382,147 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(any("agents/fixer.md" in line and "does not resolve" in line for line in before))
         self.assertTrue(any("settings.json" in line and "does not resolve" in line for line in before))
         self.assertEqual(after, [])
+
+
+class ExternalAndWorkspaceLinks(unittest.TestCase):
+    def test_external_target_links_outside_claude_home(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            with patched(root, home, Path(tmp) / "backups"):
+                code, output = quiet(manage.cmd_install, None)
+            self.assertEqual(code, 0, output)
+            for name in ("install", "pre-push-foreign-history"):
+                guard = home.parent / ".config" / "git-guards" / name
+                self.assertTrue(guard.is_symlink(), guard)
+                self.assertEqual(os.readlink(guard), str(root / "git-guards" / name))
+            self.assertFalse((home / ".config").exists())
+
+    def test_external_link_backs_up_foreign_regular_file(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            backups = Path(tmp) / "backups"
+            guard = home.parent / ".config" / "git-guards" / "install"
+            guard.parent.mkdir(parents=True)
+            guard.write_text("hand-written guard\n", encoding="utf-8")
+            with patched(root, home, backups):
+                code, output = quiet(manage.cmd_install, None)
+            self.assertEqual(code, 0, output)
+            self.assertIn("backed up 1 replaced path(s)", output)
+            saved = next(backups.rglob("install"))
+            self.assertEqual(saved.read_text(encoding="utf-8"), "hand-written guard\n")
+            self.assertEqual(os.readlink(guard), str(root / "git-guards" / "install"))
+
+    def test_workspace_source_links_and_prunes(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            plugin = root.parent / "wiki" / "plugins" / "obsidian-memory"
+            (home / "skills").mkdir()
+            stale = home / "skills" / "retired-plugin"
+            stale.symlink_to(plugin / "skills" / "retired-plugin")
+            with patched(root, home, Path(tmp) / "backups"):
+                code, output = quiet(manage.cmd_install, None)
+            self.assertEqual(code, 0, output)
+            self.assertIn(f"pruned {stale}", output)
+            skill = home / "skills" / "obsidian-memory"
+            self.assertEqual(os.readlink(skill), str(plugin / "skills" / "obsidian-memory"))
+            self.assertTrue((skill / "SKILL.md").is_file())
+            self.assertEqual(
+                os.readlink(home / "rules" / "obsidian-vault.md"),
+                str(plugin / "rules" / "obsidian-vault.md"),
+            )
+            self.assertEqual(
+                os.readlink(home / "scripts" / "obsidian_memory.py"),
+                str(plugin / "scripts" / "obsidian_memory.py"),
+            )
+
+
+class SettingsFragment(unittest.TestCase):
+    def hook_commands(self, fragment: dict) -> list[str]:
+        return [
+            entry["command"]
+            for event in fragment["hooks"].values()
+            for group in event
+            for entry in group["hooks"]
+        ]
+
+    def test_settings_fragment_applies_and_is_idempotent(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            backups = Path(tmp) / "backups"
+            settings = home / "settings.json"
+            with patched(root, home, backups):
+                _, first = quiet(manage.cmd_install, None)
+                stamp = settings.stat().st_mtime_ns
+                _, second = quiet(manage.cmd_install, None)
+                self.assertEqual(manage.settings_drift(), [])
+            self.assertIn("settings fragment applied", first)
+            self.assertIn("settings fragment unchanged", second)
+            self.assertEqual(sorted(json.loads(settings.read_text())), sorted(manage.OWNED_SETTINGS_KEYS))
+            self.assertEqual(settings.stat().st_mtime_ns, stamp)
+            self.assertFalse(backups.exists())
+
+    def test_settings_fragment_preserves_unowned_keys(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            backups = Path(tmp) / "backups"
+            settings = home / "settings.json"
+            previous = json.dumps({"model": "opus", "attribution": {"commit": "trailer", "pr": ""}}, indent=2)
+            settings.write_text(previous, encoding="utf-8")
+            with patched(root, home, backups):
+                code, output = quiet(manage.cmd_install, None)
+            self.assertEqual(code, 0, output)
+            self.assertIn("settings fragment applied", output)
+            written = json.loads(settings.read_text())
+            self.assertEqual(written["model"], "opus")
+            self.assertEqual(written["attribution"], {"commit": "", "pr": ""})
+            self.assertEqual(next(backups.rglob("settings.json")).read_text(encoding="utf-8"), previous)
+
+    def test_status_flags_settings_fragment_drift(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            settings = home / "settings.json"
+            with patched(root, home, Path(tmp) / "backups"):
+                quiet(manage.cmd_install, None)
+                live = json.loads(settings.read_text())
+                live["statusLine"]["command"] = "/bin/false"
+                del live["attribution"]
+                settings.write_text(json.dumps(live, indent=2), encoding="utf-8")
+                code, output = quiet(manage.cmd_status, None)
+            self.assertEqual(code, 1)
+            self.assertIn(f"{settings}: statusLine differs from the managed settings fragment", output)
+            self.assertIn(f"{settings}: attribution is missing", output)
+
+    def test_settings_fragment_expands_home_in_hook_commands(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            with patched(root, home, Path(tmp) / "backups"):
+                fragment = manage.settings_fragment()
+            commands = self.hook_commands(fragment)
+            self.assertIn("rtk hook claude", commands)
+            self.assertIn(f"bash {home}/hooks/f17-ticket-keys.sh", commands)
+            self.assertIn(f"python3 {home}/scripts/obsidian_memory.py session-start", commands)
+            self.assertIn(f"python3 {home}/scripts/obsidian_memory.py stop", commands)
+            self.assertEqual(fragment["statusLine"]["command"], f"{home}/statusline.py")
+            self.assertFalse([command for command in commands if "~/" in command])
+
+    def test_settings_fragment_references_resolve(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root, home = build_fixture(Path(tmp))
+            with patched(root, home, Path(tmp) / "backups"):
+                fragment_path = root / "settings" / "managed.json"
+                edges = {rel for path, rel in manage.reference_edges() if path == fragment_path}
+                self.assertEqual(
+                    edges,
+                    {
+                        "hooks/f17-ticket-keys.sh",
+                        "hooks/guard-red-write.py",
+                        "scripts/obsidian_memory.py",
+                        "statusline.py",
+                    },
+                )
+                code, output = quiet(manage.cmd_install, None)
+                self.assertEqual(code, 0, output)
+                self.assertEqual(manage.live_problems(), [])
 
 
 class MergedLifecycle(unittest.TestCase):
@@ -489,7 +662,7 @@ class MergedLifecycle(unittest.TestCase):
                 code, output = quiet(manage.cmd_install, None)
                 self.assertEqual(code, 0, output)
                 self.assertEqual(before, {path: path.lstat().st_mtime_ns for path in paths})
-                self.assertIn("unchanged 12 link(s)", output)
+                self.assertIn(f"unchanged {len(manage.managed_links())} link(s)", output)
                 self.assertIn("unchanged 6 agent file(s)", output)
                 self.assertNotIn("backed up", output)
                 self.assertEqual(len([path for path in backups.rglob("*") if path.is_file()]), 2)

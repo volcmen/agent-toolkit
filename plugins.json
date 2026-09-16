@@ -35,7 +35,8 @@
           "Persist this decision in my Obsidian vault.",
           "Show the open tasks related to this project."
         ]
-      }
+      },
+      "claude_delivery": "claude-core"
     },
     {
       "name": "codex-pair",
@@ -63,9 +64,10 @@
           "Scope the next slice as tech lead, then review my diff against that spec.",
           "Shape the smallest product slice worth building before we plan implementation.",
           "Red-team this implementation plan against the actual code.",
-          "Give me a grounded second opinion \u2014 here is my position, attack it."
+          "Give me a grounded second opinion — here is my position, attack it."
         ]
-      }
+      },
+      "claude_delivery": "claude-core"
     },
     {
       "name": "chatgpt-consult",
@@ -94,7 +96,8 @@
           "Ask my ChatGPT Project to review this diff and report the result.",
           "Continue the last ChatGPT consultation with this follow-up."
         ]
-      }
+      },
+      "claude_delivery": "claude-core"
     },
     {
       "name": "qwen-gsd",
@@ -125,7 +128,8 @@
           "Have Qwen build this change while you review and verify it.",
           "Implement this slice with Qwen and report its measured cost."
         ]
-      }
+      },
+      "claude_delivery": "claude-core"
     }
   ],
   "renames": {

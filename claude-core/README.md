@@ -7,43 +7,60 @@ validation, rendering, installation, verification, and removal under `~/.claude`
 
 ## Install model
 
-| Source in this directory | Destination in `~/.claude` | Mechanism |
+| Source | Destination (under `~/.claude` unless noted) | Mechanism |
 | --- | --- | --- |
 | `CLAUDE.md`, `chrome-cdp.md` | same name | file symlink |
 | `rules/{waiting,code-style}.md` | `rules/<name>` | file symlink |
 | `hooks/f17-{ticket-keys,comment-count}.sh`, `hooks/guard-red-write.py` | `hooks/<name>` | file symlink |
 | `scripts/verify-run.py`, `scripts/test-quality-scan.py` | `scripts/<name>` | file symlink |
+| `statusline.py`, `keybindings.json` | same name | file symlink |
 | `skills/engineering/`, `skills/mr-preflight/`, `skills/review-retro/` | `skills/<name>` | directory symlink |
+| `../wiki/plugins/obsidian-memory/skills/{obsidian-memory,global-memory}/` | `skills/<name>` | directory symlink |
+| `../codex-pair/.../skills/codex-pair/`, `../chatgpt-consult/.../skills/chatgpt-consult/`, `../qwen-gsd/.../skills/qwen-gsd-slice/` | `skills/<name>` | directory symlink |
+| `../wiki/plugins/obsidian-memory/scripts/obsidian_memory.py`, `.../rules/obsidian-vault.md` | `scripts/`, `rules/<name>` | file symlink |
+| `git-guards/{install,pre-push-foreign-history}` | `~/.config/git-guards/<name>` | file symlink |
+| `settings/managed.json` | `settings.json` keys `hooks`, `statusLine`, `attribution` | JSON key replacement |
 | `agents/rendered/*.md` | `agents/<name>.md` | regular-file copy |
 
 Edits to linked files are live immediately. Skill directories are linked whole
 so files created at runtime, such as `failure-modes-archive.md`, land in this
-repository. Agent definitions are deliberately copied: Claude Code watches the
-user-agent directory, and this project owns regular files there. Catalog or
-prompt edits require rendering and installation to refresh those copies.
+repository. The in-house plugin skills are linked from their own projects in the
+surrounding `ai` workspace rather than copied here, so Claude and the Codex
+plugin delivery read the same sources. Agent definitions are deliberately
+copied: Claude Code watches the user-agent directory, and this project owns
+regular files there. Catalog or prompt edits require rendering and installation
+to refresh those copies.
 
 `install` renders the agents first, then validates the entire package before
 changing any live target. It prunes dangling symlinks in managed directories
-only when their target lies inside this checkout. Live links, foreign stale
-links, and regular neighbours survive that pruning.
+only when their target lies inside this checkout or the surrounding workspace.
+Live links, foreign stale links, and regular neighbours survive that pruning.
 
 Any file, foreign link, or directory replaced by either installation mechanism
 is backed up under `~/.config/claude-core/backups/<timestamp>/`, mirroring its
 path under `~`. Existing exact links and byte-identical regular agent copies
 are unchanged; a second install performs no replacements or backups.
 
-`status` checks both mechanisms, reference resolution, rendered drift, and
-whether user settings select a different primary agent. `uninstall` removes
-only links pointing exactly at this checkout and byte-identical regular agent
-copies. User-modified files, foreign links, unmanaged neighbours, and backups
-remain. To recover a displaced path, uninstall and restore it from its backup.
-Backups made by the former agent installer remain recoverable in their original
-location; this installer writes all new backups under `claude-core`.
+`status` checks both mechanisms, reference resolution, rendered drift, drift in
+the three managed `settings.json` keys, and whether user settings select a
+different primary agent. It resolves the external `~/.config/git-guards` targets
+along with everything under `~/.claude`. `uninstall` removes only links pointing
+exactly at this checkout or at the managed workspace sources, and byte-identical
+regular agent copies. It does not rewrite `settings.json`; recover the previous
+keys from the backup directory. User-modified files, foreign links, unmanaged
+neighbours, and backups remain. To recover a displaced path, uninstall and
+restore it from its backup. Backups made by the former agent installer remain
+recoverable in their original location; this installer writes all new backups
+under `claude-core`.
 
-Unmanaged rules, skills, agents, and `settings.json` remain user-owned. This
-standalone project has no marketplace plugin lifecycle and performs no Codex,
-plugin, or shell configuration installation. The local `clauded` Fish alias
-is user-managed.
+Unmanaged rules, skills, and agents remain user-owned. In `settings.json` this
+project owns exactly `hooks`, `statusLine`, and `attribution`: `install` replaces
+those three keys wholesale from `settings/managed.json` and preserves every other
+key verbatim. The fragment is written with `~/.claude/...` literals so reference
+validation covers each hook path; installation expands them to absolute paths.
+This standalone project has no marketplace plugin lifecycle and performs no
+Codex, plugin, or shell configuration installation. The local `clauded` Fish
+alias is user-managed.
 
 ## Commands
 

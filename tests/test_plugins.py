@@ -71,6 +71,21 @@ class CatalogValidation(unittest.TestCase):
             with self.assertRaisesRegex(pl.Problem, "marketplace.name"):
                 self.load(catalog(marketplace={"owner": {"name": "x"}}), Path(tmp))
 
+    def test_accepts_claude_core_delivery(self) -> None:
+        payload = catalog()
+        payload["plugins"][0]["claude_delivery"] = "claude-core"
+        with TemporaryDirectory() as tmp:
+            loaded = self.load(payload, Path(tmp))
+            self.assertTrue(pl.delivered_by_claude_core(loaded["plugins"][0]))
+            self.assertFalse(pl.claude_marketplace_needed(loaded))
+
+    def test_rejects_an_unknown_claude_delivery(self) -> None:
+        payload = catalog()
+        payload["plugins"][0]["claude_delivery"] = "symlink-farm"
+        with TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(pl.Problem, "claude_delivery"):
+                self.load(payload, Path(tmp))
+
     def test_rejects_duplicate_plugin_names(self) -> None:
         payload = catalog()
         payload["plugins"] = payload["plugins"] + [dict(payload["plugins"][0])]
@@ -114,6 +129,14 @@ class Rendering(unittest.TestCase):
 
     def test_rendering_is_deterministic(self) -> None:
         self.assertEqual(pl.render_marketplace(catalog()), pl.render_marketplace(catalog()))
+
+    def test_claude_delivery_is_not_rendered(self) -> None:
+        payload = catalog()
+        payload["plugins"][0]["claude_delivery"] = "claude-core"
+        rendered = pl.render_marketplace(payload)
+        self.assertNotIn("claude_delivery", json.dumps(rendered))
+        for manifest in pl.render_plugin_manifests(payload, payload["plugins"][0]).values():
+            self.assertNotIn("claude_delivery", json.dumps(manifest))
 
     def test_codex_manifest_adds_skills_and_interface(self) -> None:
         entry = catalog()["plugins"][0]
@@ -533,7 +556,14 @@ class MarketplaceReconnection(unittest.TestCase):
 class WorkspaceProductPostcondition(unittest.TestCase):
     """Status is the fresh two-product authority after every install attempt."""
 
-    def exercise(self, *, install: bool = False, failure: str | None = None, **overrides):
+    def exercise(
+        self,
+        *,
+        install: bool = False,
+        failure: str | None = None,
+        delivery: str | None = None,
+        **overrides,
+    ):
         with TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             workspace = root / "workspace"
@@ -543,6 +573,17 @@ class WorkspaceProductPostcondition(unittest.TestCase):
             home = root / "home"
             for directory in (source, codex_live, claude_live):
                 directory.mkdir(parents=True)
+            payload = catalog()
+            if delivery is not None:
+                payload["plugins"][0]["claude_delivery"] = "claude-core"
+                (source / "skills" / "demo").mkdir(parents=True)
+                links = home / ".claude" / "skills"
+                links.mkdir(parents=True)
+                if delivery == "linked":
+                    (links / "demo").symlink_to(source / "skills" / "demo")
+                elif delivery == "stale":
+                    (root / "elsewhere").mkdir()
+                    (links / "demo").symlink_to(root / "elsewhere")
             source.joinpath("plugin.txt").write_text("SOURCE-BYTES\n", encoding="utf-8")
             codex_live.joinpath("plugin.txt").write_text("SOURCE-BYTES\n", encoding="utf-8")
             claude_live.joinpath("plugin.txt").write_text("SOURCE-BYTES\n", encoding="utf-8")
@@ -707,7 +748,7 @@ class WorkspaceProductPostcondition(unittest.TestCase):
             with (
                 mock.patch.object(pl, "ROOT", workspace),
                 mock.patch.object(pl, "MEMORY_CONFIG", root / "missing-config.json"),
-                mock.patch.object(pl, "load_catalog", return_value=catalog()),
+                mock.patch.object(pl, "load_catalog", return_value=payload),
                 mock.patch.object(pl.shutil, "which", side_effect=which),
                 mock.patch.object(pl, "run", side_effect=run),
                 mock.patch.object(Path, "home", return_value=home),
@@ -755,6 +796,24 @@ class WorkspaceProductPostcondition(unittest.TestCase):
             "PRIVATE-CLAUDE-LIVE-BODY",
         ):
             self.assertNotIn(secret, encoded)
+
+    def test_claude_core_delivery_needs_no_claude_marketplace(self) -> None:
+        rc, output, *_ = self.exercise(delivery="linked", claude_root="", claude_installed=False)
+        self.assertEqual(rc, 0, output)
+        self.assertIn("marketplace not needed", output)
+        self.assertRegex(output, r"demo\s+1\.0\.0\s+ok\s+claude-core")
+
+    def test_claude_core_delivery_reports_unlinked_and_stale_skills(self) -> None:
+        for label, delivery in (("unlinked", "none"), ("stale", "stale")):
+            with self.subTest(label=label):
+                rc, output, *_ = self.exercise(delivery=delivery, claude_root="")
+                self.assertEqual(rc, 1, output)
+                self.assertIn("UNLINKED", output)
+
+    def test_install_skips_claude_for_claude_core_delivered_plugins(self) -> None:
+        rc, output, *_ = self.exercise(install=True, delivery="linked", claude_root="")
+        self.assertEqual(rc, 0, output)
+        self.assertIn("delivered by claude-core", output)
 
     def test_force_install_uses_real_final_status_after_tolerated_failures(self) -> None:
         cases = (

@@ -17,6 +17,8 @@ except ModuleNotFoundError:
     tomllib = None
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = ROOT.parent
+HOME = Path.home()
 CLAUDE_HOME = Path.home() / ".claude"
 BACKUP_ROOT = Path.home() / ".config" / "claude-core" / "backups"
 CLAUDE_SOURCE = ROOT / "agents" / "rendered"
@@ -24,10 +26,14 @@ CLAUDE_TARGET = CLAUDE_HOME / "agents"
 CLAUDE_SETTINGS = CLAUDE_HOME / "settings.json"
 CODEX_SOURCE = ROOT / "agents" / "codex" / "agents"
 CODEX_CONTROLLER_PROFILE = ROOT / "agents" / "codex" / "controller.config.toml"
+MANAGED_SETTINGS_FRAGMENT = ROOT / "settings" / "managed.json"
+OWNED_SETTINGS_KEYS = ("hooks", "statusLine", "attribution")
 
 MANAGED_FILES = (
     "CLAUDE.md",
     "chrome-cdp.md",
+    "statusline.py",
+    "keybindings.json",
     "rules/waiting.md",
     "rules/code-style.md",
     "hooks/f17-ticket-keys.sh",
@@ -40,6 +46,28 @@ MANAGED_DIRECTORIES = (
     "skills/engineering",
     "skills/mr-preflight",
     "skills/review-retro",
+)
+WORKSPACE_MANAGED = (
+    ("wiki/plugins/obsidian-memory/skills/obsidian-memory", "skills/obsidian-memory"),
+    ("wiki/plugins/obsidian-memory/skills/global-memory", "skills/global-memory"),
+    ("wiki/plugins/obsidian-memory/scripts/obsidian_memory.py", "scripts/obsidian_memory.py"),
+    ("wiki/plugins/obsidian-memory/rules/obsidian-vault.md", "rules/obsidian-vault.md"),
+    ("codex-pair/plugins/codex-pair/skills/codex-pair", "skills/codex-pair"),
+    ("chatgpt-consult/plugins/chatgpt-consult/skills/chatgpt-consult", "skills/chatgpt-consult"),
+    ("qwen-gsd/plugins/qwen-gsd/skills/qwen-gsd-slice", "skills/qwen-gsd-slice"),
+)
+WORKSPACE_DIRECTORIES = frozenset(
+    {
+        "wiki/plugins/obsidian-memory/skills/obsidian-memory",
+        "wiki/plugins/obsidian-memory/skills/global-memory",
+        "codex-pair/plugins/codex-pair/skills/codex-pair",
+        "chatgpt-consult/plugins/chatgpt-consult/skills/chatgpt-consult",
+        "qwen-gsd/plugins/qwen-gsd/skills/qwen-gsd-slice",
+    }
+)
+EXTERNAL_MANAGED_FILES = (
+    ("git-guards/install", ".config/git-guards/install"),
+    ("git-guards/pre-push-foreign-history", ".config/git-guards/pre-push-foreign-history"),
 )
 REQUIRED_DIRECTORY_FILES = {
     "skills/engineering": (
@@ -65,15 +93,23 @@ REQUIRED_DIRECTORY_FILES = {
         "failure-modes-history.md",
     ),
     "skills/review-retro": ("SKILL.md",),
+    **{source: ("SKILL.md",) for source in sorted(WORKSPACE_DIRECTORIES)},
 }
 EXECUTABLES = (
     "hooks/f17-ticket-keys.sh",
     "hooks/f17-comment-count.sh",
+    "statusline.py",
+    "git-guards/install",
+    "git-guards/pre-push-foreign-history",
     "skills/mr-preflight/preflight-triage.sh",
     "skills/mr-preflight/mr-doctor.sh",
     "skills/mr-preflight/bench.sh",
 )
-MANAGED_CONTAINERS = ("rules", "hooks", "skills", "agents", *MANAGED_DIRECTORIES)
+MANAGED_DIRECTORY_TARGETS = (
+    *MANAGED_DIRECTORIES,
+    *(target for source, target in WORKSPACE_MANAGED if source in WORKSPACE_DIRECTORIES),
+)
+MANAGED_CONTAINERS = ("rules", "hooks", "skills", "agents", *MANAGED_DIRECTORY_TARGETS)
 EXTERNAL_CALLERS = ("settings.json", "agents")
 CLAUDE_PATH_LITERAL = re.compile(
     r"(?:~|\$HOME|/Users/[^/\s`'\"]+)/\.claude/([A-Za-z0-9_./-]*[A-Za-z0-9_/-])"
@@ -86,7 +122,7 @@ class Problem(RuntimeError):
 
 def backup_relative_path(path: Path) -> Path:
     try:
-        return path.relative_to(Path.home())
+        return path.relative_to(HOME)
     except ValueError:
         return Path("external") / str(path).lstrip(os.sep)
 
@@ -186,22 +222,37 @@ def uninstall_claude_agents() -> list[Path]:
     return removed
 
 
+def claude_home_map() -> dict[str, Path]:
+    """Map every managed `~/.claude`-relative target to the repository or workspace source behind it."""
+    mapping = {rel: ROOT / rel for rel in (*MANAGED_FILES, *MANAGED_DIRECTORIES)}
+    mapping.update({target: REPO_ROOT / source for source, target in WORKSPACE_MANAGED})
+    return mapping
+
+
 def managed_links() -> list[tuple[Path, Path]]:
-    return [(ROOT / rel, CLAUDE_HOME / rel) for rel in (*MANAGED_FILES, *MANAGED_DIRECTORIES)]
+    links = [(source, CLAUDE_HOME / target) for target, source in claude_home_map().items()]
+    links.extend((ROOT / source, HOME / target) for source, target in EXTERNAL_MANAGED_FILES)
+    return links
 
 
 def is_managed(rel: str) -> bool:
     rel = rel.rstrip("/")
     if rel.startswith("agents/"):
         return any(rel == f"agents/{source.name}" for source in claude_agent_sources())
-    if rel in MANAGED_FILES:
+    if rel in claude_home_map():
         return True
-    return any(rel == directory or rel.startswith(directory + "/") for directory in MANAGED_DIRECTORIES)
+    return any(rel.startswith(directory + "/") for directory in MANAGED_DIRECTORY_TARGETS)
 
 
 def managed_source(rel: str) -> Path:
     if rel.startswith("agents/"):
         return CLAUDE_SOURCE / rel.removeprefix("agents/")
+    mapping = claude_home_map()
+    if rel in mapping:
+        return mapping[rel]
+    for directory in sorted(MANAGED_DIRECTORY_TARGETS, key=len, reverse=True):
+        if rel.startswith(directory + "/"):
+            return mapping[directory] / rel.removeprefix(directory + "/")
     return ROOT / rel
 
 
@@ -211,6 +262,7 @@ def reference_literals(text: str) -> set[str]:
 
 def managed_text_files() -> list[Path]:
     files = [ROOT / rel for rel in MANAGED_FILES]
+    files.append(MANAGED_SETTINGS_FRAGMENT)
     for rel in MANAGED_DIRECTORIES:
         files.extend(sorted(path for path in (ROOT / rel).rglob("*") if path.is_file()))
     files.extend(sorted((ROOT / "agents" / "prompts").glob("*.md")))
@@ -265,6 +317,22 @@ def package_problems() -> list[str]:
         for name in REQUIRED_DIRECTORY_FILES[rel]:
             if not (source / name).is_file():
                 problems.append(f"{rel}/{name}: required file is missing")
+    for source_rel, _ in WORKSPACE_MANAGED:
+        source = REPO_ROOT / source_rel
+        if source_rel in WORKSPACE_DIRECTORIES:
+            if not source.is_dir() or source.is_symlink():
+                problems.append(f"{source_rel}: must be a directory in the workspace")
+                continue
+            for name in REQUIRED_DIRECTORY_FILES[source_rel]:
+                if not (source / name).is_file():
+                    problems.append(f"{source_rel}/{name}: required file is missing")
+        elif not source.is_file() or source.is_symlink():
+            problems.append(f"{source_rel}: must be a regular file in the workspace")
+    for source_rel, _ in EXTERNAL_MANAGED_FILES:
+        source = ROOT / source_rel
+        if not source.is_file() or source.is_symlink():
+            problems.append(f"{source_rel}: must be a regular file in the repository")
+    problems.extend(settings_fragment_problems())
     for rel in EXECUTABLES:
         source = ROOT / rel
         if source.is_file() and not source.stat().st_mode & 0o111:
@@ -362,6 +430,85 @@ def agent_package_problems() -> list[str]:
     return problems
 
 
+HOME_LITERAL = re.compile(r"(?:^|(?<=\s))~/")
+
+
+def expand_home(value):
+    """Rewrite every `~/` path literal in a fragment value to the absolute home directory."""
+    if isinstance(value, str):
+        return HOME_LITERAL.sub(f"{HOME}{os.sep}", value)
+    if isinstance(value, dict):
+        return {key: expand_home(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [expand_home(item) for item in value]
+    return value
+
+
+def settings_fragment() -> dict:
+    """The three claude-core-owned settings keys, with home-relative commands made absolute."""
+    fragment = json.loads(MANAGED_SETTINGS_FRAGMENT.read_text(encoding="utf-8"))
+    return {key: expand_home(fragment[key]) for key in OWNED_SETTINGS_KEYS}
+
+
+def settings_fragment_problems() -> list[str]:
+    origin = MANAGED_SETTINGS_FRAGMENT.relative_to(ROOT)
+    try:
+        fragment = json.loads(MANAGED_SETTINGS_FRAGMENT.read_text(encoding="utf-8"))
+    except OSError:
+        return [f"{origin}: managed settings fragment is missing"]
+    except json.JSONDecodeError as exc:
+        return [f"{origin}: invalid JSON: {exc}"]
+    if not isinstance(fragment, dict) or sorted(fragment) != sorted(OWNED_SETTINGS_KEYS):
+        return [f"{origin}: must define exactly {', '.join(OWNED_SETTINGS_KEYS)}"]
+    return []
+
+
+def settings_drift() -> list[str]:
+    """Report owned keys the live settings are missing or disagree on; stay silent about unreadable settings."""
+    if settings_fragment_problems():
+        return []
+    try:
+        settings = json.loads(CLAUDE_SETTINGS.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        settings = {}
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(settings, dict):
+        return []
+    problems: list[str] = []
+    for key, value in settings_fragment().items():
+        if key not in settings:
+            problems.append(f"{CLAUDE_SETTINGS}: {key} is missing")
+        elif settings[key] != value:
+            problems.append(f"{CLAUDE_SETTINGS}: {key} differs from the managed settings fragment")
+    return problems
+
+
+def install_settings(backups: BackupStore) -> bool:
+    fragment = settings_fragment()
+    try:
+        settings = json.loads(CLAUDE_SETTINGS.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        settings = {}
+    except json.JSONDecodeError as exc:
+        raise Problem(f"{CLAUDE_SETTINGS}: invalid JSON: {exc}")
+    if not isinstance(settings, dict):
+        raise Problem(f"{CLAUDE_SETTINGS}: must contain a JSON object")
+    if all(settings.get(key) == value for key, value in fragment.items()):
+        return False
+    backups.preserve(CLAUDE_SETTINGS)
+    merged = {**settings, **fragment}
+    CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+    temporary = CLAUDE_SETTINGS.with_name(f".{CLAUDE_SETTINGS.name}.claude-core.tmp")
+    temporary.unlink(missing_ok=True)
+    try:
+        temporary.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(CLAUDE_SETTINGS)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return True
+
+
 def live_problems() -> list[str]:
     problems = package_problems()
     for source, target in managed_links():
@@ -391,6 +538,7 @@ def live_problems() -> list[str]:
         settings = {}
     if "agent" in settings and settings["agent"] != "controller":
         problems.append("Claude user settings select an agent other than controller")
+    problems.extend(settings_drift())
     return problems
 
 
@@ -408,12 +556,12 @@ def replace_with_link(source: Path, target: Path, backups: BackupStore) -> None:
     temporary.replace(target)
 
 
-def points_into_root(link: Path) -> bool:
+def points_into_managed_root(link: Path) -> bool:
     target = Path(os.readlink(link))
     if not target.is_absolute():
         target = link.parent / target
     normalized = Path(os.path.normpath(target))
-    return normalized == ROOT or ROOT in normalized.parents
+    return any(normalized == root or root in normalized.parents for root in (ROOT, REPO_ROOT))
 
 
 def prune_stale_links() -> list[Path]:
@@ -422,7 +570,7 @@ def prune_stale_links() -> list[Path]:
         if not directory.is_dir():
             continue
         for child in sorted(directory.iterdir()):
-            if child.is_symlink() and not child.exists() and points_into_root(child):
+            if child.is_symlink() and not child.exists() and points_into_managed_root(child):
                 child.unlink()
                 pruned.append(child)
     return pruned
@@ -485,6 +633,7 @@ def cmd_install(_: argparse.Namespace) -> int:
     for path in changed:
         print(f"linked {path}")
     print(f"unchanged {len(managed_links()) - len(changed)} link(s)")
+    print("settings fragment " + ("applied" if install_settings(backups) else "unchanged"))
     copied = install_claude_agents(backups)
     for path in copied:
         print(f"copied {path}")
@@ -498,7 +647,7 @@ def cmd_status(_: argparse.Namespace) -> int:
     problems = live_problems()
     report("claude-core live installation", problems)
     if not problems:
-        print(f"  {len(MANAGED_FILES)} file link(s), {len(MANAGED_DIRECTORIES)} directory link(s), {len(claude_agent_sources())} agent file(s), {len(reference_edges())} reference edge(s) resolve")
+        print(f"  {len(managed_links())} link(s), {len(claude_agent_sources())} agent file(s), {len(reference_edges())} reference edge(s) resolve; settings fragment in sync")
     return 1 if problems else 0
 
 

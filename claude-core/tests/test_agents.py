@@ -383,6 +383,7 @@ class StandaloneCopies(unittest.TestCase):
                     CLAUDE_SOURCE=source,
                     CLAUDE_TARGET=target,
                     BACKUP_ROOT=root / "backups",
+                    CLAUDE_SETTINGS=root / "settings.json",
                 ),
                 mock.patch.object(manage, "run"),
                 mock.patch.object(manage, "managed_links", return_value=[]),

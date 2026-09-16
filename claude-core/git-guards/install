@@ -1,0 +1,46 @@
+#!/bin/sh
+# Install (or audit) the pre-push accident guard in git clones.
+#
+#   install                 install into every clone under ~/notraffic, then report
+#   install <dir>...        install into the named clones
+#   install --audit         report coverage only, change nothing
+#
+# Linked worktrees need nothing: they share the common git dir's hooks.
+set -eu
+
+GUARD="$HOME/.config/git-guards/pre-push-foreign-history"
+[ -x "$GUARD" ] || { echo "missing guard: $GUARD" >&2; exit 1; }
+
+audit=0
+case "${1:-}" in --audit) audit=1; shift ;; esac
+
+if [ "$#" -gt 0 ]; then set -- "$@"; else set -- "$HOME"/notraffic/*/; fi
+
+installed=0 already=0 foreign=0 skipped=0
+for d in "$@"; do
+    d=${d%/}
+    [ -d "$d" ] || continue
+    common=$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || { skipped=$((skipped+1)); continue; }
+    # a linked worktree resolves to its parent's git dir, which we handle once
+    hook="$common/hooks/pre-push"
+    if [ -L "$hook" ] && [ "$(readlink "$hook")" = "$GUARD" ]; then
+        already=$((already+1)); continue
+    fi
+    if [ -e "$hook" ]; then
+        foreign=$((foreign+1))
+        printf 'OTHER HOOK  %s\n' "$hook"
+        continue
+    fi
+    if [ "$audit" = 1 ]; then
+        printf 'UNGUARDED   %s\n' "$hook"
+    else
+        mkdir -p "$common/hooks"
+        ln -s "$GUARD" "$hook"
+        installed=$((installed+1))
+        printf 'installed   %s\n' "$hook"
+    fi
+done
+
+printf '\nguarded: %s already, %s newly installed | other pre-push hook: %s | not a repo: %s\n' \
+    "$already" "$installed" "$foreign" "$skipped"
+[ "$foreign" = 0 ] || printf '%s\n' 'A clone with its own pre-push hook (prek/pre-commit) needs the guard chained inside it.'

@@ -54,6 +54,7 @@ def ensure_modern_python() -> None:
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "plugins.json"
+CLAUDE_CORE_DELIVERY = "claude-core"
 CLAUDE_MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
 CODEX_MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 CODEX_CONFIG = Path.home() / ".codex" / "config.toml"
@@ -98,7 +99,36 @@ def load_catalog() -> dict[str, Any]:
             raise Problem(f"{name}: version is required in plugins.json")
         if not entry.get("description"):
             raise Problem(f"{name}: description is required (users read it when installing)")
+        delivery = entry.get("claude_delivery")
+        if delivery is not None and delivery != CLAUDE_CORE_DELIVERY:
+            raise Problem(f"{name}: claude_delivery must be \"{CLAUDE_CORE_DELIVERY}\" when present")
     return catalog
+
+
+def delivered_by_claude_core(entry: dict[str, Any]) -> bool:
+    """True when claude-core links this plugin's skills into ~/.claude instead of a marketplace copy."""
+    return entry.get("claude_delivery") == CLAUDE_CORE_DELIVERY
+
+
+def claude_marketplace_needed(catalog: dict[str, Any]) -> bool:
+    return any(not delivered_by_claude_core(entry) for entry in catalog["plugins"])
+
+
+def claude_core_state(source: Path) -> str:
+    """Postcondition for a claude-core delivered plugin: every skill directory is linked live.
+
+    The link target must be this checkout's skill directory itself, so a stale marketplace
+    copy or a hand-made link elsewhere is reported rather than trusted.
+    """
+    skills = source / "skills"
+    names = sorted(child.name for child in skills.iterdir() if child.is_dir()) if skills.is_dir() else []
+    if not names:
+        return "MISSING"
+    for name in names:
+        link = Path.home() / ".claude" / "skills" / name
+        if not link.is_symlink() or Path(os.readlink(link)) != skills / name or not link.exists():
+            return "UNLINKED"
+    return "claude-core"
 
 
 def plugin_dir(entry: dict[str, Any]) -> Path:
@@ -570,6 +600,8 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     if shutil.which("claude") is None:
         print("claude not on PATH — skipping Claude Code")
+    elif not claude_marketplace_needed(catalog):
+        print("claude: every plugin is delivered by claude-core — no marketplace needed")
     else:
         claude_roots = claude_marketplace_roots()
         if (
@@ -592,6 +624,8 @@ def cmd_install(args: argparse.Namespace) -> int:
             # visible to Claude Code after the marketplace is re-read.
             run(["claude", "plugin", "marketplace", "update", name], allow_failure=True)
         for entry in catalog["plugins"]:
+            if delivered_by_claude_core(entry):
+                continue
             pid = plugin_id(catalog, entry)
             # Versions are pinned for local development, so neither `install` (a no-op when
             # already present) nor `update` (a no-op when the version is unchanged) will pick
@@ -636,11 +670,11 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         pid = plugin_id(catalog, entry)
         if shutil.which("codex"):
             run(["codex", "plugin", "remove", pid], allow_failure=True)
-        if shutil.which("claude"):
+        if shutil.which("claude") and not delivered_by_claude_core(entry):
             run(["claude", "plugin", "uninstall", pid, "--scope", args.scope], allow_failure=True)
     if shutil.which("codex"):
         run(["codex", "plugin", "marketplace", "remove", name], allow_failure=True)
-    if shutil.which("claude"):
+    if shutil.which("claude") and claude_marketplace_needed(catalog):
         run(["claude", "plugin", "marketplace", "remove", name], allow_failure=True)
     print(f"{name} removed from both agents (files in this repo are untouched)")
     return 0
@@ -846,19 +880,24 @@ def cmd_status(args: argparse.Namespace) -> int:
         if plugin_result.returncode == 0:
             claude_states = claude_plugin_states(plugin_result.stdout)
 
+    claude_needed = claude_marketplace_needed(catalog)
+
     def marketplace_label(available: bool, current: bool) -> str:
         if not available:
             return "CLI MISSING"
         return "current" if current else "MISSING OR STALE"
 
     print(f"codex:  marketplace {marketplace_label(codex_available, codex_marketplace_ok)}")
-    print(f"claude: marketplace {marketplace_label(claude_available, claude_marketplace_ok)}")
+    if claude_needed:
+        print(f"claude: marketplace {marketplace_label(claude_available, claude_marketplace_ok)}")
+    else:
+        print("claude: marketplace not needed (claude-core delivers every plugin)")
     print(f"\n{'plugin':<20} {'repo':<10} {'codex':<12} claude")
     unhealthy = not (
         codex_available
         and claude_available
         and codex_marketplace_ok
-        and claude_marketplace_ok
+        and (claude_marketplace_ok or not claude_needed)
     )
     for entry in catalog["plugins"]:
         pid = plugin_id(catalog, entry)
@@ -869,13 +908,16 @@ def cmd_status(args: argparse.Namespace) -> int:
             state=codex_states.get(pid),
             source=plugin_dir(entry),
         )
-        claude_state = plugin_live_state(
-            available=claude_available,
-            marketplace_current=claude_marketplace_ok,
-            state=claude_states.get(pid),
-            source=plugin_dir(entry),
-        )
-        unhealthy = unhealthy or codex_state != "ok" or claude_state != "ok"
+        if delivered_by_claude_core(entry):
+            claude_state = claude_core_state(plugin_dir(entry))
+        else:
+            claude_state = plugin_live_state(
+                available=claude_available,
+                marketplace_current=claude_marketplace_ok,
+                state=claude_states.get(pid),
+                source=plugin_dir(entry),
+            )
+        unhealthy = unhealthy or codex_state != "ok" or claude_state not in ("ok", "claude-core")
         print(
             f"{entry['name']:<20} {repo_version:<10} {codex_state:<12} {claude_state}"
         )
