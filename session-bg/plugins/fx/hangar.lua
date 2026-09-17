@@ -47,6 +47,20 @@ local function pal(p, i, k)
   return sbg.scale(c[1], c[2], c[3], k or 1.0)
 end
 
+local function floor_l(r, g, b, minl)
+  local mx = math.max(r, g, b)
+  local mn = math.min(r, g, b)
+  local l = (mx + mn) * 0.5
+  if l <= 0.0001 then return minl, minl, minl end
+  if l < minl then return sbg.scale(r, g, b, minl / l) end
+  return r, g, b
+end
+
+local function mainc(p, i, k)
+  local r, g, b = pal(p, i, k)
+  return floor_l(r, g, b, 0.30)
+end
+
 local function sky_colour(pct, k)
   local p = sbg.clamp((tonumber(pct) or 0) / 100.0, 0.0, 1.0)
   local h, l
@@ -94,15 +108,22 @@ local function build(state)
 
   local top_y = math.max(1, math.floor(H * 0.14))
   local bot_y = math.min(H - 2, H - 1 - math.floor(H * 0.14))
-  local bay_h = math.min(5, math.max(3, bot_y - top_y - 1))
+  local avail_v = math.max(3, bot_y - top_y - 1)
+  local bay_h = math.min(5, avail_v)
   local bay_y0 = math.max(top_y + 1, math.floor((top_y + bot_y) / 2) - math.floor(bay_h / 2))
   local bay_y1 = math.min(bot_y - 1, bay_y0 + bay_h)
 
   local bay_w = 8
   local max_bays = math.max(1, math.floor((W - 4) / bay_w))
-  local total_bays = math.floor(tools / 30) + 1
+  local baseline_bays = math.max(1, math.floor(max_bays * 0.25))
+  local wide_frac = sbg.clamp(max_bays / 24.0, 0.0, 1.0)
+  local total_bays = sbg.clamp(baseline_bays + math.floor(tools / 20 * wide_frac), baseline_bays, max_bays)
   local shown = math.min(max_bays, total_bays)
   local first = total_bays - shown
+
+  local mesh_rows_max = sbg.clamp(math.floor(avail_v * 0.30), 1, 8)
+  local mesh_reveal = sbg.clamp(tools / 220.0, 0.0, 1.0)
+  local mesh_rows = math.floor(mesh_rows_max * mesh_reveal + 0.5)
 
   local bays = {}
   for i = 0, shown - 1 do
@@ -129,6 +150,7 @@ local function build(state)
     bay_y1 = bay_y1,
     bays = bays,
     total_bays = total_bays,
+    mesh_rows = mesh_rows,
     subs = subs,
     lamp_mix = {
       exec = jnum(kinds.exec) / total_kind,
@@ -202,12 +224,25 @@ function M.render(fx, state)
     sbg.text(fx, 1, 0, status, pal(p, 5, 0.85))
   end
 
-  local rail_r, rail_g, rail_b = pal(p, 3, 0.4)
+  local rail_r, rail_g, rail_b = mainc(p, 3, 0.55)
   local tick = math.floor(T * 6.0) % (2 * math.max(1, W))
   for x = 0, W - 1 do
     if x % 2 == 0 then
       fx:put(x, scene.top_y, "\226\149\170", rail_r, rail_g, rail_b)
       fx:put(x, scene.bot_y, "\226\148\128", rail_r, rail_g, rail_b)
+    end
+  end
+
+  local mr2, mg2, mb2 = mainc(p, 3, 0.4)
+  for row = 1, scene.mesh_rows do
+    local y = scene.top_y + row
+    if y >= 0 and y < scene.bay_y0 then
+      for x = 0, W - 1 do
+        local n = sbg.noise2(x * 0.22 + row * 5.7, T * 0.03)
+        if n > 0.22 then
+          fx:put(x, y, "\226\148\188", sbg.scale(mr2, mg2, mb2, 0.6))
+        end
+      end
     end
   end
 
@@ -224,7 +259,7 @@ function M.render(fx, state)
   local shutter = (mode == "compacting")
 
   for _, bay in ipairs(scene.bays) do
-    local br, bg, bb = pal(p, 2, 0.5 * bay.fade)
+    local br, bg, bb = mainc(p, 2, 0.5 + 0.35 * bay.fade)
     local x, y0, y1 = bay.x, scene.bay_y0, scene.bay_y1
     if y1 - y0 >= 2 then
       local ring = mode == "thinking" and bay.newest
@@ -249,7 +284,8 @@ function M.render(fx, state)
           fx:put(x + 4, yy, "\226\148\130", br, bg, bb)
         end
 
-        local mr, mg, mb = sbg.hsl(0.60, 0.15, 0.32 * bay.fade)
+        local hr0, hg0, hb0 = sbg.hsl(0.60, 0.20, 0.32 + 0.10 * bay.fade)
+        local mr, mg, mb = floor_l(hr0, hg0, hb0, 0.30)
         local midy = math.floor((y0 + y1) / 2)
         fx:put(x + 1, midy - 1, "\226\150\159", mr, mg, mb)
         fx:put(x + 2, midy - 1, "\226\150\136", mr, mg, mb)
@@ -257,6 +293,11 @@ function M.render(fx, state)
         fx:put(x + 1, midy, "\226\150\144", mr, mg, mb)
         fx:put(x + 3, midy, "\226\150\140", mr, mg, mb)
         fx:put(x + 2, midy + 1, "=", mr, mg, mb)
+        for yy = y0 + 1, y1 - 2 do
+          if yy < midy - 1 or yy > midy + 1 then
+            fx:put(x + 2, yy, "\226\148\130", sbg.scale(br, bg, bb, 0.85))
+          end
+        end
 
         local mix = scene.lamp_mix
         local lr, lg, lb
@@ -274,7 +315,8 @@ function M.render(fx, state)
           local blink = math.floor(T * 0.8 + bay.idx) % 4
           lamp_ch = (blink ~= 0) and "\226\151\139" or "\226\128\162"
         end
-        fx:put(x + 1, y1 - 1, lamp_ch, sbg.scale(lr, lg, lb, bay.fade))
+        local slr, slg, slb = sbg.scale(lr, lg, lb, 0.6 + 0.4 * bay.fade)
+        fx:put(x + 1, y1 - 1, lamp_ch, floor_l(slr, slg, slb, 0.30))
 
         if bay.newest and mode == "error" and scene.errors > 0 then
           fx:put(x + 3, y1 - 1, "x", sbg.hsl(0.98, 0.6, 0.42))

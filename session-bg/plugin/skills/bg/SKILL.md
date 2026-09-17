@@ -90,7 +90,10 @@ like a short one. Growth is monotonic and comes from `state.journey`:
 | `hangar` | mecha maintenance bays | a bay with a docked mech per 30 tools, lamps coloured by `tool_kinds`, drones per subagent, PWR gauge from `context_pct` |
 | `dojo` | shonen training arc | speed lines on the pane edges per 4 tools, tally marks per 5 prompts, LV ticks by `context_pct`, a chibi who trains, sits, or thinks |
 | `hud` | RPG status window | rows unlock per milestone (prompts, tools, files, party, mana, wounds, rests), LV and XP from tools, skills from prompt words |
-| `world` | all eleven | uses `state.mood.motif`, else `sbg.pick` on the repo name |
+| `studyroom` | lo-fi study room | a book per edited file on filling shelves, a sticky note per prompt, a plant from the diff, a cat after 20 tools, rain while a tool runs |
+| `sparkfield` | magical constellation | stars with the pane, a link per 6 tools, sigil rings per peak subagents, a comet per tool call |
+| `dust` | dust-sprite workshop | a mote per 25 tools and per subagent carrying `*` from the task pile to the shelves, cobwebs that clear as prompts accumulate |
+| `world` | all fourteen | uses `state.mood.motif`, else `sbg.pick` on the repo name |
 
 Across all of them `context_pct` is the time of day (dawn to dusk on the sky
 rows), `mode` drives motion (`thinking` sways, `tool` bursts, `waiting` idles,
@@ -106,7 +109,7 @@ coverage with `lua scripts/world/drive.lua` (frame preview:
 `lua scripts/world/show.lua NAME [tools] [mode] [W] [H] [ctx_pct]`); never
 hand-edit the copies in it.
 
-The six anime motifs (`sakura kana shrine hangar dojo hud`) share a visual
+The anime motifs (`sakura kana shrine hangar dojo hud studyroom sparkfield dust`) share a visual
 language: one-cell glyphs only (ASCII, box drawing, blocks, braille, halfwidth
 katakana U+FF66-FF9F), never fullwidth kana or kanji, which are double-width
 and would corrupt the grid; a row-0 label with the scene title and a

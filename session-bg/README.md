@@ -186,12 +186,15 @@ from a five-minute one and the scene never loops:
 | `hangar` | mecha bays per tools, lamps by tool kind, drones per subagent, a PWR gauge from context % |
 | `dojo` | shonen speed lines on the edges, tally marks per prompt, LV ticks, a chibi that trains, sits, or thinks |
 | `hud` | RPG status window whose rows unlock with the session: LV/XP, party, mana, wounds, skills |
+| `studyroom` | lo-fi study room: books per edited file, sticky notes per prompt, a plant from the diff, rain while a tool runs |
+| `sparkfield` | constellation: a link per tool batch, sigil rings per peak subagents, comets on tool calls |
+| `dust` | dust-sprite workshop: motes per tools and subagents ferrying `*` from the task pile to the shelves |
 
-`world.lua` bundles all eleven and picks one from `mood.json` (`motif`) or a
+`world.lua` bundles all fourteen and picks one from `mood.json` (`motif`) or a
 hash of the repository name; `sbg fx use office` pins one. Every motif keeps
 under ~25 % coverage and fades the oldest parts when the pane fills.
 
-The six anime motifs (`sakura kana shrine hangar dojo hud`) use only one-cell
+The anime motifs (`sakura kana shrine hangar dojo hud studyroom sparkfield dust`) use only one-cell
 glyphs — ASCII, box drawing, blocks, braille and halfwidth katakana — because
 fullwidth kana and kanji are double-width and would break the grid. Mode words
 appear as halfwidth katakana next to the scene title, kaomoji show up only as

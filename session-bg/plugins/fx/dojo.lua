@@ -58,6 +58,26 @@ local function pal(p, i, k)
   return sbg.scale(c[1], c[2], c[3], k or 1.0)
 end
 
+local function tohsl(r, g, b)
+  local mx, mn = math.max(r, g, b), math.min(r, g, b)
+  local l = (mx + mn) / 2
+  if mx == mn then return 0, 0, l end
+  local d = mx - mn
+  local s = d / (1 - math.abs(2 * l - 1))
+  local h
+  if mx == r then h = ((g - b) / d) % 6
+  elseif mx == g then h = (b - r) / d + 2
+  else h = (r - g) / d + 4 end
+  return h / 6, s, l
+end
+
+local function main_colour(p, i, minl)
+  local r, g, b = pal(p, i, 1.0)
+  local h, s, l = tohsl(r, g, b)
+  l = math.max(l, minl or 0.30)
+  return sbg.hsl(h, s, l)
+end
+
 local function sky_colour(pct, k)
   local p = sbg.clamp((tonumber(pct) or 0) / 100.0, 0.0, 1.0)
   local h, l
@@ -124,11 +144,17 @@ local function build(state)
   local prompts = jnum(j.prompts)
   local band_w = math.max(2, math.floor(W / 6))
   local top_y = 2
-  local bot_y = math.max(top_y + 1, H - 4)
+  local bot_y = math.max(top_y + 1, H - 6)
   local band_h = math.max(1, bot_y - top_y + 1)
-  local band_cap = math.max(2, math.floor(band_h * 0.55))
-  local total_cap = band_cap * 2
-  local nlines = math.min(total_cap, math.floor(tools / 4))
+  local band_area = band_w * band_h
+
+  local tools_ref = sbg.clamp(tools / 300.0, 0, 1)
+  local fill_frac = 0.16 + 0.29 * tools_ref
+  local base_n = math.max(1, math.floor(W / 8))
+  local n_per_band = math.max(base_n, math.floor(band_area * fill_frac))
+  n_per_band = math.min(n_per_band, band_area)
+  local nlines = n_per_band * 2
+
   local speed = {}
   for i = 1, nlines do
     local hs = sbg.hash("dojo-line-" .. i)
@@ -140,8 +166,12 @@ local function build(state)
   end
 
   local group_w = 10
-  local group_cap = math.max(0, math.floor((W * 0.5) / group_w))
-  local groups = math.min(group_cap, math.floor(prompts / 5))
+  local per_side_cap = math.max(1, math.floor((W * 0.25) / group_w))
+  local row_cap = per_side_cap * 2
+  local groups_wanted = math.max(1, math.floor(prompts / 5))
+  local groups = math.min(groups_wanted, row_cap * 2)
+  local row1_groups = math.min(groups, row_cap)
+  local row2_groups = groups - row1_groups
 
   local ticks = math.floor(sbg.clamp((tonumber(state.context_pct) or 0) / 10.0, 0, 10))
 
@@ -150,11 +180,12 @@ local function build(state)
     top_y = top_y,
     bot_y = bot_y,
     speed = speed,
-    groups = groups,
+    row1_groups = row1_groups,
+    row2_groups = row2_groups,
     ticks = ticks,
     lvl = math.floor(tools / 25) + 1,
     chibi_x = math.max(band_w + 1, math.floor(W * 0.5) - math.floor(band_w * 0.5)),
-    chibi_y = math.max(top_y, H - 3),
+    chibi_y = math.max(top_y, H - 4),
   }
 end
 
@@ -197,6 +228,28 @@ function M.step(dt, state)
   end
 end
 
+local function draw_tally_row(fx, y, ngroups, w, tr, tg, tb)
+  for gi = 1, ngroups do
+    local side = (gi % 2 == 1) and "L" or "R"
+    local slot = math.floor((gi - 1) / 2)
+    local x0
+    if side == "L" then
+      x0 = 1 + slot * 10
+    else
+      x0 = w - 2 - 9 - slot * 10
+    end
+    if x0 >= 0 and x0 + 8 < w then
+      local tally = "| | | | /"
+      for ci = 1, #tally do
+        local ch = tally:sub(ci, ci)
+        if ch ~= " " then
+          fx:put(x0 + ci - 1, y, ch, tr, tg, tb)
+        end
+      end
+    end
+  end
+end
+
 function M.render(fx, state)
   if scene == nil or W == 0 or H == 0 then return end
   local j = state.journey or {}
@@ -211,11 +264,11 @@ function M.render(fx, state)
   end
   local kana = kana_for(mode)
   if sbg.text then
-    sbg.text(fx, 1, 0, title .. "  " .. table.concat(kana), pal(p, 5, 0.85))
+    sbg.text(fx, 1, 0, title .. "  " .. table.concat(kana), main_colour(p, 5, 0.55))
   end
 
-  local lr, lg, lb = pal(p, 3, 0.5)
-  if sbg.text then sbg.text(fx, 0, 1, "LV" .. tostring(scene.lvl), pal(p, 4, 0.6)) end
+  local lr, lg, lb = main_colour(p, 3, 0.32)
+  if sbg.text then sbg.text(fx, 0, 1, "LV" .. tostring(scene.lvl), main_colour(p, 4, 0.35)) end
   for i = 1, scene.ticks do
     local y = scene.bot_y - (i - 1)
     if y >= 2 then
@@ -227,7 +280,7 @@ function M.render(fx, state)
   end
 
   if WIPE > 0.5 then
-    local wr, wg, wb = pal(p, 2, 0.5)
+    local wr, wg, wb = main_colour(p, 2, 0.32)
     local ys = { math.floor(H * 0.25), math.floor(H * 0.5), math.floor(H * 0.75) }
     for _, y in ipairs(ys) do
       for x = 0, scene.band_w - 1 do
@@ -239,7 +292,7 @@ function M.render(fx, state)
     local err = (mode == "error") or FRESH_ERR
     local err_band = jnum(j.errors) % 2 == 0 and "L" or "R"
     for _, s in ipairs(scene.speed) do
-      local fade = 0.35 + 0.55 * sbg.clamp(1.0 - s.age / math.max(1, #scene.speed), 0, 1)
+      local fade = 0.60 + 0.35 * sbg.clamp(1.0 - s.age / math.max(1, #scene.speed), 0, 1)
       local off = s.offset
       local ch = s.glyph
       if mode == "thinking" then
@@ -251,9 +304,9 @@ function M.render(fx, state)
         if s.band == "L" then ch = ">" else ch = "-" end
       end
       local x = (s.band == "L") and off or (W - 1 - off)
-      local cr, cg, cb = pal(p, 2, fade)
+      local cr, cg, cb = main_colour(p, 2, 0.30 * fade + 0.30)
       if err and s.band == err_band then
-        cr, cg, cb = sbg.hsl(0.98, 0.55, 0.40 * fade)
+        cr, cg, cb = sbg.hsl(0.98, 0.55, 0.40)
       end
       fx:put(x, s.y, ch, cr, cg, cb)
     end
@@ -269,31 +322,16 @@ function M.render(fx, state)
       end
     end
 
-    for gi = 1, scene.groups do
-      local side = (gi % 2 == 1) and "L" or "R"
-      local slot = math.floor((gi - 1) / 2)
-      local x0
-      if side == "L" then
-        x0 = 1 + slot * 10
-      else
-        x0 = W - 2 - 9 - slot * 10
-      end
-      if x0 >= 0 and x0 + 8 < W then
-        local tr, tg, tb = pal(p, 4, 0.45)
-        local tally = "| | | | /"
-        for ci = 1, #tally do
-          local ch = tally:sub(ci, ci)
-          if ch ~= " " then
-            fx:put(x0 + ci - 1, H - 1, ch, tr, tg, tb)
-          end
-        end
-      end
+    local tr, tg, tb = main_colour(p, 4, 0.32)
+    draw_tally_row(fx, H - 1, scene.row1_groups, W, tr, tg, tb)
+    if scene.row2_groups > 0 then
+      draw_tally_row(fx, H - 2, scene.row2_groups, W, tr, tg, tb)
     end
   end
 
   local age = tonumber(state.age) or 0
   local rows = CHIBI_STAND
-  local sr, sg, sb = pal(p, 5, 0.6)
+  local sr, sg, sb = main_colour(p, 5, 0.38)
   if mode == "error" then
     rows = CHIBI_ERR
     sr, sg, sb = sbg.hsl(0.98, 0.55, 0.42)
@@ -317,15 +355,15 @@ function M.render(fx, state)
         local ch = sbg.braille(mask)
         local ax = cx - r - 1
         local bxp = cx + r + 1
-        if ax >= 0 then fx:put(ax, cy - 1, ch, pal(p, 3, 0.4)) end
-        if bxp < W then fx:put(bxp, cy - 1, ch, pal(p, 3, 0.4)) end
+        if ax >= 0 then fx:put(ax, cy - 1, ch, main_colour(p, 3, 0.30)) end
+        if bxp < W then fx:put(bxp, cy - 1, ch, main_colour(p, 3, 0.30)) end
       end
     elseif mode == "waiting" then
-      if sbg.text then sbg.text(fx, scene.chibi_x, scene.chibi_y - 1, "...", pal(p, 4, 0.5)) end
+      if sbg.text then sbg.text(fx, scene.chibi_x, scene.chibi_y - 1, "...", main_colour(p, 4, 0.32)) end
     elseif mode == "error" then
       if sbg.text then sbg.text(fx, scene.chibi_x, scene.chibi_y - 1, "!!!", sbg.hsl(0.98, 0.6, 0.45)) end
     elseif (mode == "idle" or mode == "start" or mode == "end") and age > 60 then
-      fx:put(scene.chibi_x + 2, scene.chibi_y - 1, "z", pal(p, 3, 0.35))
+      fx:put(scene.chibi_x + 2, scene.chibi_y - 1, "z", main_colour(p, 3, 0.32))
     elseif mode == "idle" or mode == "start" or mode == "end" then
       local flick = math.floor(T * 0.6) % 5
       if flick == 0 then

@@ -3,7 +3,7 @@ local Hn = dofile(HERE .. "harness.lua")
 
 local DIR = HERE .. "../../plugins/fx/"
 local scripts = { ... }
-if #scripts == 0 then scripts = { "forest", "skyline", "reef", "circuit", "office", "sakura", "kana", "shrine", "hangar", "dojo", "hud", "world" } end
+if #scripts == 0 then scripts = { "forest", "skyline", "reef", "circuit", "office", "sakura", "kana", "shrine", "hangar", "dojo", "hud", "studyroom", "sparkfield", "dust", "world" } end
 
 local MODES = { "start", "idle", "thinking", "tool", "waiting", "error", "compacting", "end" }
 
@@ -52,6 +52,20 @@ for _, s in ipairs(scripts) do
     end
   end
   -- also a small pane
+  if s ~= "world" then
+    for _, size in ipairs({ { 180, 45 }, { 80, 24 } }) do
+      local okb, covb = pcall(Hn.run, path, scenarios[1], size[1], size[2], 30)
+      if not okb then
+        lines[#lines + 1] = string.format("    baseline %dx%d ERROR %s", size[1], size[2], tostring(covb))
+        fail = fail + 1
+      elseif covb < 0.02 then
+        lines[#lines + 1] = string.format("    baseline %dx%d cov %5.1f%%  <== TOO FAINT (min 2%%)", size[1], size[2], covb * 100)
+        fail = fail + 1
+      else
+        lines[#lines + 1] = string.format("    baseline %dx%d cov %5.1f%%", size[1], size[2], covb * 100)
+      end
+    end
+  end
   local ok2, cov2 = pcall(Hn.run, path, scenarios[3], 80, 24, 60)
   print(string.format("%s  worst %5.1f%% (limit %.0f%%)  80x24 long: %s", s, worst * 100, limit * 100,
     ok2 and string.format("%5.1f%%", cov2 * 100) or ("ERROR " .. tostring(cov2))))

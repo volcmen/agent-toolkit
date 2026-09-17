@@ -128,9 +128,18 @@ end
 local function build(state)
   local j = state.journey or {}
   local tools = jnum(j.tools)
+  local area = W * H
+  local ctx_pct = sbg.clamp((tonumber(state.context_pct) or 0), 0, 100)
 
-  local max_cols = math.max(1, math.floor(W / 6))
-  local col_n = math.min(max_cols, 3 + math.floor(tools / 15))
+  local growth = sbg.clamp(tools / 300.0, 0.0, 1.0)
+  local frac = sbg.lerp(0.065, 0.16, growth)
+  local trail = 6 + math.floor(ctx_pct / 12) + math.floor(tools / 50)
+  local target_cells = frac * area
+
+  local min_cols = 6 + math.floor(W / 25)
+  local max_cols = math.max(min_cols, math.floor(W * 0.6))
+  local col_n = math.floor(sbg.clamp(target_cells / trail, min_cols, max_cols))
+
   local rng = sbg.rng(sbg.hash(jstr(j.repo, "sbg") .. ":kana") + SEED)
   local cols = {}
   for i = 1, col_n do
@@ -148,7 +157,6 @@ local function build(state)
       speed = rng:range(3.0, 6.0),
       glyphs = {},
     }
-    local trail = 4 + math.floor(sbg.clamp((tonumber(state.context_pct) or 0), 0, 100) / 12)
     for t = 1, trail + 2 do
       cols[i].glyphs[t] = GLYPH_POOL[(sbg.hash(i .. ":" .. t) % #GLYPH_POOL) + 1]
     end
@@ -238,7 +246,7 @@ function M.render(fx, state)
   local p = palette(state)
   local age = tonumber(state.age) or 0
 
-  local bg = { pal(p, 1, 0.5) }
+  local tail_col = { pal(p, 2, 0.32) }
 
   if COLLAPSE > 0.02 then
     local bandw = math.max(1, math.floor(W * 0.06))
@@ -249,7 +257,7 @@ function M.render(fx, state)
       local ch = (i % 2 == 0) and "│" or "┆"
       for row = 1, 6 do
         local y = math.floor(sbg.wrap(RT * c.speed * 0.4 + row * 2 + c.phase, H))
-        put1(fx, math.floor(x + 0.5), y, ch, bg[1], bg[2], bg[3])
+        put1(fx, math.floor(x + 0.5), y, ch, tail_col[1], tail_col[2], tail_col[3])
       end
     end
   else
@@ -267,10 +275,10 @@ function M.render(fx, state)
           local k = 1.0 - (t / trail)
           local r, g, b
           if GLITCH > 0.05 and ci == 1 then
-            r, g, b = sbg.hsl(0.0, 0.5, 0.22 * GLITCH + 0.05)
+            r, g, b = sbg.hsl(0.0, 0.5, 0.30 + 0.10 * GLITCH)
             glyph = ({ "x", "/", "\\" })[(t % 3) + 1]
           else
-            r, g, b = sbg.mix(bg[1], bg[2], bg[3], head_r, head_g, head_b, k)
+            r, g, b = sbg.mix(tail_col[1], tail_col[2], tail_col[3], head_r, head_g, head_b, k)
           end
           put1(fx, c.x, y, glyph, r, g, b)
         end
@@ -305,7 +313,7 @@ function M.render(fx, state)
   end
 
   if mode == "idle" and age > 60 then
-    sbg.text(fx, math.max(0, W - 4), H - 2, "zz", pal(p, 3, 0.30))
+    sbg.text(fx, math.max(0, W - 4), H - 2, "zz", pal(p, 3, 0.32))
   end
 
   local title = (state.mood or {}).title

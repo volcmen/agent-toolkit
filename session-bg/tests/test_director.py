@@ -109,7 +109,7 @@ class FakeModeTests(unittest.TestCase):
             self.assertEqual(mood["mood"], "calm")
 
     def test_fake_accepts_anime_motifs(self):
-        for motif in ("sakura", "kana", "shrine", "hangar", "dojo", "hud"):
+        for motif in ("sakura", "kana", "shrine", "hangar", "dojo", "hud", "studyroom", "sparkfield", "dust"):
             with tempfile.TemporaryDirectory() as tmp:
                 state_dir = Path(tmp)
                 result = run_director(["--fake", json.dumps(dict(VALID_MOOD, motif=motif))], state_dir)

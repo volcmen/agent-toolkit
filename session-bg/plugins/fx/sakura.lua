@@ -127,26 +127,40 @@ end
 local function build(state)
   local j = state.journey or {}
   local tools = jnum(j.tools)
-  local prompts = jnum(j.prompts)
   local files = sum_files(j)
 
   local base_x = 2
   local base_y = H - 1
+  local area = W * H
 
-  local max_segments = math.min(220, math.max(10, math.floor((W + H) * 1.4)))
-  local segments = math.min(max_segments, 4 + math.floor(tools / 6))
+  local growth = sbg.clamp(tools / 300.0, 0.0, 1.0)
+  local frac = sbg.lerp(0.070, 0.17, growth)
+  local total_cells = frac * area
+
   local depth = math.floor(sbg.clamp(2 + tools / 50, 2, 6))
   local trunk_len = sbg.clamp(4 + depth * 2.0, 4, H * 0.68)
 
+  local branch_budget = math.max(28, math.floor(total_cells * 0.35))
+  local primary_n = math.floor(sbg.clamp(4 + tools / 120, 4, 8))
+  if primary_n > branch_budget then primary_n = math.max(1, branch_budget) end
+
   local rng = sbg.rng(sbg.hash(jstr(j.repo, "sbg") .. ":sakura") + SEED)
-  local root = grow(rng, depth, trunk_len, 0.0, { segments })
+  local root = { len = trunk_len, ang = 0.0, kids = {} }
+  local left = { branch_budget - primary_n }
+  for i = 1, primary_n do
+    local side = (i % 2 == 0) and -1.0 or 1.0
+    local spread = rng:range(0.32, 0.62) * side
+    local sublen = trunk_len * rng:range(0.55, 0.78)
+    root.kids[#root.kids + 1] = grow(rng, depth - 1, sublen, spread, left)
+  end
 
   local cx = base_x + trunk_len * 0.35
   local cy = base_y - trunk_len - depth * 1.4
   local radius = 3 + depth * 1.8
 
-  local max_bloom = math.max(6, math.floor(W * H * 0.045))
-  local bloom_n = math.floor(sbg.clamp(3 + prompts * 1.1, 3, max_bloom))
+  local bloom_target = math.max(6, math.floor(total_cells * 0.15))
+  local max_bloom = math.max(bloom_target, math.floor(area * 0.06))
+  local bloom_n = math.min(bloom_target, max_bloom)
   local bloom = {}
   for i = 1, bloom_n do
     local a = rng:range(0, 6.283185)
@@ -159,8 +173,10 @@ local function build(state)
     }
   end
 
-  local max_petals = math.max(4, math.floor(W * H * 0.03))
-  local petal_n = math.floor(sbg.clamp(4 + files, 4, max_petals))
+  local min_petals = 8 + math.floor(W / 12)
+  local petal_target = math.floor(total_cells * 0.50) + math.floor(files / 25)
+  local max_petals = math.max(min_petals, math.floor(area * 0.10))
+  local petal_n = math.min(max_petals, math.max(min_petals, petal_target))
   local petals = {}
   for i = 1, petal_n do
     petals[i] = {
@@ -181,6 +197,7 @@ local function build(state)
     cy = cy,
     bloom = bloom,
     petals = petals,
+    branch_budget = branch_budget,
   }
   for i = #PREV_FLOOR, 1, -1 do PREV_FLOOR[i] = nil end
 end
@@ -295,7 +312,7 @@ function M.render(fx, state)
   local trunk_col = { pal(p, err and 5 or 2, err and 0.35 or 0.42) }
   local sway = 0.05 * math.sin(T * 0.6)
   if mode == "thinking" then sway = 0.12 * math.sin(T * 1.3) end
-  local budget = { math.floor(W * H * 0.10) }
+  local budget = { scene.branch_budget + 4 }
   draw_branch(fx, scene.root, scene.base_x, scene.base_y, sway, sway,
     trunk_col, budget, mode == "compacting")
 
@@ -321,7 +338,7 @@ function M.render(fx, state)
     for _, pt in ipairs(scene.petals) do
       local x = sbg.lerp(pt.x0, tx, FUNNEL)
       local y = sbg.lerp(pt.y0, ty, FUNNEL)
-      local r, g, b = pal(p, 5, 0.30)
+      local r, g, b = pal(p, 5, 0.32)
       put1(fx, math.floor(x + 0.5), math.floor(y + 0.5), pt.glyph, r, g, b)
     end
   else
@@ -336,7 +353,7 @@ function M.render(fx, state)
       local x = sbg.wrap(pt.x0 + clock * pt.drift * dirmul + gust_dx, W)
       local r, g, b
       if errcol then
-        r, g, b = sbg.hsl(0.0, 0.55, 0.28)
+        r, g, b = sbg.hsl(0.0, 0.55, 0.32)
       else
         r, g, b = pal(p, 5, 0.42)
       end
@@ -347,7 +364,7 @@ function M.render(fx, state)
   for i, d in ipairs(DRIFT) do
     local x = W - 1 - (i - 1)
     if x < 0 then break end
-    local r, g, b = pal(p, 5, 0.30)
+    local r, g, b = pal(p, 5, 0.32)
     fx:put(x, H - 1, d.glyph, r, g, b)
   end
 

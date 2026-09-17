@@ -77,7 +77,7 @@ them as `local j = state.journey or {}` and `tonumber(j.tools) or 0`.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `motif` | string | requested world: `forest` `skyline` `reef` `circuit` `office` `sakura` `kana` `shrine` `hangar` `dojo` `hud` |
+| `motif` | string | requested world: `forest` `skyline` `reef` `circuit` `office` `sakura` `kana` `shrine` `hangar` `dojo` `hud` `studyroom` `sparkfield` `dust` |
 | `palette` | array | five `"#rrggbb"` strings; parse with `sbg.hex(tonumber(s:sub(2, 7), 16))` |
 | `tempo` | number | suggested motion multiplier |
 | `title` | string | a name for the session |

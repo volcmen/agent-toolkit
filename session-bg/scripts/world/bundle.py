@@ -7,6 +7,7 @@ FX = ROOT / "plugins" / "fx"
 MOTIFS = [
     "forest", "skyline", "reef", "circuit", "office",
     "sakura", "kana", "shrine", "hangar", "dojo", "hud",
+    "studyroom", "sparkfield", "dust",
 ]
 CUT = "\nfunction init(ctx)"
 

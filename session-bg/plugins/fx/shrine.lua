@@ -48,6 +48,20 @@ local function pal(p, i, k)
   return sbg.scale(c[1], c[2], c[3], k or 1.0)
 end
 
+local function floor_l(r, g, b, minl)
+  local mx = math.max(r, g, b)
+  local mn = math.min(r, g, b)
+  local l = (mx + mn) * 0.5
+  if l <= 0.0001 then return minl, minl, minl end
+  if l < minl then return sbg.scale(r, g, b, minl / l) end
+  return r, g, b
+end
+
+local function mainc(p, i, k)
+  local r, g, b = pal(p, i, k)
+  return floor_l(r, g, b, 0.30)
+end
+
 local function sky_colour(pct, k)
   local p = sbg.clamp((tonumber(pct) or 0) / 100.0, 0.0, 1.0)
   local h, l
@@ -97,17 +111,25 @@ local function build(state)
   local gy = H - 1
   local gx = math.max(3, math.floor(W * 0.10))
 
-  local steps = math.min(W, 1 + math.floor(tools / 5))
   local path_len = math.max(1, W - gx - 3)
-  steps = math.min(steps, path_len)
+  local base_steps = math.max(3, math.floor(path_len * 0.30))
+  local grow_steps = math.floor(tools / 5)
+  local steps = sbg.clamp(base_steps + grow_steps, base_steps, path_len)
 
-  local layers = {}
-  local seg = math.min(4, 1 + math.floor(sbg.clamp(ctx, 0, 1) * 4))
-  local tool_layers = math.min(4, math.floor(tools / 60))
-  layers = math.max(seg, tool_layers)
-  layers = sbg.clamp(layers, 0, 4)
+  local top_y = math.max(0, gy - gate_h)
+  local avail_h = math.max(1, top_y)
+  local rows_max = sbg.clamp(math.floor(avail_h * 0.4), 2, 24)
+  local stage = 0
+  if ctx >= 0.9 or tools >= 240 then stage = 4
+  elseif ctx >= 0.75 or tools >= 180 then stage = 3
+  elseif ctx >= 0.5 or tools >= 120 then stage = 2
+  elseif ctx >= 0.25 or tools >= 60 then stage = 1
+  end
+  local base_layers = math.max(1, math.floor(rows_max * 0.28))
+  local layers = sbg.clamp(base_layers + math.ceil(stage * (rows_max - base_layers) / 4.0), base_layers, rows_max)
 
-  local posts = math.min(8, math.floor(tools / 25))
+  local base_posts = sbg.clamp(math.floor(path_len / 30), 1, 8)
+  local posts = sbg.clamp(base_posts + math.floor(tools / 25), base_posts, 8)
   local post_pos = {}
   for i = 1, posts do
     local frac = i / (posts + 1)
@@ -121,6 +143,7 @@ local function build(state)
     steps = steps,
     path_len = path_len,
     layers = layers,
+    rows_max = rows_max,
     posts = post_pos,
     fireflies = math.min(math.floor(W * H * 0.02), 3 + math.floor(jnum(j.prompts))),
   }
@@ -189,7 +212,7 @@ function M.render(fx, state)
 
   local gx, gy, gh = scene.gx, scene.gy, scene.gate_h
   local err = (mode == "error") or FRESH_ERR
-  local gr, gg, gb = pal(p, 5, 0.55)
+  local gr, gg, gb = mainc(p, 5, 0.65)
   if err then
     local er, eg, eb = sbg.hsl(0.98, 0.55, 0.42)
     gr, gg, gb = er, eg, eb
@@ -207,36 +230,36 @@ function M.render(fx, state)
       if x >= 0 and x < W then fx:put(x, beam2_y, "═", gr, gg, gb) end
     end
   end
-  local pr1, pr2, pr3 = pal(p, 5, 0.45)
+  local pr1, pr2, pr3 = mainc(p, 5, 0.5)
   for y = top_y + 2, gy do
     fx:put(gx, y, "┃", pr1, pr2, pr3)
     fx:put(gx + 4, y, "┃", pr1, pr2, pr3)
   end
 
   if mode == "waiting" and (tonumber(state.age) or 0) > 8 then
-    if sbg.text then sbg.text(fx, gx - 4, gy - 1, "(-_-)", pal(p, 4, 0.5)) end
+    if sbg.text then sbg.text(fx, gx - 4, gy - 1, "(-_-)", mainc(p, 4, 0.6)) end
   end
 
-  local layer_y0 = math.max(0, top_y - 8)
+  local layer_y0 = math.max(0, top_y - scene.rows_max)
   local layer_y1 = math.max(0, top_y - 1)
-  local tr, tg, tb = pal(p, 3, 0.5)
+  local tr, tg, tb = pal(p, 3, 0.55)
   local shown_layers = math.floor(math.max(1, scene.layers) * (1.0 - COMPACT) + 0.5)
   for li = 1, shown_layers do
     local y = layer_y1 - (li - 1)
     if y >= layer_y0 then
-      local fade = (1.0 - (shown_layers - li) * 0.15) * (1.0 - COMPACT)
-      for x = 0, W - 1, 2 do
+      local fade = (1.0 - (shown_layers - li) * 0.10) * (1.0 - COMPACT)
+      for x = 0, W - 1 do
         local n = sbg.noise2(x * 0.15 + li * 3.1, T * 0.02)
-        if n > -0.15 then
+        if n > 0.12 then
           local mask = 1 + (math.floor(sbg.clamp((n + 1) * 4, 0, 7)))
           local ch = sbg.glyphs.braille[mask]
-          fx:put(x, y, ch, sbg.scale(tr, tg, tb, math.max(0.2, fade)))
+          fx:put(x, y, ch, sbg.scale(tr, tg, tb, math.max(0.25, fade)))
         end
       end
     end
   end
 
-  local dot_r, dot_g, dot_b = pal(p, 2, 0.4)
+  local dot_r, dot_g, dot_b = mainc(p, 2, 0.55)
   for s = 1, scene.steps do
     local x = gx + 1 + s
     if x >= W then break end
@@ -252,19 +275,20 @@ function M.render(fx, state)
     local marker_s = math.max(1, math.min(scene.steps, math.floor(scene.steps * (1.0 - (mod.burst or 0)))))
     local mx = gx + 1 + marker_s
     if mx < W then
-      fx:put(mx, gy - 1, "▸", pal(p, 4, 0.6))
+      fx:put(mx, gy - 1, "▸", mainc(p, 4, 0.7))
     end
   end
 
   local lr, lg, lb = sbg.hsl(0.10, 0.55, 0.42)
   for i, x in ipairs(scene.posts) do
     if x < W then
-      fx:put(x, gy - 1, "┬", pal(p, 3, 0.45))
-      local bright = 0.35
+      fx:put(x, gy - 1, "┬", mainc(p, 3, 0.5))
+      local bright = 0.7
       if mode == "tool" and i == #scene.posts then
-        bright = 0.35 + 0.5 * (mod.burst or 0)
+        bright = 0.7 + 0.5 * (mod.burst or 0)
       end
-      fx:put(x, gy - 2, "▣", sbg.scale(lr, lg, lb, bright))
+      local hr, hg, hb = sbg.scale(lr, lg, lb, bright)
+      fx:put(x, gy - 2, "▣", floor_l(hr, hg, hb, 0.30))
     end
   end
 

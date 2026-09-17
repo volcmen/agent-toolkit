@@ -252,6 +252,15 @@ function M.render(fx, state)
 
   local br, bg, bb = sky_colour(state.context_pct, 0.30)
 
+  local vr, vg, vb = pal(p, 1, 0.75)
+  local vias = (mode == "compacting") and 2 or 1
+  for cy = 0, scene.rows - 1, vias do
+    for cx = 0, scene.cols - 1, vias do
+      local twinkle = (sbg.hash(cx * 131 + cy) % 7) == 0 and (math.floor(T * 1.5 + cx) % 5 == 0)
+      fx:put(1 + cx * 6 + 3, 1 + cy * 3 + 1, twinkle and "∙" or "·", vr, vg, vb)
+    end
+  end
+
   for ti, tr in ipairs(scene.traces) do
     local k = 0.30 + 0.45 * tr.fade
     local r, g, b = sbg.mix(br, bg, bb, tr0, tg0, tb0, 0.65)

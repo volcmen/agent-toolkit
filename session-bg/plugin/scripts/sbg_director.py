@@ -10,6 +10,7 @@ import time
 MOTIFS = (
     "forest", "skyline", "reef", "circuit", "office",
     "sakura", "kana", "shrine", "hangar", "dojo", "hud",
+    "studyroom", "sparkfield", "dust",
 )
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 TIMEOUT_SECONDS = 40
@@ -46,7 +47,9 @@ def build_prompt(journey, session):
         "Repo: {}.".format(repo),
         "Motifs: forest skyline reef circuit office are calm workplaces and nature;"
         " sakura kana shrine hangar dojo hud are anime-flavoured (cherry blossoms, katakana rain,"
-        " shrine at night, mecha hangar, shonen training arc, RPG status window).",
+        " shrine at night, mecha hangar, shonen training arc, RPG status window);"
+        " studyroom sparkfield dust are cosy or whimsical (lo-fi study room, magical constellation,"
+        " dust-sprite workshop).",
     ]
     if languages:
         parts.append("Top languages: {}.".format(", ".join(languages)))
