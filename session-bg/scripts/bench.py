@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Run N headless tattoy+sbg-fx instances for a few seconds and report CPU per process.
 
-Usage: bench.py [instances] [seconds]
+Usage: bench.py [instances] [seconds] [script-name]
 """
 from __future__ import annotations
 
 import fcntl
+import json
+import tempfile
 import os
 import pty
 import select
@@ -21,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EFFECTS = ("matrix", "plasma", "waves", "stars")
 
 
-def spawn(effect: str, seconds: int) -> tuple[int, int]:
+def spawn(effect: str, seconds: int, state_dir: Path, script: str = "") -> tuple[int, int]:
     dry = subprocess.run(
         [str(ROOT / "bin" / "sbg"), "--dry-run", effect, "--", "sleep", str(seconds)],
         capture_output=True, text=True, check=True,
@@ -29,7 +31,12 @@ def spawn(effect: str, seconds: int) -> tuple[int, int]:
     config = dry.stdout.splitlines()[1].split()[2]
     argv = [shutil.which("tattoy"), "--main-config", config, "--disable-indicator", "--command", str(ROOT / "scripts" / "bench-child.sh")]
     env = dict(os.environ, TERM="xterm-kitty", COLORTERM="truecolor", SBG_EFFECT=effect, SBG_SEED="1", SBG_FPS="12", BENCH_SECONDS=str(seconds))
-    if os.environ.get("BENCH_SCRIPTS"):
+    env["SBG_STATE"] = str(state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    if script:
+        env["SBG_SCRIPT"] = str(ROOT / "plugins" / "fx" / f"{script}.lua")
+        (state_dir / "journey.json").write_text(json.dumps({"repo":"benchmark","tools":500,"subagents":11,"compactions":2}))
+    elif os.environ.get("BENCH_SCRIPTS"):
         env["SBG_SCRIPT"] = str(ROOT / "plugins" / "fx" / f"{effect}.lua")
     pid, fd = pty.fork()
     if pid == 0:
@@ -54,7 +61,13 @@ def main() -> int:
         return 0
     instances = int(sys.argv[1]) if len(sys.argv) > 1 else 4
     seconds = int(sys.argv[2]) if len(sys.argv) > 2 else 10
-    procs = [spawn(EFFECTS[i % len(EFFECTS)], seconds) for i in range(instances)]
+    script = sys.argv[3] if len(sys.argv) > 3 else ""
+    if script and (Path(script).name != script or not (ROOT / "plugins/fx" / f"{script}.lua").is_file()):
+        raise SystemExit("unknown script")
+    if not 1 <= instances <= 16 or seconds < 2:
+        raise SystemExit("instances must be 1–16 and seconds >= 2")
+    scratch = tempfile.TemporaryDirectory(prefix="sbg-bench-")
+    procs = [spawn(EFFECTS[i % len(EFFECTS)], seconds, Path(scratch.name)/str(i), script) for i in range(instances)]
     fds = [fd for _, fd in procs]
     deadline = time.time() + seconds - 1
     while time.time() < deadline:
@@ -84,6 +97,7 @@ def main() -> int:
             if done:
                 break
             time.sleep(0.05)
+    scratch.cleanup()
     return 0
 
 

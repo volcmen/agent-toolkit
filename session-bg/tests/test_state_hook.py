@@ -86,7 +86,7 @@ class HintCoverageTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             data = read_session(tmp)
             self.assertEqual(data["mode"], "thinking")
-            self.assertEqual(data["prompt"], "x" * 80)
+            self.assertIsNone(data["prompt"])
 
     def test_pre_tool_use_sets_tool_and_kind(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -123,7 +123,7 @@ class HintCoverageTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             data = read_session(tmp)
             self.assertEqual(data["mode"], "thinking")
-            self.assertEqual(data["prompt"], "keep me")
+            self.assertIsNone(data["prompt"])
 
     def test_post_tool_use_failure_sets_error(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -265,7 +265,7 @@ class SafetyTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             for name in STATE_FILES:
                 self.assertFalse((state_dir / name).exists(), name)
-            self.assertFalse(state_dir.exists())
+            self.assertEqual([p.name for p in state_dir.iterdir()], [".writer.lock"])
 
     def test_end_leaves_directory_when_other_files_remain(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -301,14 +301,14 @@ class JourneyTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0)
             journey = read_journey(tmp)
-            self.assertEqual(journey["v"], 1)
+            self.assertEqual(journey["v"], 2)
             self.assertEqual(journey["repo"], "my-project")
             self.assertEqual(journey["prompts"], 0)
             self.assertEqual(journey["tools"], 0)
             self.assertEqual(journey["tool_kinds"], {"exec": 0, "edit": 0, "read": 0, "web": 0, "task": 0, "mcp": 0, "other": 0})
             self.assertEqual(journey["files"], {})
             self.assertEqual(journey["subagents_peak"], 0)
-            self.assertEqual(journey["recent"], [])
+            self.assertEqual(journey["recent"][0]["kind"], "embark")
 
     def test_tools_are_counted_by_kind(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -356,7 +356,7 @@ class JourneyTests(unittest.TestCase):
             run_hook("thinking", {"hook_event_name": "UserPromptSubmit", "prompt": "fix the flaky test again please"}, tmp)
             journey = read_journey(tmp)
             self.assertEqual(journey["prompts"], 2)
-            self.assertEqual(journey["last_prompt"], "fix the flaky test again please")
+            self.assertIsNone(journey["last_prompt"])
             self.assertIn("flaky", journey["words"])
             self.assertLessEqual(len(journey["words"]), 8)
 

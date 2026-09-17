@@ -215,11 +215,8 @@ fn main() {
         let frames = frames.parse().unwrap_or(24);
         let width = env_or("COLUMNS", 100u16);
         let height = env_or("LINES", 30u16);
-        let neutral = state::script_state(
-            &state::Snapshot::default(),
-            &state::Modulation::default(),
-            state::now_secs(),
-        );
+        let neutral =
+            state::script_state(&snapshot, &state::Modulation::default(), state::now_secs());
         effect.set_state(&neutral);
         println!(
             "{}",
@@ -320,16 +317,17 @@ fn main() {
         glyphs.clear();
         effect.render(&mut glyphs);
         let cost = measured.elapsed().as_secs_f32();
+        let halo = effect.foreground_halo();
         for g in &mut glyphs {
             g.rgb = frame::modulate(
                 g.rgb,
-                modulation.hue,
+                if halo > 0 { 0.0 } else { modulation.hue },
                 modulation.bright,
                 modulation.tint,
-                modulation.tint_k,
+                if halo > 0 { 0.0 } else { modulation.tint_k },
             );
         }
-        let cells = to_cells(&effects::visible(&glyphs, &occupancy));
+        let cells = to_cells(&effects::visible_with_halo(&glyphs, &occupancy, halo));
         let message = tattoy_protocol::PluginOutputMessages::OutputCells(cells);
         let mut out = stdout.lock();
         let ok = serde_json::to_writer(&mut out, &message).is_ok()

@@ -1,0 +1,357 @@
+{
+  "schema_version": 2,
+  "seed": 1337,
+  "identity": "synthetic-5",
+  "final_tick": 1200,
+  "events": [
+    {
+      "kind": "embark",
+      "tick": 0,
+      "payload": {},
+      "seq": 1
+    },
+    {
+      "kind": "prompt",
+      "tick": 20,
+      "payload": {
+        "words": [
+          "parser",
+          "cedar"
+        ]
+      },
+      "seq": 2
+    },
+    {
+      "kind": "tool",
+      "tick": 40,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 3
+    },
+    {
+      "kind": "tool",
+      "tick": 80,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 4
+    },
+    {
+      "kind": "tool",
+      "tick": 120,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 5
+    },
+    {
+      "kind": "tool",
+      "tick": 160,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 6
+    },
+    {
+      "kind": "tool",
+      "tick": 200,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 7
+    },
+    {
+      "kind": "tool",
+      "tick": 240,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 8
+    },
+    {
+      "kind": "success",
+      "tick": 244,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 9
+    },
+    {
+      "kind": "tool",
+      "tick": 280,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 10
+    },
+    {
+      "kind": "tool",
+      "tick": 320,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 11
+    },
+    {
+      "kind": "tool",
+      "tick": 360,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 12
+    },
+    {
+      "kind": "tool",
+      "tick": 400,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 13
+    },
+    {
+      "kind": "tool",
+      "tick": 440,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 14
+    },
+    {
+      "kind": "tool",
+      "tick": 480,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 15
+    },
+    {
+      "kind": "wait_open",
+      "tick": 480,
+      "payload": {},
+      "seq": 16
+    },
+    {
+      "kind": "success",
+      "tick": 484,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 17
+    },
+    {
+      "kind": "wait_resolved",
+      "tick": 500,
+      "payload": {
+        "outcome": "declined"
+      },
+      "seq": 18
+    },
+    {
+      "kind": "tool",
+      "tick": 520,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 19
+    },
+    {
+      "kind": "tool",
+      "tick": 560,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 20
+    },
+    {
+      "kind": "tool",
+      "tick": 600,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 21
+    },
+    {
+      "kind": "tool",
+      "tick": 640,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 22
+    },
+    {
+      "kind": "tool",
+      "tick": 680,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 23
+    },
+    {
+      "kind": "tool",
+      "tick": 720,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 24
+    },
+    {
+      "kind": "success",
+      "tick": 724,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 25
+    },
+    {
+      "kind": "tool",
+      "tick": 760,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 26
+    },
+    {
+      "kind": "tool",
+      "tick": 800,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 27
+    },
+    {
+      "kind": "tool",
+      "tick": 840,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 28
+    },
+    {
+      "kind": "tool",
+      "tick": 880,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 29
+    },
+    {
+      "kind": "tool",
+      "tick": 920,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 30
+    },
+    {
+      "kind": "tool",
+      "tick": 960,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 31
+    },
+    {
+      "kind": "success",
+      "tick": 964,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 32
+    },
+    {
+      "kind": "tool",
+      "tick": 1000,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 33
+    },
+    {
+      "kind": "tool",
+      "tick": 1040,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 34
+    },
+    {
+      "kind": "tool",
+      "tick": 1080,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 35
+    },
+    {
+      "kind": "tool",
+      "tick": 1120,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 36
+    },
+    {
+      "kind": "tool",
+      "tick": 1160,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 37
+    },
+    {
+      "kind": "idle",
+      "tick": 1200,
+      "payload": {},
+      "seq": 38
+    }
+  ],
+  "counters": {
+    "prompts": 1,
+    "tools": 29,
+    "errors": 0,
+    "compactions": 0,
+    "waits": 1,
+    "subagents": 0,
+    "subagents_peak": 0,
+    "tool_kinds": {
+      "exec": 7,
+      "edit": 8,
+      "read": 7,
+      "web": 7,
+      "task": 0,
+      "mcp": 0,
+      "other": 0
+    }
+  },
+  "counter_digest": "1:29:0:0:1:0:0:7:8:7:7:0:0:0"
+}

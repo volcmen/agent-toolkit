@@ -106,6 +106,42 @@ fn json_to_lua(lua: &Lua, value: &JsonValue) -> mlua::Result<Value> {
     })
 }
 
+// Return data only: bounded conversion, no Lua-selected filesystem path or I/O.
+fn lua_to_json(value: Value, depth: usize, remaining: &mut usize) -> mlua::Result<JsonValue> {
+    if depth > 20 || *remaining == 0 {
+        return Err(mlua::Error::runtime("checkpoint too large"));
+    }
+    *remaining -= 1;
+    Ok(match value {
+        Value::Nil => JsonValue::Null,
+        Value::Boolean(v) => JsonValue::Bool(v),
+        Value::Integer(v) => JsonValue::from(v),
+        Value::Number(v) => JsonValue::from(v),
+        Value::String(v) => JsonValue::String(v.to_str()?.to_string()),
+        Value::Table(t) => {
+            if t.raw_len() > 0 {
+                let mut items = Vec::new();
+                for item in t.sequence_values::<Value>() {
+                    items.push(lua_to_json(item?, depth + 1, remaining)?);
+                }
+                JsonValue::Array(items)
+            } else {
+                let mut map = serde_json::Map::new();
+                for pair in t.pairs::<String, Value>() {
+                    let (key, value) = pair?;
+                    map.insert(key, lua_to_json(value, depth + 1, remaining)?);
+                }
+                JsonValue::Object(map)
+            }
+        }
+        _ => {
+            return Err(mlua::Error::runtime(
+                "checkpoint contains executable values",
+            ))
+        }
+    })
+}
+
 fn json_to_table(lua: &Lua, value: Option<&JsonValue>) -> mlua::Result<Table> {
     match value.map(|v| json_to_lua(lua, v)).transpose()? {
         Some(Value::Table(table)) => Ok(table),
@@ -253,6 +289,9 @@ impl Instance {
         params.set("hue", state.params.hue)?;
         params.set("opacity", state.params.opacity)?;
         params.set("palette", state.params.palette.as_str())?;
+        params.set("fortress", state.params.fortress.as_str())?;
+        params.set("difficulty", state.params.difficulty.as_str())?;
+        params.set("paused", state.params.paused)?;
         table.set("params", params)?;
         table.set("lines_added", state.lines_added as i64)?;
         table.set("lines_removed", state.lines_removed as i64)?;
@@ -340,6 +379,7 @@ pub struct ScriptEffect {
     dead: bool,
     stamp: Stamp,
     pending: Option<(Instant, Stamp)>,
+    last_checkpoint: Option<Instant>,
 }
 
 fn stamp_of(path: &Path) -> Stamp {
@@ -370,12 +410,75 @@ impl ScriptEffect {
             dead: false,
             stamp: stamp_of(path),
             pending: None,
+            last_checkpoint: None,
         })
     }
 
     pub fn with_reporter(mut self, reporter: Reporter) -> Self {
         self.reporter = reporter;
         self
+    }
+
+    fn restore_checkpoint(&self) {
+        let (Some(instance), Some(dir)) = (&self.instance, &self.reporter.dir) else {
+            return;
+        };
+        let Some(restore) = instance.function("restore") else {
+            return;
+        };
+        let path = dir.join("fortress.json");
+        if std::fs::metadata(&path).map_or(true, |m| m.len() > 256 * 1024) {
+            return;
+        }
+        let Some(data) = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<JsonValue>(&s).ok())
+        else {
+            return;
+        };
+        instance.budget.set(0);
+        if let Ok(value) = json_to_lua(&instance.lua, &data) {
+            if let Err(e) = restore.call::<()>(value) {
+                self.reporter.log(&format!("checkpoint restore: {e}"));
+            }
+        }
+    }
+
+    fn save_checkpoint(&mut self) {
+        if self
+            .last_checkpoint
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(1))
+        {
+            return;
+        }
+        let (Some(instance), Some(dir)) = (&self.instance, &self.reporter.dir) else {
+            return;
+        };
+        let Some(export) = instance.function("checkpoint") else {
+            return;
+        };
+        self.last_checkpoint = Some(Instant::now());
+        instance.budget.set(0);
+        let result = export
+            .call::<Value>(())
+            .and_then(|v| lua_to_json(v, 0, &mut 20000));
+        match result {
+            Ok(value) if value.is_object() => {
+                let body = value.to_string();
+                if body.len() > 256 * 1024 {
+                    self.reporter.log("checkpoint exceeds 256 KiB");
+                    return;
+                }
+                for (name, data) in [("fortress.json", body), ("legends.json", serde_json::json!({
+                    "schema_version": 2, "seq": value.get("seq"), "legends": value.get("legends"), "summary": value.get("summary")
+                }).to_string())] {
+                    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+                    if std::fs::write(&tmp, data).is_ok() { let _ = std::fs::rename(&tmp, dir.join(name)); }
+                }
+            }
+            Err(e) => self.reporter.log(&format!("checkpoint: {e}")),
+            _ => {}
+        }
     }
 
     fn succeed(&mut self) {
@@ -441,6 +544,7 @@ impl ScriptEffect {
             self.fail("init", &message);
         } else {
             self.succeed();
+            self.restore_checkpoint();
         }
     }
 
@@ -509,6 +613,15 @@ impl Effect for ScriptEffect {
         self.dead
     }
 
+    fn foreground_halo(&self) -> u16 {
+        self.instance
+            .as_ref()
+            .and_then(|i| i.function("foreground_halo"))
+            .and_then(|f| f.call::<u16>(()).ok())
+            .unwrap_or(0)
+            .min(1)
+    }
+
     fn step(&mut self, dt: f32, _rng: &mut Rng) {
         self.maybe_reload();
         let result = match &self.instance {
@@ -516,7 +629,10 @@ impl Effect for ScriptEffect {
             None => return,
         };
         match result {
-            Ok(()) => self.succeed(),
+            Ok(()) => {
+                self.succeed();
+                self.save_checkpoint();
+            }
             Err(message) => self.fail("step", &message),
         }
     }
@@ -526,6 +642,12 @@ impl Effect for ScriptEffect {
             Some(instance) => {
                 let result = instance.render(&self.state);
                 out.extend(instance.buf.borrow().glyphs.iter().copied());
+                for ch in instance.buf.borrow_mut().substituted.drain(..) {
+                    self.reporter.log(&format!(
+                        "glyph U+{:04X} replaced with ASCII fallback",
+                        ch as u32
+                    ));
+                }
                 result
             }
             None => return,
@@ -944,5 +1066,110 @@ end
         );
         let out = run(&path, 0, 10, 5);
         assert_eq!(out.len(), 1);
+    }
+    #[test]
+    fn glyph_gate_and_foreground_halo_protect_the_grid() {
+        for &ch in crate::frame::FORTRESS_GLYPHS {
+            assert_eq!(crate::frame::safe_glyph(ch), ch);
+        }
+        for ch in ['☕', '界', '😀', '\u{0301}', '\u{001b}'] {
+            assert_eq!(crate::frame::safe_glyph(ch), '?');
+        }
+        for ch in ['─', '⣀', 'ｱ'] {
+            assert_eq!(crate::frame::safe_glyph(ch), ch);
+        }
+        let scratch = Scratch::new("glyph-gate");
+        let path = scratch.write("wide.lua", "function render(fx) fx:put(0,0,'界',1,1,1) end");
+        let mut effect = ScriptEffect::load(&path, 1, 1.0, 12.0)
+            .unwrap()
+            .with_reporter(Reporter::new(Some(scratch.0.clone())));
+        effect.resize(10, 5, &mut Rng::new(1));
+        let mut glyphs = Vec::new();
+        effect.render(&mut glyphs);
+        effect.render(&mut glyphs);
+        assert!(glyphs.iter().all(|g| g.ch == '?'));
+        let log = std::fs::read_to_string(scratch.0.join("fx.log")).unwrap();
+        assert_eq!(log.matches("U+754C").count(), 1);
+        let mut occupancy = Occupancy::new(10, 5);
+        occupancy.set(4, 2);
+        for y in 1..=3 {
+            for x in 3..=5 {
+                assert!(!occupancy.is_free_with_halo(x, y, 1));
+            }
+        }
+        assert!(occupancy.is_free_with_halo(2, 2, 1));
+    }
+
+    #[test]
+    fn fortress_checkpoint_resize_and_release_frame_budget() {
+        let scratch = Scratch::new("fortress");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fx/fortress.lua");
+        let mut effect = ScriptEffect::load(&path, 1, 1.0, 12.0)
+            .unwrap()
+            .with_reporter(Reporter::new(Some(scratch.0.clone())));
+        let mut rng = Rng::new(1);
+        effect.resize(200, 60, &mut rng);
+        let mut state = ScriptState {
+            changed: true,
+            mode: "tool".into(),
+            journey: Some(serde_json::json!({
+                "repo":"test","tools":500,"subagents":11,"compactions":2
+            })),
+            ..ScriptState::default()
+        };
+        effect.set_state(&state);
+        effect.step(0.25, &mut rng);
+        let mut glyphs = Vec::new();
+        effect.render(&mut glyphs);
+        assert!(!effect.failed());
+        assert!(!glyphs.is_empty());
+        assert!(glyphs.len() <= 3000);
+        assert!(glyphs
+            .iter()
+            .all(|g| g.ch.is_ascii() && (g.x < 36 || g.x >= 164)));
+        assert_eq!(effect.foreground_halo(), 1);
+        let checkpoint = std::fs::read_to_string(scratch.0.join("fortress.json")).unwrap();
+        let data: JsonValue = serde_json::from_str(&checkpoint).unwrap();
+        assert_eq!(data["status"]["population"], 12);
+        let hash = |e: &ScriptEffect| {
+            let instance = e.instance.as_ref().unwrap();
+            let value = instance
+                .function("checkpoint")
+                .unwrap()
+                .call::<Value>(())
+                .unwrap();
+            lua_to_json(value, 0, &mut 20000).unwrap()["world_state"].clone()
+        };
+        let before = hash(&effect);
+        effect.resize(80, 24, &mut rng);
+        effect.step(0.0, &mut rng);
+        effect.resize(200, 60, &mut rng);
+        effect.step(0.0, &mut rng);
+        assert_eq!(before, hash(&effect), "resize changed history");
+        let mut resumed = ScriptEffect::load(&path, 1, 1.0, 12.0)
+            .unwrap()
+            .with_reporter(Reporter::new(Some(scratch.0.clone())));
+        resumed.resize(200, 60, &mut rng);
+        resumed.set_state(&state);
+        resumed.step(0.0, &mut rng);
+        assert_eq!(before, hash(&resumed), "restore changed history");
+        let mut samples = Vec::new();
+        state.changed = false;
+        effect.set_state(&state);
+        for _ in 0..240 {
+            glyphs.clear();
+            let t = Instant::now();
+            effect.render(&mut glyphs);
+            samples.push(t.elapsed());
+        }
+        assert_eq!(before, hash(&effect), "render changed history");
+        samples.sort_unstable();
+        let p95 = samples[228];
+        println!("fortress release render p95 {p95:?}");
+        assert!(
+            p95 < Duration::from_millis(if cfg!(debug_assertions) { 50 } else { 3 }),
+            "fortress p95 {p95:?}"
+        );
+        assert!(!scratch.0.join("error.json").exists(), "sandbox error");
     }
 }

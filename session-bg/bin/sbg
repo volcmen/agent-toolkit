@@ -8,6 +8,7 @@ Usage:
   sbg install            # PATH shims + copies plugins/fx/*.lua into ~/.config/sbg/fx/
   sbg doctor             # environment report plus the tail of the tattoy log
   sbg set [KEY=VALUE ...]  # write/merge this pane's override.json; no args prints it
+  sbg legends [N]         # recent Fortress announcements (default 12)
   sbg state [--json]       # merged session/status/override/error view for this pane
   sbg fx list [--json]        # builtins plus scripts in $SBG_FX_DIR (default ~/.config/sbg/fx/)
   sbg fx new NAME              # copy the template to $SBG_FX_DIR/NAME.lua; refuses to overwrite
@@ -181,6 +182,16 @@ def validate_set_args(args: list[str]) -> tuple[dict, dict]:
                 raise ValueError(f"invalid mode {value!r}; choose from {', '.join(MODES)} or empty")
         elif key in ("frozen", "enabled", "director"):
             direct[key] = parse_bool_value(value)
+        elif key == "fortress":
+            if not re.fullmatch(r"[A-Za-z][A-Za-z -]{1,23}", value):
+                raise ValueError("fortress must contain 2–24 ASCII letters, spaces or hyphens")
+            params[key] = value
+        elif key == "paused":
+            params[key] = parse_bool_value(value)
+        elif key == "difficulty":
+            if value not in ("calm", "classic", "chaos"):
+                raise ValueError("difficulty must be calm, classic or chaos")
+            params[key] = value
         elif key == "palette":
             params["palette"] = value
         elif key in PARAM_RANGES:
@@ -226,11 +237,14 @@ def cmd_state(args: list[str]) -> int:
     as_json = "--json" in args
     state_dir = pane_dir()
     values = merged_state(state_dir)
+    fortress = read_json_file(state_dir / "fortress.json")
+    if isinstance(fortress, dict) and isinstance(fortress.get("status"), dict):
+        values["fortress"] = fortress["status"]
     if as_json:
         payload = {"pane": pane_identity(), "dir": str(state_dir), **values}
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
-    for name in STATE_FILES:
+    for name in values:
         value = values[name]
         if value is None:
             continue
@@ -240,6 +254,28 @@ def cmd_state(args: list[str]) -> int:
         age = time.time() - (state_dir / f"{name}.json").stat().st_mtime
         print(f"{name}.json (age {age:.1f}s)")
         print(json.dumps(value, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_legends(args: list[str]) -> int:
+    try:
+        if len(args) > 1:
+            raise ValueError
+        count = int(args[0]) if args else 12
+        if not 1 <= count <= 128:
+            raise ValueError
+    except ValueError:
+        print("sbg: usage: sbg legends [1–128]", file=sys.stderr)
+        return 2
+    data = read_json_file(pane_dir() / "legends.json")
+    entries = data.get("legends", []) if isinstance(data, dict) else []
+    if not isinstance(entries, list) or not entries:
+        print("No fortress legends yet. Select `sbg fx use fortress` in a running pane.")
+        return 0
+    for entry in entries[-count:]:
+        if isinstance(entry, dict) and isinstance(entry.get("text"), str):
+            safe = "".join(ch for ch in entry["text"] if " " <= ch <= "~")[:240]
+            print(f"{entry.get('tick', 0):>6}  {safe}")
     return 0
 
 
@@ -620,6 +656,8 @@ def main() -> int:
     raw = sys.argv[1:]
     if raw and raw[0] == "set":
         return cmd_set(raw[1:])
+    if raw and raw[0] == "legends":
+        return cmd_legends(raw[1:])
     if raw and raw[0] == "state":
         return cmd_state(raw[1:])
     if raw and raw[0] == "fx":

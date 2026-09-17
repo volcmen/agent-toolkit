@@ -49,6 +49,9 @@ pub struct Override {
     pub hue: Option<f32>,
     pub opacity: Option<f32>,
     pub palette: Option<String>,
+    pub fortress: Option<String>,
+    pub difficulty: Option<String>,
+    pub paused: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -74,6 +77,9 @@ impl Default for Override {
             hue: None,
             opacity: None,
             palette: None,
+            fortress: None,
+            difficulty: None,
+            paused: false,
         }
     }
 }
@@ -96,6 +102,9 @@ pub struct Params {
     pub hue: f32,
     pub opacity: f32,
     pub palette: String,
+    pub fortress: String,
+    pub difficulty: String,
+    pub paused: bool,
 }
 
 impl Default for Params {
@@ -106,6 +115,9 @@ impl Default for Params {
             hue: 0.0,
             opacity: 1.0,
             palette: String::new(),
+            fortress: String::new(),
+            difficulty: "classic".to_owned(),
+            paused: false,
         }
     }
 }
@@ -200,6 +212,12 @@ fn parse_override(value: &Value) -> Override {
         hue: f(&params, "hue").map(|v| v.clamp(-1.0, 1.0) as f32),
         opacity: f(&params, "opacity").map(|v| v.clamp(0.0, 1.0) as f32),
         palette: s(&params, "palette"),
+        fortress: s(&params, "fortress"),
+        difficulty: s(&params, "difficulty"),
+        paused: params
+            .get("paused")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     }
 }
 
@@ -410,6 +428,9 @@ pub fn script_state(snapshot: &Snapshot, modulation: &Modulation, now: f64) -> S
             hue: o.hue.unwrap_or(defaults.hue),
             opacity: o.opacity.unwrap_or(defaults.opacity),
             palette: o.palette.clone().unwrap_or(defaults.palette),
+            fortress: o.fortress.clone().unwrap_or_default(),
+            difficulty: o.difficulty.clone().unwrap_or(defaults.difficulty),
+            paused: o.paused,
         },
         journey: snapshot.journey.clone(),
         mood: snapshot.mood.clone(),

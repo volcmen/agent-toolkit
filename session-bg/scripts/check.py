@@ -17,10 +17,17 @@ def main() -> int:
         (["cargo", "test", "--quiet"], ROOT / "plugins"),
         ([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"], ROOT),
         ([sys.executable, "scripts/state-smoke.py"], ROOT),
+        ([sys.executable, "scripts/world/fortress-smoke.py"], ROOT),
     ]
     commands.append(([sys.executable, "scripts/world/bundle.py", "--check"], ROOT))
     if shutil.which("lua"):
-        commands.append((["lua", "scripts/world/drive.lua"], ROOT))
+        commands.extend([
+            (["lua", "scripts/world/tests/fortress.lua"], ROOT),
+            ([sys.executable, "scripts/world/fixtures.py"], ROOT),
+            (["lua", "scripts/world/golden.lua"], ROOT),
+            *[(["lua", "scripts/world/replay.lua", f"tests/fixtures/fortress/{name}.lua"], ROOT) for name in ("short", "half-hour", "three-hour")],
+            (["lua", "scripts/world/drive.lua"], ROOT),
+        ])
     else:
         print("skip world drive: lua not on PATH")
     if shutil.which("tattoy"):

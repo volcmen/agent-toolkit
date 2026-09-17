@@ -17,6 +17,18 @@ pub struct FxBuf {
     pub width: u16,
     pub height: u16,
     pub glyphs: Vec<Glyph>,
+    pub substituted: Vec<char>,
+    pub seen_substitutions: std::collections::BTreeSet<char>,
+}
+
+impl FxBuf {
+    fn safe_char(&mut self, ch: char) -> char {
+        let safe = frame::safe_glyph(ch);
+        if safe != ch && self.seen_substitutions.len() < 256 && self.seen_substitutions.insert(ch) {
+            self.substituted.push(ch);
+        }
+        safe
+    }
 }
 
 #[derive(Clone, Default)]
@@ -63,6 +75,7 @@ impl UserData for Fx {
                 else {
                     return Ok(());
                 };
+                let ch = buf.safe_char(ch);
                 buf.glyphs.push(Glyph {
                     x: x as u16,
                     y: y as u16,
@@ -104,6 +117,7 @@ fn paint_text(buf: &mut FxBuf, x0: f64, y0: f64, text: &str, r: f32, g: f32, b: 
     let mut cx = x0.floor();
     for ch in text.chars() {
         if cx >= 0.0 && cx < f64::from(buf.width) {
+            let ch = buf.safe_char(ch);
             buf.glyphs.push(Glyph {
                 x: cx as u16,
                 y: y as u16,
@@ -167,6 +181,7 @@ fn glyph_table(lua: &Lua, chars: &[char]) -> LuaResult<Table> {
 
 fn glyphs(lua: &Lua) -> LuaResult<Table> {
     let table = lua.create_table()?;
+    table.set("fortress", glyph_table(lua, frame::FORTRESS_GLYPHS)?)?;
     table.set("matrix", glyph_table(lua, frame::MATRIX_GLYPHS)?)?;
     table.set("blocks", glyph_table(lua, frame::BLOCK_GLYPHS)?)?;
     table.set("shades", glyph_table(lua, frame::SHADE_GLYPHS)?)?;

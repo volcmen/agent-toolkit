@@ -13,6 +13,9 @@ pub trait Effect {
     fn render(&mut self, out: &mut Vec<Glyph>);
     fn set_density(&mut self, _density: f32) {}
     fn set_state(&mut self, _state: &ScriptState) {}
+    fn foreground_halo(&self) -> u16 {
+        0
+    }
     fn failed(&self) -> bool {
         false
     }
@@ -32,9 +35,13 @@ pub fn create(name: &str, density: f32) -> Option<Box<dyn Effect>> {
 }
 
 pub fn visible(glyphs: &[Glyph], occupancy: &Occupancy) -> Vec<Glyph> {
+    visible_with_halo(glyphs, occupancy, 0)
+}
+
+pub fn visible_with_halo(glyphs: &[Glyph], occupancy: &Occupancy, halo: u16) -> Vec<Glyph> {
     glyphs
         .iter()
         .copied()
-        .filter(|g| g.ch != ' ' && occupancy.is_free(g.x, g.y))
+        .filter(|g| g.ch != ' ' && occupancy.is_free_with_halo(g.x, g.y, halo))
         .collect()
 }

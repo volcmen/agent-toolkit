@@ -83,7 +83,7 @@ like a short one. Growth is monotonic and comes from `state.journey`:
 | `skyline` | city | a tower per ~10 tools, heights from `lines_added`, a lit window per recent tool, crane while a tool runs |
 | `reef` | braille coral | a cluster per ~12 tools, a fish per subagent, plankton by `context_pct`, bleaching on error |
 | `circuit` | etched board | a node per tool coloured by `tool_kind`, traces between consecutive events, pulses while thinking |
-| `office` | side-on studio | a desk per subagent, a floor per ~40 tools, a plant that grows with the diff, the whiteboard scrolls your last prompt |
+| `office` / `fortress` | top-down settlement | workers, workshops, caravans, chapters, artifacts and bounded legends |
 | `sakura` | cherry tree at night | branches per ~6 tools, blossom haze per prompt, a petal per edited file drifting into a corner pile |
 | `kana` | halfwidth-katakana rain | a column per ~15 tools kept to the pane edges, trail length from `context_pct`, a standing sigil per 40 tools spelling your prompt words |
 | `shrine` | torii and stone path | a path step per 5 tools, a lantern per 25, tree line revealed by `context_pct`, fireflies per prompt |
@@ -95,10 +95,10 @@ like a short one. Growth is monotonic and comes from `state.journey`:
 | `dust` | dust-sprite workshop | a mote per 25 tools and per subagent carrying `*` from the task pile to the shelves, cobwebs that clear as prompts accumulate |
 | `world` | all fourteen | uses `state.mood.motif`, else `sbg.pick` on the repo name |
 
-Across all of them `context_pct` is the time of day (dawn to dusk on the sky
+For Fortress, context sets the season. Across the other motifs `context_pct` is the time of day (dawn to dusk on the sky
 rows), `mode` drives motion (`thinking` sways, `tool` bursts, `waiting` idles,
 `error` flashes, `compacting` sweeps), and `state.mood.palette` is used when
-present, otherwise a hue derived from the repo name. Each scene is rebuilt
+present, otherwise a hue derived from the repo name. Other scenes are rebuilt
 from the counters when they change — replays are identical and memory is
 bounded — and the oldest parts fade or scroll off once the pane is full.
 
@@ -150,3 +150,30 @@ colour ramps, glyph sets), the sandbox limits, and `fx:put`/`clear`/`count`
   top of whatever you emit.
 - Be deterministic given `ctx.seed` (use only `sbg.rng`, never wall-clock
   randomness) so the same pane looks the same across restarts.
+
+### Fortress office
+
+`office` is now an original Fortress simulation; `fortress` selects the same
+scene explicitly. Use `sbg fx use fortress`. Workers build edge districts,
+caravans visit, decisions appear at the gate, and compaction seals a gallery.
+
+```
+sbg set fortress="Amber Hall" difficulty=calm
+sbg set paused=true         # freeze the Fortress view and consumption
+sbg set paused=false        # catch up from the event ring; report any gap
+sbg legends 12              # recent safe announcements
+sbg state                  # includes year, season, population, wealth and stress
+```
+
+Profiles are `calm`, `classic` and `chaos`. They affect future flavour/stress;
+no control rewrites past legends. Naming after embark records a rename. Speed,
+density, resize and cosmetic phase never change recorded history. Raw prompt
+snippets are no longer written; only filtered, bounded subject words are used.
+Missing events produce an explicit chronicle gap. A denied permission is a
+neutral decision. No paid director calls are required.
+
+Source modules live in `plugins/fx/fortress/{sim,render,adapter}.lua`.
+`office.lua`, `fortress.lua` and `world.lua` are generated: run
+`python3 scripts/world/bundle.py` after changes. Validate via
+`python3 scripts/check.py`. Glyphs and visual rules:
+[fortress-glyphs.md](references/fortress-glyphs.md).

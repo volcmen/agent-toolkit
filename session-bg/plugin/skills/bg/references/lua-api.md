@@ -37,7 +37,7 @@ function render(fx, state) end  -- paint the frame
 | `context_pct` | float | 0..100, Claude only (0 for Codex) |
 | `cost` | float | running cost in USD, Claude only |
 | `model` | string\|nil | model name, Claude only |
-| `prompt` | string\|nil | first ~80 chars of the last user prompt |
+| `prompt` | string\|nil | null/empty in v2 (raw prompts are never persisted) |
 | `age` | float | seconds since the current mode started |
 | `changed` | bool | true on the frame the merged state actually changed |
 | `mod.speed` | float | already folded into `dt` |
@@ -69,8 +69,8 @@ them as `local j = state.journey or {}` and `tonumber(j.tools) or 0`.
 | `waits` | int | permission/user waits |
 | `subagents` | int | subagents alive now |
 | `subagents_peak` | int | most subagents alive at once |
-| `last_prompt` | string | the last user prompt |
-| `words` | table | `{word = count}` from the prompts |
+| `last_prompt` | nil | null in v2; raw prompts are never stored |
+| `words` | table | array of at most 8 filtered alphabetic subject words |
 | `recent` | array | up to 64 newest `{t, k, tool, ext}` events, oldest first |
 
 ### `state.mood`
@@ -121,6 +121,7 @@ sbg.scale(r, g, b, k)               -- multiply brightness, clamped [0, 1]
 sbg.hex(0xRRGGBB)                   -- -> r, g, b in [0, 1]
 sbg.shift_hue(r, g, b, turns)       -- rotate hue by `turns` (1.0 = full turn)
 
+sbg.glyphs.fortress  -- ASCII Fortress vocabulary, see fortress-glyphs.md
 sbg.glyphs.matrix    -- katakana/digit/symbol set (matrix rain)
 sbg.glyphs.blocks     -- "▁".."█" eight-level block ramp
 sbg.glyphs.shades      -- "░" "▒" "▓" "█"
@@ -174,3 +175,15 @@ blows it badly falls back to the builtin effect.
   the canvas is full.
 - Guard everything the session may not have yet: `local j = state.journey or {}`,
   `tonumber(j.tools) or 0`, `type(j.repo) == "string"`. A pane can be 1x1.
+
+## Fortress checkpoint lifecycle
+
+Optional `checkpoint()` returns a bounded plain table for fixed, host-owned
+`fortress.json`/`legends.json`; optional `restore(record)` receives the last saved
+record after init/resize. A script must validate version and identity before use.
+No arbitrary read/write API is exposed. Optional `foreground_halo()` returns 0 or
+1; Fortress uses 1 and semantic colours (no global hue/error tint).
+
+`params.fortress`, `params.paused`, `params.difficulty` carry validated user
+controls. For the complete v2 journey schema, migration and replay semantics,
+see [state-schema.md](state-schema.md#fortress-v2-event-stream-and-checkpoints).

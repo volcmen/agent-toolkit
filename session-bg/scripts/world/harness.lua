@@ -215,7 +215,7 @@ local function sandbox()
     math = math, string = string, table = table, select = select,
     ipairs = ipairs, pairs = pairs, next = next, type = type,
     tostring = tostring, tonumber = tonumber, error = error, assert = assert,
-    pcall = pcall, unpack = table.unpack, sbg = sbg,
+    pcall = pcall, setmetatable = setmetatable, unpack = table.unpack, sbg = sbg,
   }
 end
 
@@ -319,4 +319,4 @@ local function run(path, scen, W, H, frames, capture)
   return maxcov, maxraw
 end
 
-return { run = run, journey = journey, mkstate = mkstate, sbg = sbg }
+return { mkfx = mkfx, sandbox = sandbox, run = run, journey = journey, mkstate = mkstate, sbg = sbg }

@@ -1,0 +1,1963 @@
+{
+  "schema_version": 2,
+  "seed": 1337,
+  "identity": "synthetic-30",
+  "final_tick": 7200,
+  "events": [
+    {
+      "kind": "embark",
+      "tick": 0,
+      "payload": {},
+      "seq": 1
+    },
+    {
+      "kind": "prompt",
+      "tick": 20,
+      "payload": {
+        "words": [
+          "parser",
+          "cedar"
+        ]
+      },
+      "seq": 2
+    },
+    {
+      "kind": "tool",
+      "tick": 40,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 3
+    },
+    {
+      "kind": "tool",
+      "tick": 80,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 4
+    },
+    {
+      "kind": "tool",
+      "tick": 120,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 5
+    },
+    {
+      "kind": "tool",
+      "tick": 160,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 6
+    },
+    {
+      "kind": "tool",
+      "tick": 200,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 7
+    },
+    {
+      "kind": "tool",
+      "tick": 240,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 8
+    },
+    {
+      "kind": "success",
+      "tick": 244,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 9
+    },
+    {
+      "kind": "tool",
+      "tick": 280,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 10
+    },
+    {
+      "kind": "tool",
+      "tick": 320,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 11
+    },
+    {
+      "kind": "tool",
+      "tick": 360,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 12
+    },
+    {
+      "kind": "tool",
+      "tick": 400,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 13
+    },
+    {
+      "kind": "tool",
+      "tick": 440,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 14
+    },
+    {
+      "kind": "tool",
+      "tick": 480,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 15
+    },
+    {
+      "kind": "wait_open",
+      "tick": 480,
+      "payload": {},
+      "seq": 16
+    },
+    {
+      "kind": "success",
+      "tick": 484,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 17
+    },
+    {
+      "kind": "wait_resolved",
+      "tick": 500,
+      "payload": {
+        "outcome": "declined"
+      },
+      "seq": 18
+    },
+    {
+      "kind": "tool",
+      "tick": 520,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 19
+    },
+    {
+      "kind": "tool",
+      "tick": 560,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 20
+    },
+    {
+      "kind": "tool",
+      "tick": 600,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 21
+    },
+    {
+      "kind": "tool",
+      "tick": 640,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 22
+    },
+    {
+      "kind": "tool",
+      "tick": 680,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 23
+    },
+    {
+      "kind": "tool",
+      "tick": 720,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 24
+    },
+    {
+      "kind": "success",
+      "tick": 724,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 25
+    },
+    {
+      "kind": "tool",
+      "tick": 760,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 26
+    },
+    {
+      "kind": "tool",
+      "tick": 800,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 27
+    },
+    {
+      "kind": "tool",
+      "tick": 840,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 28
+    },
+    {
+      "kind": "tool",
+      "tick": 880,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 29
+    },
+    {
+      "kind": "tool",
+      "tick": 920,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 30
+    },
+    {
+      "kind": "tool",
+      "tick": 960,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 31
+    },
+    {
+      "kind": "success",
+      "tick": 964,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 32
+    },
+    {
+      "kind": "tool",
+      "tick": 1000,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 33
+    },
+    {
+      "kind": "tool",
+      "tick": 1040,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 34
+    },
+    {
+      "kind": "tool",
+      "tick": 1080,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 35
+    },
+    {
+      "kind": "tool",
+      "tick": 1120,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 36
+    },
+    {
+      "kind": "tool",
+      "tick": 1160,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 37
+    },
+    {
+      "kind": "tool",
+      "tick": 1200,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 38
+    },
+    {
+      "kind": "subagent_start",
+      "tick": 1200,
+      "payload": {
+        "count": 1
+      },
+      "seq": 39
+    },
+    {
+      "kind": "success",
+      "tick": 1204,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 40
+    },
+    {
+      "kind": "tool",
+      "tick": 1240,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 41
+    },
+    {
+      "kind": "subagent_start",
+      "tick": 1240,
+      "payload": {
+        "count": 2
+      },
+      "seq": 42
+    },
+    {
+      "kind": "tool",
+      "tick": 1280,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 43
+    },
+    {
+      "kind": "tool",
+      "tick": 1320,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 44
+    },
+    {
+      "kind": "tool",
+      "tick": 1360,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 45
+    },
+    {
+      "kind": "tool",
+      "tick": 1400,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 46
+    },
+    {
+      "kind": "tool",
+      "tick": 1440,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 47
+    },
+    {
+      "kind": "success",
+      "tick": 1444,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 48
+    },
+    {
+      "kind": "tool",
+      "tick": 1480,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 49
+    },
+    {
+      "kind": "tool",
+      "tick": 1520,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 50
+    },
+    {
+      "kind": "tool",
+      "tick": 1560,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 51
+    },
+    {
+      "kind": "tool",
+      "tick": 1600,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 52
+    },
+    {
+      "kind": "tool",
+      "tick": 1640,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 53
+    },
+    {
+      "kind": "tool",
+      "tick": 1680,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 54
+    },
+    {
+      "kind": "success",
+      "tick": 1684,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 55
+    },
+    {
+      "kind": "tool",
+      "tick": 1720,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 56
+    },
+    {
+      "kind": "tool",
+      "tick": 1760,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 57
+    },
+    {
+      "kind": "tool",
+      "tick": 1800,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 58
+    },
+    {
+      "kind": "tool",
+      "tick": 1840,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 59
+    },
+    {
+      "kind": "tool",
+      "tick": 1880,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 60
+    },
+    {
+      "kind": "tool",
+      "tick": 1920,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 61
+    },
+    {
+      "kind": "success",
+      "tick": 1924,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 62
+    },
+    {
+      "kind": "tool",
+      "tick": 1960,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 63
+    },
+    {
+      "kind": "tool",
+      "tick": 2000,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 64
+    },
+    {
+      "kind": "tool",
+      "tick": 2040,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 65
+    },
+    {
+      "kind": "tool",
+      "tick": 2080,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 66
+    },
+    {
+      "kind": "tool",
+      "tick": 2120,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 67
+    },
+    {
+      "kind": "tool",
+      "tick": 2160,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 68
+    },
+    {
+      "kind": "success",
+      "tick": 2164,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 69
+    },
+    {
+      "kind": "tool",
+      "tick": 2200,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 70
+    },
+    {
+      "kind": "tool",
+      "tick": 2240,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 71
+    },
+    {
+      "kind": "tool",
+      "tick": 2280,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 72
+    },
+    {
+      "kind": "tool",
+      "tick": 2320,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 73
+    },
+    {
+      "kind": "tool",
+      "tick": 2360,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 74
+    },
+    {
+      "kind": "tool",
+      "tick": 2400,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 75
+    },
+    {
+      "kind": "tool_failed",
+      "tick": 2400,
+      "payload": {
+        "class": "tool"
+      },
+      "seq": 76
+    },
+    {
+      "kind": "tool_failed",
+      "tick": 2420,
+      "payload": {
+        "class": "tool"
+      },
+      "seq": 77
+    },
+    {
+      "kind": "tool",
+      "tick": 2440,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 78
+    },
+    {
+      "kind": "tool_failed",
+      "tick": 2440,
+      "payload": {
+        "class": "tool"
+      },
+      "seq": 79
+    },
+    {
+      "kind": "success",
+      "tick": 2460,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 80
+    },
+    {
+      "kind": "tool",
+      "tick": 2480,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 81
+    },
+    {
+      "kind": "tool",
+      "tick": 2520,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 82
+    },
+    {
+      "kind": "tool",
+      "tick": 2560,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 83
+    },
+    {
+      "kind": "tool",
+      "tick": 2600,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 84
+    },
+    {
+      "kind": "tool",
+      "tick": 2640,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 85
+    },
+    {
+      "kind": "success",
+      "tick": 2644,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 86
+    },
+    {
+      "kind": "tool",
+      "tick": 2680,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 87
+    },
+    {
+      "kind": "tool",
+      "tick": 2720,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 88
+    },
+    {
+      "kind": "tool",
+      "tick": 2760,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 89
+    },
+    {
+      "kind": "tool",
+      "tick": 2800,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 90
+    },
+    {
+      "kind": "tool",
+      "tick": 2840,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 91
+    },
+    {
+      "kind": "tool",
+      "tick": 2880,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 92
+    },
+    {
+      "kind": "success",
+      "tick": 2884,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 93
+    },
+    {
+      "kind": "tool",
+      "tick": 2920,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 94
+    },
+    {
+      "kind": "tool",
+      "tick": 2960,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 95
+    },
+    {
+      "kind": "tool",
+      "tick": 3000,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 96
+    },
+    {
+      "kind": "tool",
+      "tick": 3040,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 97
+    },
+    {
+      "kind": "tool",
+      "tick": 3080,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 98
+    },
+    {
+      "kind": "tool",
+      "tick": 3120,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 99
+    },
+    {
+      "kind": "success",
+      "tick": 3124,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 100
+    },
+    {
+      "kind": "tool",
+      "tick": 3160,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 101
+    },
+    {
+      "kind": "tool",
+      "tick": 3200,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 102
+    },
+    {
+      "kind": "tool",
+      "tick": 3240,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 103
+    },
+    {
+      "kind": "tool",
+      "tick": 3280,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 104
+    },
+    {
+      "kind": "tool",
+      "tick": 3320,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 105
+    },
+    {
+      "kind": "tool",
+      "tick": 3360,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 106
+    },
+    {
+      "kind": "success",
+      "tick": 3364,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 107
+    },
+    {
+      "kind": "tool",
+      "tick": 3400,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 108
+    },
+    {
+      "kind": "tool",
+      "tick": 3440,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 109
+    },
+    {
+      "kind": "tool",
+      "tick": 3480,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 110
+    },
+    {
+      "kind": "tool",
+      "tick": 3520,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 111
+    },
+    {
+      "kind": "tool",
+      "tick": 3560,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 112
+    },
+    {
+      "kind": "tool",
+      "tick": 3600,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 113
+    },
+    {
+      "kind": "subagent_stop",
+      "tick": 3600,
+      "payload": {
+        "count": 1
+      },
+      "seq": 114
+    },
+    {
+      "kind": "success",
+      "tick": 3604,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 115
+    },
+    {
+      "kind": "tool",
+      "tick": 3640,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 116
+    },
+    {
+      "kind": "tool",
+      "tick": 3680,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 117
+    },
+    {
+      "kind": "tool",
+      "tick": 3720,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 118
+    },
+    {
+      "kind": "tool",
+      "tick": 3760,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 119
+    },
+    {
+      "kind": "tool",
+      "tick": 3800,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 120
+    },
+    {
+      "kind": "tool",
+      "tick": 3840,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 121
+    },
+    {
+      "kind": "success",
+      "tick": 3844,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 122
+    },
+    {
+      "kind": "tool",
+      "tick": 3880,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 123
+    },
+    {
+      "kind": "tool",
+      "tick": 3920,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 124
+    },
+    {
+      "kind": "tool",
+      "tick": 3960,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 125
+    },
+    {
+      "kind": "tool",
+      "tick": 4000,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 126
+    },
+    {
+      "kind": "subagent_stop",
+      "tick": 4000,
+      "payload": {
+        "count": 0
+      },
+      "seq": 127
+    },
+    {
+      "kind": "tool",
+      "tick": 4040,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 128
+    },
+    {
+      "kind": "tool",
+      "tick": 4080,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 129
+    },
+    {
+      "kind": "success",
+      "tick": 4084,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 130
+    },
+    {
+      "kind": "tool",
+      "tick": 4120,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 131
+    },
+    {
+      "kind": "tool",
+      "tick": 4160,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 132
+    },
+    {
+      "kind": "tool",
+      "tick": 4200,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 133
+    },
+    {
+      "kind": "tool",
+      "tick": 4240,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 134
+    },
+    {
+      "kind": "tool",
+      "tick": 4280,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 135
+    },
+    {
+      "kind": "tool",
+      "tick": 4320,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 136
+    },
+    {
+      "kind": "success",
+      "tick": 4324,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 137
+    },
+    {
+      "kind": "tool",
+      "tick": 4360,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 138
+    },
+    {
+      "kind": "tool",
+      "tick": 4400,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 139
+    },
+    {
+      "kind": "tool",
+      "tick": 4440,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 140
+    },
+    {
+      "kind": "tool",
+      "tick": 4480,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 141
+    },
+    {
+      "kind": "tool",
+      "tick": 4520,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 142
+    },
+    {
+      "kind": "tool",
+      "tick": 4560,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 143
+    },
+    {
+      "kind": "success",
+      "tick": 4564,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 144
+    },
+    {
+      "kind": "tool",
+      "tick": 4600,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 145
+    },
+    {
+      "kind": "tool",
+      "tick": 4640,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 146
+    },
+    {
+      "kind": "tool",
+      "tick": 4680,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 147
+    },
+    {
+      "kind": "tool",
+      "tick": 4720,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 148
+    },
+    {
+      "kind": "tool",
+      "tick": 4760,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 149
+    },
+    {
+      "kind": "tool",
+      "tick": 4800,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 150
+    },
+    {
+      "kind": "success",
+      "tick": 4804,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 151
+    },
+    {
+      "kind": "tool",
+      "tick": 4840,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 152
+    },
+    {
+      "kind": "tool",
+      "tick": 4880,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 153
+    },
+    {
+      "kind": "tool",
+      "tick": 4920,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 154
+    },
+    {
+      "kind": "tool",
+      "tick": 4960,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 155
+    },
+    {
+      "kind": "tool",
+      "tick": 5000,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 156
+    },
+    {
+      "kind": "tool",
+      "tick": 5040,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 157
+    },
+    {
+      "kind": "success",
+      "tick": 5044,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 158
+    },
+    {
+      "kind": "tool",
+      "tick": 5080,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 159
+    },
+    {
+      "kind": "tool",
+      "tick": 5120,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 160
+    },
+    {
+      "kind": "tool",
+      "tick": 5160,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 161
+    },
+    {
+      "kind": "tool",
+      "tick": 5200,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 162
+    },
+    {
+      "kind": "tool",
+      "tick": 5240,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 163
+    },
+    {
+      "kind": "tool",
+      "tick": 5280,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 164
+    },
+    {
+      "kind": "success",
+      "tick": 5284,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 165
+    },
+    {
+      "kind": "tool",
+      "tick": 5320,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 166
+    },
+    {
+      "kind": "tool",
+      "tick": 5360,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 167
+    },
+    {
+      "kind": "tool",
+      "tick": 5400,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 168
+    },
+    {
+      "kind": "tool",
+      "tick": 5440,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 169
+    },
+    {
+      "kind": "tool",
+      "tick": 5480,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 170
+    },
+    {
+      "kind": "tool",
+      "tick": 5520,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 171
+    },
+    {
+      "kind": "success",
+      "tick": 5524,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 172
+    },
+    {
+      "kind": "tool",
+      "tick": 5560,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 173
+    },
+    {
+      "kind": "tool",
+      "tick": 5600,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 174
+    },
+    {
+      "kind": "tool",
+      "tick": 5640,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 175
+    },
+    {
+      "kind": "tool",
+      "tick": 5680,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 176
+    },
+    {
+      "kind": "tool",
+      "tick": 5720,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 177
+    },
+    {
+      "kind": "tool",
+      "tick": 5760,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 178
+    },
+    {
+      "kind": "success",
+      "tick": 5764,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 179
+    },
+    {
+      "kind": "tool",
+      "tick": 5800,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 180
+    },
+    {
+      "kind": "tool",
+      "tick": 5840,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 181
+    },
+    {
+      "kind": "tool",
+      "tick": 5880,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 182
+    },
+    {
+      "kind": "tool",
+      "tick": 5920,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 183
+    },
+    {
+      "kind": "tool",
+      "tick": 5960,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 184
+    },
+    {
+      "kind": "tool",
+      "tick": 6000,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 185
+    },
+    {
+      "kind": "success",
+      "tick": 6004,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 186
+    },
+    {
+      "kind": "tool",
+      "tick": 6040,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 187
+    },
+    {
+      "kind": "tool",
+      "tick": 6080,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 188
+    },
+    {
+      "kind": "tool",
+      "tick": 6120,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 189
+    },
+    {
+      "kind": "tool",
+      "tick": 6160,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 190
+    },
+    {
+      "kind": "tool",
+      "tick": 6200,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 191
+    },
+    {
+      "kind": "tool",
+      "tick": 6240,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 192
+    },
+    {
+      "kind": "success",
+      "tick": 6244,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 193
+    },
+    {
+      "kind": "tool",
+      "tick": 6280,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 194
+    },
+    {
+      "kind": "tool",
+      "tick": 6320,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 195
+    },
+    {
+      "kind": "tool",
+      "tick": 6360,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 196
+    },
+    {
+      "kind": "tool",
+      "tick": 6400,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 197
+    },
+    {
+      "kind": "tool",
+      "tick": 6440,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 198
+    },
+    {
+      "kind": "tool",
+      "tick": 6480,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 199
+    },
+    {
+      "kind": "success",
+      "tick": 6484,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 200
+    },
+    {
+      "kind": "tool",
+      "tick": 6520,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 201
+    },
+    {
+      "kind": "tool",
+      "tick": 6560,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 202
+    },
+    {
+      "kind": "tool",
+      "tick": 6600,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 203
+    },
+    {
+      "kind": "tool",
+      "tick": 6640,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 204
+    },
+    {
+      "kind": "tool",
+      "tick": 6680,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 205
+    },
+    {
+      "kind": "tool",
+      "tick": 6720,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 206
+    },
+    {
+      "kind": "success",
+      "tick": 6724,
+      "payload": {
+        "kind": "exec"
+      },
+      "seq": 207
+    },
+    {
+      "kind": "tool",
+      "tick": 6760,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 208
+    },
+    {
+      "kind": "tool",
+      "tick": 6800,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 209
+    },
+    {
+      "kind": "tool",
+      "tick": 6840,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 210
+    },
+    {
+      "kind": "tool",
+      "tick": 6880,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 211
+    },
+    {
+      "kind": "tool",
+      "tick": 6920,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 212
+    },
+    {
+      "kind": "tool",
+      "tick": 6960,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 213
+    },
+    {
+      "kind": "success",
+      "tick": 6964,
+      "payload": {
+        "kind": "read"
+      },
+      "seq": 214
+    },
+    {
+      "kind": "tool",
+      "tick": 7000,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 215
+    },
+    {
+      "kind": "tool",
+      "tick": 7040,
+      "payload": {
+        "kind": "exec",
+        "ext": "rs"
+      },
+      "seq": 216
+    },
+    {
+      "kind": "tool",
+      "tick": 7080,
+      "payload": {
+        "kind": "edit",
+        "ext": "rs"
+      },
+      "seq": 217
+    },
+    {
+      "kind": "tool",
+      "tick": 7120,
+      "payload": {
+        "kind": "read",
+        "ext": "rs"
+      },
+      "seq": 218
+    },
+    {
+      "kind": "tool",
+      "tick": 7160,
+      "payload": {
+        "kind": "web",
+        "ext": "rs"
+      },
+      "seq": 219
+    },
+    {
+      "kind": "idle",
+      "tick": 7200,
+      "payload": {},
+      "seq": 220
+    }
+  ],
+  "counters": {
+    "prompts": 1,
+    "tools": 179,
+    "errors": 3,
+    "compactions": 0,
+    "waits": 1,
+    "subagents": 0,
+    "subagents_peak": 2,
+    "tool_kinds": {
+      "exec": 44,
+      "edit": 45,
+      "read": 45,
+      "web": 45,
+      "task": 0,
+      "mcp": 0,
+      "other": 0
+    }
+  },
+  "counter_digest": "1:179:3:0:1:0:2:44:45:45:45:0:0:0"
+}

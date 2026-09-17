@@ -28,12 +28,49 @@ impl Occupancy {
         }
     }
 
+    pub fn is_free_with_halo(&self, x: u16, y: u16, halo: u16) -> bool {
+        if !self.is_free(x, y) {
+            return false;
+        }
+        let halo = halo.min(1);
+        for yy in y.saturating_sub(halo)..=y.saturating_add(halo).min(self.height.saturating_sub(1))
+        {
+            for xx in
+                x.saturating_sub(halo)..=x.saturating_add(halo).min(self.width.saturating_sub(1))
+            {
+                if !self.is_free(xx, yy) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     pub fn is_free(&self, x: u16, y: u16) -> bool {
         x < self.width
             && y < self.height
             && !self.cells[y as usize * self.width as usize + x as usize]
     }
 }
+
+// Deliberate one-cell vocabulary. All other code points (controls, emoji,
+// combining marks, wide CJK and private-use characters) become safe ASCII.
+pub fn safe_glyph(ch: char) -> char {
+    match ch {
+        ' '..='~' | '\u{2500}'..='\u{259f}' | '\u{2800}'..='\u{28ff}' | '\u{ff66}'..='\u{ff9d}' => {
+            ch
+        }
+        '·' | '•' | '∙' | '●' | '☺' | '☻' | '♟' | '♙' | '⚙' | '✎' | '⌨' | '▣' | '▤' | '▥' | '▦'
+        | '▧' | '▨' | '▩' | '♥' | '★' | '✦' | '✧' | '☁' | '☂' | '☀' | '☾' | '♠' | '♣' | '°' => {
+            ch
+        }
+        _ => '?',
+    }
+}
+
+pub const FORTRESS_GLYPHS: &[char] = &[
+    '#', '.', '+', '=', ':', '<', '>', '@', 'd', '*', '!', '~', '?',
+];
 
 pub fn scale(rgb: [f32; 3], k: f32) -> [f32; 3] {
     [

@@ -6,6 +6,8 @@ if not os.environ.get("SBG_STATE"):
     sys.exit(0)
 
 import json
+import hashlib
+import uuid
 import re
 import shlex
 import time
@@ -18,10 +20,12 @@ TOOL_KIND = {
     "Bash": "exec", "Write": "edit", "Edit": "edit", "MultiEdit": "edit",
     "NotebookEdit": "edit", "Read": "read", "Glob": "read", "Grep": "read",
     "LSP": "read", "WebFetch": "web", "WebSearch": "web", "Task": "task",
-    "Agent": "task",
+    "Agent": "task", "exec_command": "exec", "write_stdin": "exec",
+    "apply_patch": "edit", "read_file": "read", "spawn_agent": "task",
+    "web.run": "web", "web__run": "web",
 }
 TOOL_KIND_BUCKETS = ("exec", "edit", "read", "web", "task", "mcp", "other")
-STATE_FILES = ("session.json", "status.json", "override.json", "error.json", "journey.json")
+STATE_FILES = ("session.json", "status.json", "override.json", "error.json", "journey.json", "fortress.json", "legends.json")
 RECENT_LIMIT = 64
 DIRECTOR_LOCK_SECONDS = 120
 STOPWORDS = frozenset((
@@ -32,7 +36,11 @@ STOPWORDS = frozenset((
     "check", "looks", "looking", "also", "then", "than", "them", "they",
     "will", "been", "only", "some", "such", "more",
 ))
-WORD_RE = re.compile(r"[a-z]+")
+WORD_RE = re.compile(r"[A-Za-z]{4,16}")
+SENSITIVE = frozenset(("password", "secret", "token", "apikey", "authorization", "bearer", "credential", "credentials", "private", "passwd"))
+EXTENSIONS = frozenset("py rs ts tsx js jsx lua go c h cpp hpp java kt swift rb sh bash zsh fish json yaml yml toml md txt css html sql ipynb makefile none".split())
+SCHEMA_VERSION = 2
+WORD_LIMIT = 64
 
 
 def read_payload():
@@ -75,8 +83,9 @@ def detect_agent(payload):
 def tool_kind_for(tool):
     if not tool:
         return None
-    if tool in TOOL_KIND:
-        return TOOL_KIND[tool]
+    short = tool.removeprefix("functions.")
+    if short in TOOL_KIND:
+        return TOOL_KIND[short]
     return "mcp" if tool.startswith("mcp__") else "other"
 
 
@@ -97,10 +106,8 @@ def compute_subagents(hint, previous):
 
 
 def compute_prompt(payload, previous):
-    prompt = payload.get("prompt")
-    if payload.get("hook_event_name") == "UserPromptSubmit" and isinstance(prompt, str):
-        return prompt[:80]
-    return previous.get("prompt")
+    # Never persist raw prompts, including snippets left by older writers.
+    return None
 
 
 def write_json_atomic(state_dir, filename, data):
@@ -192,7 +199,34 @@ def extract_ext(payload):
 def tokenize(text):
     if not isinstance(text, str):
         return []
-    return [word for word in WORD_RE.findall(text.lower()) if len(word) >= 4 and word not in STOPWORDS]
+    result, suppress = [], False
+    # Reject entire compound tokens. Splitting a URL/key/email into words leaks it.
+    for raw in text[:8192].split():
+        word = raw.strip(".,!?;:()[]{}\"'")
+        lower = word.lower()
+        if lower in SENSITIVE:
+            suppress = True
+            continue
+        if suppress:
+            suppress = False
+            continue
+        if any(part in lower for part in ("secret", "password", "token", "apikey")):
+            continue
+        if not WORD_RE.fullmatch(word) or lower in STOPWORDS:
+            continue
+        # Mixed internal capitals often denote generated identifiers.
+        if word != word.lower() and word != word.capitalize():
+            continue
+        result.append(lower)
+        if len(result) >= 32:
+            break
+    return result
+
+
+def counter_digest(journey):
+    fields = ("prompts", "tools", "errors", "compactions", "waits", "subagents", "subagents_peak")
+    return ":".join(str(journey.get(key, 0)) for key in fields) + ":" + ":".join(
+        str(journey.get("tool_kinds", {}).get(key, 0)) for key in TOOL_KIND_BUCKETS)
 
 
 def top_words(counts, limit=8):
@@ -209,7 +243,11 @@ def push_recent(journey, entry):
 
 def blank_journey(agent, repo, cwd, now):
     return {
-        "v": 1,
+        "v": 2,
+        "schema_version": SCHEMA_VERSION,
+        "epoch": uuid.uuid4().hex,
+        "seq": 0,
+        "tick": 0,
         "ts": now,
         "started_at": now,
         "agent": agent,
@@ -239,62 +277,93 @@ def update_journey(hint, payload, previous_session, state_dir, agent, cwd, subag
     now = time.time()
     existing = load_journey(state_dir)
     repo = repo_name_for(cwd)
-    if hint == "start":
-        source = payload.get("source")
-        prev_session_id = previous_session.get("session_id")
-        new_session_id = payload.get("session_id")
-        same_session = prev_session_id is not None and prev_session_id == new_session_id
-        if source == "clear" or not same_session or not existing:
-            journey = blank_journey(agent, repo, cwd, now)
-        else:
-            journey = existing
-    else:
-        journey = existing if existing else blank_journey(agent, repo, cwd, now)
+    previous_id = previous_session.get("session_id")
+    next_id = payload.get("session_id")
+    same = previous_id is not None and previous_id == next_id
+    if previous_id is None and next_id is None and payload.get("source") == "resume":
+        same = True
+    reset = hint == "start" and (payload.get("source") == "clear" or not same)
+    fresh = reset or not existing or existing.get("schema_version") != SCHEMA_VERSION
+    journey = blank_journey(agent, repo, cwd, now) if fresh else existing
+    if fresh and hint == "start":
+        subagents = 0
+    journey.update(ts=now, agent=agent, cwd=cwd, repo=repo or journey.get("repo"), last_prompt=None)
+    journey["session_id"] = hashlib.sha256(str(payload.get("session_id") or previous_session.get("session_id") or journey["epoch"]).encode()).hexdigest()[:16]
+    journey["tick"] = max(journey.get("tick", 0), int(max(0, now - journey["started_at"]) * 4))
 
-    journey["ts"] = now
-    journey["agent"] = agent
-    journey["cwd"] = cwd
-    journey["repo"] = repo or journey.get("repo")
-    journey.setdefault("tool_kinds", {kind: 0 for kind in TOOL_KIND_BUCKETS})
-    journey.setdefault("files", {})
-    journey.setdefault("word_counts", {})
-    journey.setdefault("words", [])
-    journey.setdefault("recent", [])
+    def emit(kind, data=None):
+        journey["seq"] += 1
+        aliases = {"tool_failed": "error", "wait_open": "wait", "subagent_start": "subagent", "subagent_stop": "subagent"}
+        entry = {"seq": journey["seq"], "kind": kind, "tick": journey["tick"], "payload": data or {},
+                 "t": now, "k": aliases.get(kind, kind)}
+        if kind == "tool":
+            entry["tool"] = data["kind"]
+            if data.get("ext"):
+                entry["ext"] = data["ext"]
+        push_recent(journey, entry)
 
+    if fresh:
+        emit("embark")
+        if existing and existing.get("schema_version") != SCHEMA_VERSION:
+            # Old records may contain raw snippets: keep aggregates only.
+            for key in ("prompts", "tools", "errors", "compactions", "waits", "subagents", "subagents_peak"):
+                journey[key] = max(0, int(existing.get(key, 0)))
+            for key in TOOL_KIND_BUCKETS:
+                journey["tool_kinds"][key] = max(0, int(existing.get("tool_kinds", {}).get(key, 0)))
+            journey["seq"] += 1
+            journey["recent"] = []
+    pending_permission = previous_session.get("waiting_for_permission", previous_session.get("event") == "PermissionRequest")
+    if pending_permission and hint not in ("waiting", "subagent-start", "subagent-stop"):
+        outcome = "resolved"
+        error = str(payload.get("error", "")).lower()
+        denied = payload.get("permission_decision") == "deny" or "denied" in error or "declined" in error
+        if denied:
+            outcome = "declined"
+        elif payload.get("hook_event_name") == "PostToolUse":
+            outcome = "fulfilled"
+        emit("wait_resolved", {"outcome": outcome})
+        if denied and hint == "error":
+            hint = "thinking"
     if hint == "thinking" and payload.get("hook_event_name") == "UserPromptSubmit":
-        prompt = payload.get("prompt") or ""
         journey["prompts"] += 1
-        journey["last_prompt"] = prompt[:120]
-        for word in tokenize(prompt):
+        for word in tokenize(payload.get("prompt")):
             journey["word_counts"][word] = journey["word_counts"].get(word, 0) + 1
+        journey["word_counts"] = dict(sorted(journey["word_counts"].items(), key=lambda kv: (-kv[1], kv[0]))[:WORD_LIMIT])
         journey["words"] = top_words(journey["word_counts"])
-        push_recent(journey, {"t": now, "k": "prompt"})
+        emit("prompt", {"words": journey["words"]})
     elif hint == "tool":
-        tool = payload.get("tool_name")
-        kind = tool_kind_for(tool) or "other"
-        journey["tools"] += 1
-        journey["tool_kinds"][kind] = journey["tool_kinds"].get(kind, 0) + 1
+        kind = tool_kind_for(payload.get("tool_name")) or "other"
         ext = extract_ext(payload)
-        entry = {"t": now, "k": "tool", "tool": tool}
+        ext = ext if ext in EXTENSIONS else ("other" if ext else None)
+        journey["tools"] += 1
+        journey["tool_kinds"][kind] += 1
         if ext:
             journey["files"][ext] = journey["files"].get(ext, 0) + 1
-            entry["ext"] = ext
-        push_recent(journey, entry)
+        emit("tool", {"kind": kind, "ext": ext})
     elif hint == "error":
         journey["errors"] += 1
-        push_recent(journey, {"t": now, "k": "error"})
+        emit("tool_failed", {"class": "tool" if payload.get("hook_event_name") == "PostToolUseFailure" else "session"})
     elif hint == "waiting":
-        journey["waits"] += 1
-        push_recent(journey, {"t": now, "k": "wait"})
+        if payload.get("hook_event_name") == "PermissionRequest" or payload.get("notification_type") == "permission_prompt":
+            if not pending_permission:
+                journey["waits"] += 1
+                emit("wait_open")
     elif hint == "compacting":
         journey["compactions"] += 1
-        push_recent(journey, {"t": now, "k": "compact"})
+        emit("compact")
     elif hint in ("subagent-start", "subagent-stop"):
         journey["subagents"] = subagents
-        journey["subagents_peak"] = max(journey.get("subagents_peak", 0), subagents)
-        push_recent(journey, {"t": now, "k": "subagent"})
-
+        journey["subagents_peak"] = max(journey["subagents_peak"], subagents)
+        emit(hint.replace("-", "_"), {"count": subagents})
+    elif hint == "start" and not fresh:
+        emit("resume")
+    elif hint == "thinking" and payload.get("hook_event_name") == "PostToolUse":
+        emit("success", {"kind": tool_kind_for(payload.get("tool_name")) or "other"})
+    elif hint == "idle":
+        emit("idle")
+    journey["counter_digest"] = counter_digest(journey)
     write_json_atomic(state_dir, "journey.json", journey)
+    return journey
 
 
 def strip_agent_env(env):
@@ -357,7 +426,7 @@ def maybe_spawn_director(hint, payload, state_dir):
     spawn_director(state_dir)
 
 
-def main():
+def main_locked():
     if len(sys.argv) < 2 or sys.argv[1] not in HINTS:
         return
     hint = sys.argv[1]
@@ -379,6 +448,10 @@ def main():
         "session_id": payload.get("session_id") or previous.get("session_id"),
         "cwd": cwd,
         "mode": compute_mode(hint, previous),
+        "waiting_for_permission": (
+            previous.get("waiting_for_permission", False) if hint in ("subagent-start", "subagent-stop")
+            else hint == "waiting" and (payload.get("hook_event_name") == "PermissionRequest" or payload.get("notification_type") == "permission_prompt")
+        ),
         "event": payload.get("hook_event_name"),
         "tool": tool,
         "tool_kind": tool_kind_for(tool),
@@ -386,9 +459,25 @@ def main():
         "prompt": compute_prompt(payload, previous),
         "seq": seq + 1 if isinstance(seq, int) else 1,
     }
+    journey = update_journey(hint, payload, previous, state_dir, agent, cwd, subagents)
+    data["subagents"] = journey["subagents"]
+    if hint == "error" and journey["recent"][-1]["kind"] == "wait_resolved" and journey["recent"][-1]["payload"].get("outcome") == "declined":
+        data["mode"] = "thinking"
     write_json_atomic(state_dir, "session.json", data)
-    update_journey(hint, payload, previous, state_dir, agent, cwd, subagents)
     maybe_spawn_director(hint, payload, state_dir)
+
+
+def main():
+    # All hook invocations, including subagents, share the same read/modify/write lock.
+    # Keep the lock inode across SessionEnd to avoid two independent lock owners.
+    import fcntl
+    state_dir = os.environ["SBG_STATE"]
+    if len(sys.argv) < 2 or sys.argv[1] not in HINTS:
+        return
+    os.makedirs(state_dir, exist_ok=True)
+    with open(os.path.join(state_dir, ".writer.lock"), "a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        main_locked()
 
 
 try:

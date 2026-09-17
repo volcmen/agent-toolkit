@@ -91,8 +91,8 @@ status, the exact command, and the new log lines to stderr before returning.
 ## Live state: hooks, context usage, `sbg set`
 
 Every launch creates a pane directory (`SBG_STATE`, default
-`~/.cache/sbg/panes/<pane>`) that `sbg-fx` polls each frame. Three writers,
-one file each, atomic renames, no locks:
+`~/.cache/sbg/panes/<pane>`) that `sbg-fx` polls each frame. Writers own their output files and publish with atomic renames. Hook
+updates additionally share a lock to preserve concurrent subagent events:
 
 | File | Writer | Content |
 |---|---|---|
@@ -163,6 +163,39 @@ throws keeps the last good version running — the failure is recorded in
 The `/bg` skill (`plugin/skills/bg/`) covers day-to-day control and
 authoring guidance for both Claude Code and Codex.
 
+## Fortress: a settlement built by your session
+
+The `office` world is now a quiet, Dwarf-Fortress-inspired ASCII settlement.
+The founder and subagents become workers, tools become specialist jobs,
+web/MCP calls bring caravans, and compaction opens a deeper gallery. Skilled
+workers can create named artifacts. A bounded chronicle remembers the story.
+
+```sh
+sbg fx use fortress
+sbg set fortress="Amber Hall" difficulty=calm
+sbg legends 12
+sbg set paused=true          # paused=false resumes
+```
+
+The centre stays clear, and foreground text has a one-cell safety margin.
+ASCII glyphs avoid emoji alignment problems. Normal coverage is 7–15% in the
+committed examples, with a hard 25% ceiling. Permission denials are neutral;
+errors recover without deaths or penalties. Only filtered subject words reach
+the world; hooks no longer persist raw prompt snippets.
+
+Replay is deterministic; resizing and animation speed cannot rewrite history.
+Snapshots survive reloads, and missing events produce an explicit gap instead
+of invented achievements. `calm`, `classic` and `chaos` affect future flavour;
+no model calls are needed. The design and validation evidence live in
+[notes/fortress/design.md](notes/fortress/design.md) and
+[notes/fortress/soak.md](notes/fortress/soak.md).
+
+For a source checkout preview: `lua scripts/world/show.lua fortress 120 thinking 120 35`.
+The source modules are `plugins/fx/fortress/`; regenerate the standalone and
+world bundles with `python3 scripts/world/bundle.py`. Existing installed effect
+files are preserved by `sbg install`; use the source path with `--script` when
+reviewing a checkout, or deliberately update an unmodified shipped copy.
+
 ## Living worlds: art that grows with the session
 
 `sbg auto` (and the `claude`/`codex` shims) launch `~/.config/sbg/fx/world.lua`
@@ -170,12 +203,11 @@ when it exists (`SBG_WORLD=0` returns to the builtin effects). A world is a
 generative scene rebuilt deterministically from the session's cumulative
 `journey.json` (written by the hooks: prompts, tools by kind, files by
 extension, errors, subagents, recent events) plus `status.json`
-(`context_pct`, `lines_added/removed`), so a three-hour session looks different
-from a five-minute one and the scene never loops:
+(`context_pct`, `lines_added/removed`), so a three-hour session develops beyond a five-minute one:
 
 | Motif | Grows by |
 |---|---|
-| `office` | desks and workers per agent/subagent, typing while thinking, ☕ when waiting, ⚡ on error, floors every ~40 tools, banner with the office name and `+lines` |
+| `office` / `fortress` | deterministic edge settlement: workers, workshops, caravans, seasons, artifacts and legends |
 | `forest` | one L-system tree per N tools, leaves coloured by file language, sky by context %, lightning on errors |
 | `skyline` | buildings rise with lines added, windows light per tool, crane while a tool runs, night falls with context |
 | `reef` | braille coral per tool, fish = subagents, bleaching on errors |

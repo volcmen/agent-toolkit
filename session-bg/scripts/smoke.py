@@ -16,25 +16,31 @@ import shutil
 import subprocess
 import sys
 import time
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LOG = Path.home() / ".cache" / "sbg" / "tattoy.log"
 
 
 def run(effect: str, seconds: float = 6.0) -> tuple[bool, str]:
+    with tempfile.TemporaryDirectory(prefix="sbg-smoke-") as tmp:
+        return run_isolated(effect, seconds, Path(tmp))
+
+
+def run_isolated(effect: str, seconds: float, scratch: Path) -> tuple[bool, str]:
     if shutil.which("tattoy") is None:
         return False, "tattoy not on PATH"
-    if LOG.exists():
-        LOG.unlink()
+    env = dict(os.environ, XDG_CACHE_HOME=str(scratch), SBG_STATE=str(scratch / "pane"))
+    env.pop("SBG_SCRIPT", None)
+    log_path = scratch / "sbg" / "tattoy.log"
     dry = subprocess.run(
         [str(ROOT / "bin" / "sbg"), "--dry-run", "--log-level", "debug", effect, "--", str(ROOT / "scripts" / "smoke-child.sh")],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, check=False, env=env,
     )
     if dry.returncode:
         return False, dry.stderr.strip()
     argv = [shutil.which("tattoy"), "--main-config", dry.stdout.splitlines()[1].split()[2], "--disable-indicator", "--command", str(ROOT / "scripts" / "smoke-child.sh")]
-    env = dict(os.environ, TERM="xterm-kitty", COLORTERM="truecolor", SBG_EFFECT=effect, SBG_SEED="1", SBG_FPS="12", LINES="30", COLUMNS="100")
+    env = dict(env, TERM="xterm-kitty", COLORTERM="truecolor", SBG_EFFECT=effect, SBG_SEED="1", SBG_FPS="12", LINES="30", COLUMNS="100")
     pid, fd = pty.fork()
     if pid == 0:
         fcntl.ioctl(sys.stdin.fileno(), termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
@@ -52,16 +58,17 @@ def run(effect: str, seconds: float = 6.0) -> tuple[bool, str]:
                 break
             output += chunk
     try:
-        _, status = os.waitpid(pid, os.WNOHANG)
+        done, status = os.waitpid(pid, os.WNOHANG)
     except ChildProcessError:
-        status = 0
-    if status == 0:
+        done, status = pid, 0
+    if done == 0:
         try:
             os.kill(pid, 9)
             os.waitpid(pid, 0)
         except (ProcessLookupError, ChildProcessError):
             pass
-    log = LOG.read_text(encoding="utf-8", errors="replace") if LOG.exists() else ""
+    os.close(fd)
+    log = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
     started = f"Starting plugin: sbg-{effect}" in log
     exited = "plugin exited" in log or "plugin error" in log
     rendered = "Rendering from plugin message" in log
