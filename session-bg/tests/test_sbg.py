@@ -140,6 +140,20 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result.stdout.split(), list(sbg.EFFECTS))
 
 
+class KittyKeysTests(unittest.TestCase):
+    def test_enabled_for_kitty_zellij_and_similar_terminals(self):
+        self.assertTrue(sbg.kitty_keys_wanted({"KITTY_WINDOW_ID": "1"}, True))
+        self.assertTrue(sbg.kitty_keys_wanted({"ZELLIJ": "0", "TERM": "tmux-256color"}, True))
+        self.assertTrue(sbg.kitty_keys_wanted({"TERM_PROGRAM": "WezTerm"}, True))
+        self.assertTrue(sbg.kitty_keys_wanted({"TERM": "xterm-ghostty"}, True))
+
+    def test_disabled_without_tty_unknown_terminal_or_opt_out(self):
+        self.assertFalse(sbg.kitty_keys_wanted({"KITTY_WINDOW_ID": "1"}, False))
+        self.assertFalse(sbg.kitty_keys_wanted({"TERM": "xterm-256color"}, True))
+        self.assertFalse(sbg.kitty_keys_wanted({"KITTY_WINDOW_ID": "1", "SBG_KITTY_KEYS": "0"}, True))
+        self.assertTrue(sbg.kitty_keys_wanted({"TERM": "xterm-256color", "SBG_KITTY_KEYS": "1"}, True))
+
+
 class ShimTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

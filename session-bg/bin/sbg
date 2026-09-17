@@ -560,14 +560,48 @@ def doctor() -> int:
     return 0 if tattoy and linked else 1
 
 
+KITTY_KEYS_PUSH = b"\x1b[>1u"
+KITTY_KEYS_POP = b"\x1b[<u"
+
+
+def kitty_keys_wanted(env: dict[str, str], tty: bool) -> bool:
+    if not tty or env.get("SBG_KITTY_KEYS") == "0":
+        return False
+    if env.get("SBG_KITTY_KEYS") == "1":
+        return True
+    term = (env.get("TERM", "") + " " + env.get("TERM_PROGRAM", "")).lower()
+    return bool(
+        env.get("KITTY_WINDOW_ID")
+        or env.get("ZELLIJ")
+        or any(name in term for name in ("kitty", "ghostty", "wezterm", "foot"))
+    )
+
+
+def tty_write(data: bytes) -> None:
+    try:
+        fd = os.open("/dev/tty", os.O_WRONLY | os.O_NOCTTY)
+    except OSError:
+        return
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+
+
 def run_tattoy(tattoy: str, argv: list[str], env: dict[str, str]) -> int:
     started = time.monotonic()
     log = cache_dir() / "tattoy.log"
     mark = log.stat().st_size if log.is_file() else 0
+    keys = kitty_keys_wanted(env, sys.stdin.isatty() and sys.stdout.isatty())
+    if keys:
+        tty_write(KITTY_KEYS_PUSH)
     try:
         code = subprocess.run(argv, env=env, check=False).returncode
     except KeyboardInterrupt:
         code = 130
+    finally:
+        if keys:
+            tty_write(KITTY_KEYS_POP)
     elapsed = time.monotonic() - started
     if code != 0 or elapsed < FAST_EXIT_SECONDS:
         fresh = ""

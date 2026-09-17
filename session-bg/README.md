@@ -71,6 +71,16 @@ tests"` is wrapped through a generated script in `~/.cache/sbg/`.
 No shell functions or aliases are involved, so `command -v claude`, scripts, and
 hooks all see the shim; `SBG_AUTO=0 claude` or `~/.local/bin/claude` bypass it.
 
+## Keyboard: Shift+Enter, Esc, modifier chords
+
+Tattoy never relays an application's request to enable the kitty keyboard
+protocol to the real terminal, so kitty/zellij would send Shift+Enter as a
+plain Enter. `sbg` therefore pushes the protocol itself (`CSI > 1 u`,
+disambiguate only: plain Enter/Tab/Backspace stay legacy) before tattoy starts
+and pops it on exit, whenever it detects kitty, zellij, WezTerm, Ghostty, or
+foot. Force with `SBG_KITTY_KEYS=1`, disable with `SBG_KITTY_KEYS=0`.
+Tattoy's own `Alt+…` chords still work because its parser understands CSI u.
+
 ## Troubleshooting
 
 `sbg doctor` prints the tattoy/plugin/palette/shim state, PATH order, `which
