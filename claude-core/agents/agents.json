@@ -3,7 +3,7 @@
   "agents": [
     {
       "id": "controller",
-      "description": "Main-thread Fable technical lead for repository work. Clarifies outcomes, coordinates focused specialists when useful, integrates changes, and returns verified results. Run as the primary agent; never dispatch it as a worker.",
+      "description": "Main-thread Fable technical lead: clarifies outcomes, delegates bounded work, integrates and verifies. Primary agent only; never dispatch it as a worker.",
       "prompt": "prompts/controller.md",
       "claude": {
         "model": "fable",
@@ -12,7 +12,7 @@
     },
     {
       "id": "alan-wake",
-      "description": "Engineering editor for substantial rewrites, delicate workplace wording, long documents, or an explicit Alan Wake request. Returns one concise draft with links formatted for the actual output surface. Routine messages stay inline; never sends or publishes.",
+      "description": "Engineering editor for substantial rewrites, delicate workplace wording, long documents, or an explicit Alan Wake request. Returns one finished draft with links for the actual output surface; never sends or publishes.",
       "prompt": "prompts/alan-wake.md",
       "claude": {
         "model": "sonnet",
@@ -69,23 +69,6 @@
       "id": "task-analyst",
       "description": "Read-only task shaper for vague, symptom-based, conflicting, risky, or solution-first requests. Establishes evidence, scope, acceptance criteria, and the one decision needed before work. Never edits.",
       "prompt": "prompts/task-analyst.md",
-      "claude": {
-        "model": "sonnet",
-        "effort": "high",
-        "tools": [
-          "Read",
-          "Grep",
-          "Glob",
-          "LSP",
-          "WebSearch",
-          "WebFetch"
-        ],
-        "disallowedTools": [
-          "Write",
-          "Edit",
-          "NotebookEdit"
-        ]
-      },
       "codex": {
         "name": "task_analyst",
         "model": "gpt-5.6-sol",
@@ -95,7 +78,7 @@
     },
     {
       "id": "mr-review-fixer",
-      "description": "Independently reviews and improves a GitLab merge request before human review, after review feedback, or before re-requesting review: audits the complete diff for defects, regressions, missing cases, security, performance, tests, and MR hygiene; validates unresolved discussions; applies focused fixes; verifies the result; and prepares concise GitLab replies. Use on completed or reviewed MRs, not for initial feature development, approval, assignment, or merge.",
+      "description": "Reviews and repairs a completed GitLab MR before, after, or between human reviews: audits the full diff for defects, regressions, security, performance, tests, and hygiene; validates open discussions; applies focused fixes; prepares replies. Not for feature development, approval, assignment, or merge.",
       "prompt": "prompts/mr-review-fixer.md",
       "claude": {
         "model": "sonnet",
@@ -114,7 +97,7 @@
     },
     {
       "id": "gate",
-      "description": "Independent read-only review of a completed high-risk or unfamiliar change when existing review evidence is insufficient. Returns actionable findings and coverage gaps. Optional mr-preflight reviewer; never fixes or publishes.",
+      "description": "Independent read-only review of a completed high-risk or unfamiliar change when existing review evidence is insufficient. Returns actionable findings and coverage gaps; never fixes or publishes.",
       "prompt": "prompts/gate.md",
       "claude": {
         "model": "sonnet",

@@ -16,7 +16,7 @@ validation, rendering, installation, verification, and removal under `~/.claude`
 | `statusline.py`, `keybindings.json` | same name | file symlink |
 | `skills/engineering/`, `skills/mr-preflight/`, `skills/review-retro/` | `skills/<name>` | directory symlink |
 | `../wiki/plugins/obsidian-memory/skills/{obsidian-memory,global-memory}/` | `skills/<name>` | directory symlink |
-| `../codex-pair/.../skills/codex-pair/`, `../chatgpt-consult/.../skills/chatgpt-consult/`, `../qwen-gsd/.../skills/qwen-gsd-slice/` | `skills/<name>` | directory symlink |
+| `../codex-pair/.../skills/codex-pair/`, `../chatgpt-consult/.../skills/chatgpt-consult/`, | `skills/<name>` | directory symlink |
 | `../wiki/plugins/obsidian-memory/scripts/obsidian_memory.py`, `.../rules/obsidian-vault.md` | `scripts/`, `rules/<name>` | file symlink |
 | `git-guards/{install,pre-push-foreign-history}` | `~/.config/git-guards/<name>` | file symlink |
 | `settings/managed.json` | `settings.json` keys `hooks`, `statusLine`, `attribution` | JSON key replacement |
@@ -112,7 +112,6 @@ policy. The Codex controller is the primary thread, not a spawnable worker.
 | Claude role | Agent and contract |
 | --- | --- |
 | Controller | Fable `controller`, medium effort; primary thread only |
-| Task analyst | Sonnet `task-analyst`; concise execution brief |
 | Repository explorer | Sonnet `Explore`; compact report; overrides the built-in Explore agent |
 | Writing specialist | Sonnet `alan-wake`, medium effort, plan permission mode, eight turns; Read/Grep/Glob only |
 | MR quality gate and fixer | Sonnet `mr-review-fixer`, high effort, project memory; quality-gate report |

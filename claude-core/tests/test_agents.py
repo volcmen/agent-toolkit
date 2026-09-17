@@ -144,7 +144,7 @@ class Rendering(unittest.TestCase):
             self.assertNotIn(forbidden, text)
 
     def test_rendered_agents_stay_within_size_budgets(self) -> None:
-        budgets = {"controller.md": 2800, "mr-review-fixer.md": 3500, "alan-wake.md": 1600, "gate.md": 1400}
+        budgets = {"controller.md": 2600, "mr-review-fixer.md": 3100, "alan-wake.md": 1400, "gate.md": 1300, "Explore.md": 1600}
         for name, limit in budgets.items():
             self.assertLessEqual((ROOT / "rendered" / name).stat().st_size, limit, name)
 
@@ -156,7 +156,7 @@ class Rendering(unittest.TestCase):
                 self.assertNotIn(sentinel, text, f"{path.name}: {sentinel!r}")
 
     def test_claude_agents_render_to_standalone_source_directory(self) -> None:
-        expected = {"controller.md", "task-analyst.md", "Explore.md", "alan-wake.md", "mr-review-fixer.md", "gate.md"}
+        expected = {"controller.md", "Explore.md", "alan-wake.md", "mr-review-fixer.md", "gate.md"}
         actual = {path.name for path in (ROOT / "rendered").glob("*.md")}
         self.assertEqual(actual, expected)
 
@@ -172,10 +172,10 @@ class Rendering(unittest.TestCase):
 
     def test_specialists_declare_their_tool_posture_explicitly(self) -> None:
         catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
-        by_id = {agent["id"]: agent["claude"] for agent in catalog}
-        for agent_id in ("repo-explorer", "task-analyst"):
-            self.assertNotIn("Bash", by_id[agent_id]["tools"], agent_id)
-            self.assertEqual(set(by_id[agent_id]["disallowedTools"]), {"Write", "Edit", "NotebookEdit"}, agent_id)
+        by_id = {agent["id"]: agent["claude"] for agent in catalog if agent.get("claude")}
+        self.assertNotIn("Bash", by_id["repo-explorer"]["tools"])
+        self.assertEqual(set(by_id["repo-explorer"]["disallowedTools"]), {"Write", "Edit", "NotebookEdit"})
+        self.assertNotIn("task-analyst", by_id)
         self.assertEqual(by_id["alan-wake"]["tools"], ["Read", "Grep", "Glob"])
         self.assertEqual(by_id["alan-wake"]["disallowedTools"], ["Write", "Edit", "NotebookEdit", "Agent"])
         self.assertEqual(by_id["alan-wake"]["permissionMode"], "plan")
@@ -216,7 +216,6 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
     def test_controller_uses_bare_standalone_agent_names(self) -> None:
         text = (ROOT / "prompts" / "controller.md").read_text(encoding="utf-8")
         self.assertIn("`Explore` on Sonnet", text)
-        self.assertIn("`task-analyst` on Sonnet", text)
         self.assertIn("`alan-wake` on Sonnet", text)
         self.assertIn("`mr-review-fixer` on Sonnet", text)
         self.assertNotIn("shared-agents:", text)
@@ -291,7 +290,6 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
     def test_specialists_have_distinct_terminal_contracts(self) -> None:
         for relative_path in self.DETAILED_SURFACES:
             text = self.surface(relative_path)
-            self.assertIn("execution brief", text, relative_path)
             self.assertIn("compact report", text, relative_path)
             self.assertIn("ready-to-use artifact", text, relative_path)
             self.assertNotIn("generic packet", text, relative_path)
@@ -338,12 +336,13 @@ class ClaudeRoutingSurfaces(unittest.TestCase):
             "controller": "fable",
             "alan-wake": "sonnet",
             "repo-explorer": "sonnet",
-            "task-analyst": "sonnet",
             "mr-review-fixer": "sonnet",
             "gate": "sonnet",
         }
         for agent in catalog:
-            self.assertEqual(agent["claude"]["model"], expected[agent["id"]], agent["id"])
+            if agent.get("claude"):
+                self.assertEqual(agent["claude"]["model"], expected[agent["id"]], agent["id"])
+        self.assertNotIn("claude", next(agent for agent in catalog if agent["id"] == "task-analyst"))
 
 
 class StandaloneCopies(unittest.TestCase):
@@ -538,7 +537,6 @@ class Package(unittest.TestCase):
         self.assertIn("Return one finished artifact", alan)
         self.assertIn("Return a concise execution brief", analyst)
         self.assertIn("Return a compact report", explorer)
-        self.assertNotIn("ready-to-use artifact", analyst)
         self.assertNotIn("execution brief", explorer)
 
     def test_mr_review_fixer_has_its_own_terminal_contract(self) -> None:

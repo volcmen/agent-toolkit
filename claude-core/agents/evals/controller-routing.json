@@ -15,10 +15,10 @@
     {
       "id": 2,
       "prompt": "The checkout page feels laggy after our refactor. Make it fast and fix whatever is wrong.",
-      "expected_output": "The controller first routes bounded problem normalization to task-analyst and establishes measurable evidence before implementation.",
+      "expected_output": "The controller shapes the request inline from the engineering shaping reference and establishes measurable evidence before implementation.",
       "files": [],
       "expectations": [
-        "Uses task-analyst",
+        "Shapes inline without dispatching a specialist for problem normalization",
         "Separates the symptom from an established root cause",
         "Chooses an observable performance proxy before proposing a fix"
       ]

@@ -6,7 +6,7 @@ description: Use for any non-trivial engineering task — implementing a feature
 # Engineering
 
 One skill, four phases. Read the reference for the phase you are in; skip the
-rest. The invariants in `CLAUDE.md` apply throughout and are not repeated here.
+rest. `CLAUDE.md` invariants apply throughout and are not repeated here.
 
 | Phase | Load when | Reference |
 |---|---|---|
@@ -23,12 +23,11 @@ rest. The invariants in `CLAUDE.md` apply throughout and are not repeated here.
 
 Work directly when the change is clear and its diff fits one sentence. Enter
 plan mode when the approach is materially uncertain, the code is unfamiliar,
-the change crosses components, or failure is costly. Use `task-analyst` for
-shaping and `Explore` for one bounded repository question only when isolated
-context saves meaningful main-thread context; keep tightly coupled phases in
-the main thread. Specify a model on every agent call: `sonnet` for workers,
-`opus` for architecture, security, concurrency, data integrity, or subtle
-correctness; `haiku` only for mechanical lookups you will re-check.
+the change crosses components, or failure is costly. Shape inline; use
+`Explore` for one bounded repository question only when isolated context saves
+meaningful main-thread context, and keep tightly coupled phases in the main
+thread. Specify a model on every agent call; the controller prompt holds the
+routing.
 
 ## Report
 

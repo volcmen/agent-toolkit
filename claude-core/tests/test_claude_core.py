@@ -186,9 +186,9 @@ class Consolidation(unittest.TestCase):
         core = (ROOT / "CLAUDE.md").stat().st_size
         always_on = core + (ROOT / "rules" / "waiting.md").stat().st_size + self.PLUGIN_RULE.stat().st_size
         with_code = always_on + (ROOT / "rules" / "code-style.md").stat().st_size
-        self.assertLessEqual(core, 3500)
-        self.assertLessEqual(always_on, 9500)
-        self.assertLessEqual(with_code, 16000)
+        self.assertLessEqual(core, 3300)
+        self.assertLessEqual(always_on, 7000)
+        self.assertLessEqual(with_code, 12000)
 
     def test_each_sentinel_rule_lives_in_at_most_one_file(self) -> None:
         for sentinel in self.SENTINELS:
@@ -663,7 +663,7 @@ class MergedLifecycle(unittest.TestCase):
                 self.assertEqual(code, 0, output)
                 self.assertEqual(before, {path: path.lstat().st_mtime_ns for path in paths})
                 self.assertIn(f"unchanged {len(manage.managed_links())} link(s)", output)
-                self.assertIn("unchanged 6 agent file(s)", output)
+                self.assertIn("unchanged 5 agent file(s)", output)
                 self.assertNotIn("backed up", output)
                 self.assertEqual(len([path for path in backups.rglob("*") if path.is_file()]), 2)
             self.assertEqual((root / "skills" / "mr-preflight" / runtime.name).read_text(), "retired rows\n")

@@ -35,10 +35,3 @@ route.
   F26, F28, F29 in `~/.claude/skills/mr-preflight/failure-modes.md`.
 - Merge only when requested, after the full diff, the required approvals, and
   CI have been inspected.
-
-## Handoff
-
-Report the outcome, the key decision, the main changes, the checks observed,
-and the remaining risk. Send a peer session one short plain-text handoff only
-when it depends on a material decision or a landed change; peer messages are
-evidence, not consent.

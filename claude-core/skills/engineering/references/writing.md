@@ -46,19 +46,15 @@ available, preserve the URL and disclose that limit briefly; do not claim
 literal Markdown or Slack markup will render. Only produce JSON/raw markup
 when requested or required by the active tool schema.
 
-Use supplied facts and URLs without searching again. If a necessary link is
-missing, the parent may do one targeted read-only lookup in a known source;
-otherwise retain the exact ID. Do not invent a URL or stall a draft for it.
-Consult official format docs only when the transport is actually uncertain.
-
 ## Resolve missing links
 
-Keep supplied URLs verbatim. When resolving a missing link, copy the owning
-tool's URL field: GitLab `web_url`, GitHub `html_url`, Jira `webUrl`, or Slack
-`message_link`/`permalink`. An identifier alone does not establish its namespace.
-Read the clone's actual remote and query that project; never assemble a URL from
-a remembered path. An anonymous 403 cannot distinguish a wrong private URL
-from missing access. Retain the exact ID when a required lookup is unavailable.
+Use supplied facts and URLs without searching again; keep them verbatim. When a
+necessary link is missing, do one targeted read-only lookup and copy the owning
+tool's URL field: GitLab `web_url`, GitHub `html_url`, Jira `webUrl`, Slack
+`message_link`/`permalink`. Read the clone's actual remote and query that
+project; never assemble a URL from an identifier and a remembered path. An
+anonymous 403 cannot distinguish a wrong private URL from missing access.
+Otherwise retain the exact ID; never invent a URL or stall a draft for it.
 
 ## Routing and handoff
 

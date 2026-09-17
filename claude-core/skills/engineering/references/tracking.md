@@ -1,57 +1,43 @@
 # Personal work tracking
 
 Linear answers what David is doing, what comes next, and what needs his input.
-Use this guide for ongoing work, task intake, blockers, and handoffs in both
-Claude Code and Codex. Routine steps that finish within a session stay inline.
+Use it for ongoing work, task intake, blockers, and handoffs; routine steps that
+finish within a session stay inline.
 
 ## Destination and authority
 
 Read `~/.config/work-tracking/linear.json` for the verified personal workspace,
 default team, user, projects, and views. Require `status: ready` and nonempty
-`workspace_id`, `workspace_url`, `team_id`, and `user_id`; missing values are not
-wildcards. Compare its workspace ID and URL with
-the authenticated Linear account before writing. Missing configuration or a
-mismatch means the destination is unverified; continue authorized local work
-and report an unsaved handoff. Do not substitute a work workspace.
-
-Use the official Linear MCP connection named `linear-personal`. Browser login
-does not prove MCP authentication. Use available structured tools first and
-the signed-in browser when a required operation is unavailable through them.
+`workspace_id`, `workspace_url`, `team_id`, `user_id`, and compare workspace ID
+and URL with the authenticated account before writing. Missing or mismatched
+means unverified: continue authorized local work and report an unsaved handoff.
+Never substitute a work workspace. Use the `linear-personal` MCP connection;
+browser login does not prove MCP authentication.
 
 | Work | Authoritative home | Linear content |
 |---|---|---|
 | Personal work without a suitable tracker | Linear | Full task |
 | Jira work | Jira | Source link and personal next action |
-| Work already tracked in GitHub or GitLab | Existing tracker | Linked personal action when useful |
-| Architecture and decisions | Existing repository docs or Obsidian | Links to relevant context |
+| Work tracked in GitHub or GitLab | Existing tracker | Linked personal action when useful |
+| Architecture and decisions | Repository docs or Obsidian | Links |
 
-The approved personal workflow allows creating and updating personal tasks
-for requested substantial work without asking each time. Repository policy
-still determines official tracking. It does not authorize upstream posting,
-imports, syncing, invites, paid runs, or starting unrelated backlog work.
-Keep company descriptions, comments, attachments, and code in their source;
-use a short personal action and the source URL. Preserve the source identity
-in work branches and MRs rather than adding a personal Linear identifier.
-
-Use only the workspace's default team as the required storage container.
-Organize ongoing workstreams with projects, standalone tasks without a project,
-and assign personal tasks to David. No additional teams or colleagues.
+Creating and updating personal tasks for requested substantial work needs no
+per-task permission. It does not authorize upstream posting, imports, syncing,
+invites, paid runs, or starting unrelated backlog work. Keep company content in
+its source; Linear holds a short personal action and the source URL. Work
+branches and MRs carry the source identity, never a Linear identifier. Use only
+the default team; projects for workstreams; tasks assigned to David.
 
 ## Intake and selection
 
-Read project guidance and the selected task's latest handoff. Search by source
-URL, project, and outcome before creating anything; reuse an existing match.
-An uncertain create response requires a lookup before retrying. Several valid
-matches require clarification rather than silently choosing one.
-
-Track work that needs cross-session continuity, follow-up, dependencies, or a
-decision. Keep one deliverable per task; execution steps are a session checklist.
-New discoveries go to Inbox, and capturing them does not approve implementation.
-Tasks in Next are selected, clear, and unblocked; do not start other work just
-because it is present in Linear. Keep at most three Next and two Doing tasks
-overall; make room before selecting more, unless David explicitly overrides.
-
-Personal task template:
+Read project guidance and the task's latest handoff. Search by source URL,
+project, and outcome before creating; reuse a match; an uncertain create
+response requires a lookup before retrying; several matches require
+clarification. Track work needing cross-session continuity, follow-up,
+dependencies, or a decision — one deliverable per task, execution steps as a
+session checklist. Discoveries go to Inbox; capture is not approval. Next holds
+selected, clear, unblocked tasks; at most three Next and two Doing unless David
+overrides. Do not start work merely because it is in Linear.
 
 ```markdown
 ## Outcome
@@ -63,54 +49,38 @@ Personal task template:
 ## Next action
 <one concrete action>
 ## Links
-<source issue, repository, design, or evidence as needed>
+<source issue, repository, design, or evidence>
 ```
 
-For a work-linked action, the title names the personal action and the body
-contains only `Source: <URL>` and `Next action: <action>`. Its status is personal
-progress, not a cached claim about Jira/GitHub/GitLab status. Fetch source state
-when needed. Finishing the personal action does not resolve the source ticket.
+A work-linked action's title names the personal action; its body is only
+`Source: <URL>` and `Next action: <action>`. Its status is personal progress,
+not a cached claim about the source; finishing it does not resolve the source.
 
-## Status and attention
+## Status
 
-| Status | Meaning |
-|---|---|
-| Inbox | Captured, not assessed |
-| Backlog | Worth keeping, not selected |
-| Next | Selected and ready |
-| Doing | Being worked on |
-| Waiting | Blocked; next action says what or whom it awaits |
-| Review | Ready for a remaining check or integration |
-| Done | The task's acceptance criteria have observed evidence |
-| Canceled | Abandoned, not delivered |
+Inbox (captured) · Backlog (kept, not selected) · Next (ready) · Doing ·
+Waiting (blocked; next action names what it awaits) · Review (remaining check
+or integration) · Done (acceptance criteria have observed evidence) · Canceled.
 
-Use `needs-me` only for a concrete action from David; state it in Next action
-and remove the label when resolved. Set dates only for real commitments.
-Use native dependency relations for blocking tasks and sub-issues for separate
-deliverables. Keep one implementation owner per task; the assignee is not a
-lock for concurrent agents. Keep one authoritative planning backlog.
+`needs-me` only for a concrete action from David, stated in Next action and
+removed when resolved. Dates only for real commitments. Native dependency
+relations for blockers; sub-issues for separate deliverables. One owner per
+task; the assignee is not a lock for concurrent agents. Views: Now
+(Next/Doing/Review), Needs me, Waiting, By project; review Inbox and Waiting
+weekly.
 
-Personal views, assigned to David: Now (Next/Doing/Review), Needs me (unfinished
-and `needs-me`), Waiting (Waiting), and By project (unfinished, grouped by project).
-Review Inbox and Waiting weekly. Built-in backlog views hold distant work.
+## Handoff
 
-## Handoff and continuity
+Update on blockers, scope changes, handoffs, and verified completion, not every
+tool call; preserve human edits. Personal tasks record branch/PR, checked
+commit, checks run and results, missing checks, and next action; work-linked
+entries update only action, status, and link. Keep Review while checking
+remains. Report the Linear link and any action needed from David; a missing or
+failed write is explicitly unsaved.
 
-Update on blockers, scope changes, handoffs, and verified completion, not on
-every tool call. Preserve human edits. For personal tasks, record the branch/PR,
-checked commit, actual checks and results, missing checks, and next action.
-For work-linked entries, keep technical evidence at the source and update only
-the personal action, status, and relevant link.
-
-Keep work in Review while required checking or integration remains. Report the
-Linear link and any action needed from David in the final handoff. A missing
-or failed write is explicitly unsaved; authorized local work can continue.
-
-Obsidian keeps decisions and useful context. After a task is verified in Linear,
-replace its old TODO checkbox with a locator stating that Linear owns its state;
-preserve unmigrated tasks. Do not maintain synchronized checkbox copies. When
-Linear is unavailable, explicitly marked pending capture in the existing project
-TODO is temporary; deduplicate and replace it with the verified link on recovery.
-
-No automatic Jira/GitHub/GitLab synchronization or linkbacks are configured for
-this workflow. Any later sync is a separately scoped change.
+Obsidian keeps decisions and context. Once a task is verified in Linear, replace
+its TODO checkbox with a locator saying Linear owns it; never maintain synced
+checkbox copies. When Linear is unavailable, a marked pending capture in the
+project TODO is temporary and is replaced with the verified link on recovery.
+No Jira/GitHub/GitLab synchronization or linkbacks exist; any is a separate
+change.

@@ -54,7 +54,6 @@ WORKSPACE_MANAGED = (
     ("wiki/plugins/obsidian-memory/rules/obsidian-vault.md", "rules/obsidian-vault.md"),
     ("codex-pair/plugins/codex-pair/skills/codex-pair", "skills/codex-pair"),
     ("chatgpt-consult/plugins/chatgpt-consult/skills/chatgpt-consult", "skills/chatgpt-consult"),
-    ("qwen-gsd/plugins/qwen-gsd/skills/qwen-gsd-slice", "skills/qwen-gsd-slice"),
 )
 WORKSPACE_DIRECTORIES = frozenset(
     {
@@ -62,7 +61,6 @@ WORKSPACE_DIRECTORIES = frozenset(
         "wiki/plugins/obsidian-memory/skills/global-memory",
         "codex-pair/plugins/codex-pair/skills/codex-pair",
         "chatgpt-consult/plugins/chatgpt-consult/skills/chatgpt-consult",
-        "qwen-gsd/plugins/qwen-gsd/skills/qwen-gsd-slice",
     }
 )
 EXTERNAL_MANAGED_FILES = (
@@ -361,7 +359,7 @@ def agent_package_problems() -> list[str]:
     if result.returncode:
         problems.append("provider files have render drift; run `python3 scripts/render.py`")
 
-    expected_claude = {"controller.md", "task-analyst.md", "Explore.md", "alan-wake.md", "mr-review-fixer.md", "gate.md"}
+    expected_claude = {"controller.md", "Explore.md", "alan-wake.md", "mr-review-fixer.md", "gate.md"}
     actual_claude = {path.name for path in claude_agent_sources()}
     if actual_claude != expected_claude:
         problems.append(
@@ -391,7 +389,7 @@ def agent_package_problems() -> list[str]:
         problems.append("Claude controller must use fable")
     if by_id.get("alan-wake", {}).get("claude", {}).get("model") != "sonnet":
         problems.append("Claude alan-wake must use sonnet")
-    for agent_id in ("repo-explorer", "task-analyst", "mr-review-fixer", "gate"):
+    for agent_id in ("repo-explorer", "mr-review-fixer", "gate"):
         if by_id.get(agent_id, {}).get("claude", {}).get("model") != "sonnet":
             problems.append(f"Claude {agent_id} must use sonnet")
 

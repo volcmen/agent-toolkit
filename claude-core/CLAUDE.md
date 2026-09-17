@@ -40,7 +40,6 @@ Project instructions override defaults except under `~/notraffic/`.
 
 - `mr-preflight` owns readiness; `review-retro` handles human review findings.
 - Record tests with `python3 ~/.claude/scripts/verify-run.py --scope <n> -- <cmd>`.
-- Worker briefs name requirements and relevant risks; load risk rows as needed.
 - Under `~/notraffic/`, repository rules become preflight R-rows; pushes use
   author "David David" and the clone's `@notraffic.tech` committer identity.
 - Auto-memory holds repository commands and setup quirks. Obsidian holds
@@ -53,5 +52,5 @@ Project instructions override defaults except under `~/notraffic/`.
 | Implementation, bug, refactor, design | `engineering` |
 | Ongoing work or handoff | `~/.claude/skills/engineering/references/tracking.md` |
 | Shared systems or publishing | `~/.claude/skills/engineering/references/corporate-systems.md` |
-| Workplace prose | `~/.claude/skills/engineering/references/writing.md`; routine drafts inline, substantial edits via `alan-wake` |
+| Workplace prose | `~/.claude/skills/engineering/references/writing.md` |
 | Browser work | `~/.claude/chrome-cdp.md` |
