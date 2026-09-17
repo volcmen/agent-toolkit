@@ -180,10 +180,28 @@ from a five-minute one and the scene never loops:
 | `skyline` | buildings rise with lines added, windows light per tool, crane while a tool runs, night falls with context |
 | `reef` | braille coral per tool, fish = subagents, bleaching on errors |
 | `circuit` | nodes per tool, traces between recent events, pulses while thinking |
+| `sakura` | cherry tree branches per tools, blossoms per prompt, a petal per edited file piling up in a corner |
+| `kana` | halfwidth-katakana rain on the pane edges, columns per tools, trails by context %, sigils spelling prompt words |
+| `shrine` | torii, a stone path step per tool batch, lanterns, tree line by context %, fireflies per prompt |
+| `hangar` | mecha bays per tools, lamps by tool kind, drones per subagent, a PWR gauge from context % |
+| `dojo` | shonen speed lines on the edges, tally marks per prompt, LV ticks, a chibi that trains, sits, or thinks |
+| `hud` | RPG status window whose rows unlock with the session: LV/XP, party, mana, wounds, skills |
 
-`world.lua` bundles all five and picks one from `mood.json` (`motif`) or a
+`world.lua` bundles all eleven and picks one from `mood.json` (`motif`) or a
 hash of the repository name; `sbg fx use office` pins one. Every motif keeps
 under ~25 % coverage and fades the oldest parts when the pane fills.
+
+The six anime motifs (`sakura kana shrine hangar dojo hud`) use only one-cell
+glyphs — ASCII, box drawing, blocks, braille and halfwidth katakana — because
+fullwidth kana and kanji are double-width and would break the grid. Mode words
+appear as halfwidth katakana next to the scene title, kaomoji show up only as
+rare reactions, and the anime tropes map to session states: a power-up aura
+while thinking, an action cut when a tool runs, a freeze frame while waiting, a
+local crimson flash and a lasting scar on error, a contraction that regrows on
+compaction, and a slow drift with a sleepy cue after a minute idle.
+`scripts/world/bundle.py` regenerates `world.lua`; `lua scripts/world/drive.lua`
+checks every motif's coverage and `lua scripts/world/show.lua NAME` prints a
+frame.
 
 **Art director (optional, spends tokens).** `sbg set director=true` lets the
 `UserPromptSubmit` hook spawn `plugin/scripts/sbg_director.py` detached, at

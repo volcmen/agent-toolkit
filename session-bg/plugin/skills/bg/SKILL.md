@@ -84,7 +84,13 @@ like a short one. Growth is monotonic and comes from `state.journey`:
 | `reef` | braille coral | a cluster per ~12 tools, a fish per subagent, plankton by `context_pct`, bleaching on error |
 | `circuit` | etched board | a node per tool coloured by `tool_kind`, traces between consecutive events, pulses while thinking |
 | `office` | side-on studio | a desk per subagent, a floor per ~40 tools, a plant that grows with the diff, the whiteboard scrolls your last prompt |
-| `world` | all five | uses `state.mood.motif`, else `sbg.pick` on the repo name |
+| `sakura` | cherry tree at night | branches per ~6 tools, blossom haze per prompt, a petal per edited file drifting into a corner pile |
+| `kana` | halfwidth-katakana rain | a column per ~15 tools kept to the pane edges, trail length from `context_pct`, a standing sigil per 40 tools spelling your prompt words |
+| `shrine` | torii and stone path | a path step per 5 tools, a lantern per 25, tree line revealed by `context_pct`, fireflies per prompt |
+| `hangar` | mecha maintenance bays | a bay with a docked mech per 30 tools, lamps coloured by `tool_kinds`, drones per subagent, PWR gauge from `context_pct` |
+| `dojo` | shonen training arc | speed lines on the pane edges per 4 tools, tally marks per 5 prompts, LV ticks by `context_pct`, a chibi who trains, sits, or thinks |
+| `hud` | RPG status window | rows unlock per milestone (prompts, tools, files, party, mana, wounds, rests), LV and XP from tools, skills from prompt words |
+| `world` | all eleven | uses `state.mood.motif`, else `sbg.pick` on the repo name |
 
 Across all of them `context_pct` is the time of day (dawn to dusk on the sky
 rows), `mode` drives motion (`thinking` sways, `tool` bursts, `waiting` idles,
@@ -95,7 +101,20 @@ bounded — and the oldest parts fade or scroll off once the pane is full.
 
 `world.lua` is a generated bundle: every motif is the body of its standalone
 `plugins/fx/<motif>.lua` in a closure, because the sandbox has no `require`.
-Edit the standalone file and re-bundle; never hand-edit the copies in it.
+Edit the standalone file, run `python3 scripts/world/bundle.py`, and check
+coverage with `lua scripts/world/drive.lua` (frame preview:
+`lua scripts/world/show.lua NAME [tools] [mode] [W] [H] [ctx_pct]`); never
+hand-edit the copies in it.
+
+The six anime motifs (`sakura kana shrine hangar dojo hud`) share a visual
+language: one-cell glyphs only (ASCII, box drawing, blocks, braille, halfwidth
+katakana U+FF66-FF9F), never fullwidth kana or kanji, which are double-width
+and would corrupt the grid; a row-0 label with the scene title and a
+halfwidth-katakana mode word; ASCII kaomoji `(._.)` `(-_-)` `(>_<)` only as
+rare reactions; `thinking` is an aura or gathering, `tool` an action cut in
++x, `waiting` a freeze frame, `error` a brief local crimson accent then a
+scar, `compacting` a contraction that regrows, `idle` a slow drift with a
+sleepy cue after a minute.
 
 ### Authoring a new animation live
 

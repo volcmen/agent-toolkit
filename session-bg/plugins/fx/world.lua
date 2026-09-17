@@ -1499,6 +1499,2027 @@ end
   return M
 end)()
 
+local Sakura = (function()
+local M = {}
+
+local W, H = 0, 0
+local SEED = 0
+local T = 0.0
+local PT = 0.0
+local SLOW_PT = 0.0
+local GUST = 0.0
+local FUNNEL = 0.0
+local scene = nil
+local sig = ""
+local DRIFT = {}
+local PREV_FLOOR = {}
+
+local PETAL_GLYPHS = { "'", ",", "<", ">", "." }
+local BLOOM_GLYPHS = { "⠁", "⠂", "⠄", "⠈", "⠐", "⠠", "*" }
+local DRIFT_GLYPHS = { ",", ".", "'" }
+
+local MODE_WORD = {
+  thinking = { "ｼ", "ｺ", "ｰ", "ﾁ", "ｭ", "ｰ" },
+  tool = { "ｼ", "ﾞ", "ｯ", "ｺ", "ｰ", "ﾁ", "ｭ", "ｰ" },
+  waiting = { "ｷ", "ｮ", "ｶ", "ﾏ", "ﾞ", "ﾁ" },
+  error = { "ｴ", "ﾏ", "ｰ" },
+  compacting = { "ｾ", "ｰ", "ﾘ", "ﾁ", "ｭ", "ｰ" },
+  idle = { "ｷ", "ｭ", "ｰ", "ｹ", "ｰ" },
+}
+
+local function jnum(v) return tonumber(v) or 0 end
+
+local function jstr(v, fallback)
+  if type(v) == "string" and v ~= "" then return v end
+  return fallback
+end
+
+local function palette(state)
+  local out = {}
+  local mood = state.mood or {}
+  local p = mood.palette
+  if type(p) == "table" then
+    for i = 1, 5 do
+      local s = p[i]
+      if type(s) == "string" and #s >= 7 then
+        local v = tonumber(s:sub(2, 7), 16)
+        if v then out[#out + 1] = { sbg.hex(v) } end
+      end
+    end
+  end
+  if #out < 3 then
+    out = {
+      { sbg.hex(0x14151D) }, { sbg.hex(0x242838) }, { sbg.hex(0x3B4261) },
+      { sbg.hex(0x76566E) }, { sbg.hex(0xA9657D) },
+    }
+  end
+  return out
+end
+
+local function pal(p, i, k)
+  local c = p[((i - 1) % #p) + 1]
+  return sbg.scale(c[1], c[2], c[3], k or 1.0)
+end
+
+local function sky_colour(pct, k)
+  local p = sbg.clamp((tonumber(pct) or 0) / 100.0, 0.0, 1.0)
+  local h, l
+  if p < 0.5 then
+    local u = p * 2.0
+    h, l = sbg.lerp(0.06, 0.55, u), sbg.lerp(0.26, 0.40, u)
+  else
+    local u = (p - 0.5) * 2.0
+    h, l = sbg.lerp(0.55, 0.74, u), sbg.lerp(0.40, 0.22, u)
+  end
+  local r, g, b = sbg.hsl(h, 0.40, l)
+  return sbg.scale(r, g, b, k or 1.0)
+end
+
+local LAST_ERR = ""
+local ERR_AGE = 99.0
+local FRESH_ERR = false
+
+local function track_error(state, dt)
+  local list = (state.journey or {}).recent
+  local fp = nil
+  if type(list) == "table" then
+    for i = #list, math.max(1, #list - 3), -1 do
+      local e = list[i]
+      if type(e) == "table" and e.k == "error" then
+        fp = tostring(e.t) .. "|" .. tostring(e.tool)
+        break
+      end
+    end
+  end
+  if fp ~= nil and fp ~= LAST_ERR then
+    LAST_ERR = fp
+    ERR_AGE = 0.0
+  else
+    ERR_AGE = ERR_AGE + dt
+  end
+  FRESH_ERR = ERR_AGE < 3.0
+  return FRESH_ERR
+end
+
+local function grow(rng, depth, len, ang, left)
+  local b = { len = len, ang = ang, kids = {} }
+  if depth > 0 and left[1] > 0 then
+    local n = 2
+    if depth > 1 and rng:chance(0.4) then n = 3 end
+    for k = 1, n do
+      if left[1] <= 0 then break end
+      left[1] = left[1] - 1
+      local side = (k % 2 == 0) and -1.0 or 1.0
+      if n == 3 and k == 3 then side = 0.12 end
+      local spread = rng:range(0.30, 0.60) * side
+      b.kids[#b.kids + 1] = grow(rng, depth - 1, len * rng:range(0.55, 0.74), spread, left)
+    end
+  end
+  return b
+end
+
+local function sum_files(j)
+  local total = 0
+  if type(j.files) == "table" then
+    for _, v in pairs(j.files) do total = total + jnum(v) end
+  end
+  return total
+end
+
+local function build(state)
+  local j = state.journey or {}
+  local tools = jnum(j.tools)
+  local prompts = jnum(j.prompts)
+  local files = sum_files(j)
+
+  local base_x = 2
+  local base_y = H - 1
+
+  local max_segments = math.min(220, math.max(10, math.floor((W + H) * 1.4)))
+  local segments = math.min(max_segments, 4 + math.floor(tools / 6))
+  local depth = math.floor(sbg.clamp(2 + tools / 50, 2, 6))
+  local trunk_len = sbg.clamp(4 + depth * 2.0, 4, H * 0.68)
+
+  local rng = sbg.rng(sbg.hash(jstr(j.repo, "sbg") .. ":sakura") + SEED)
+  local root = grow(rng, depth, trunk_len, 0.0, { segments })
+
+  local cx = base_x + trunk_len * 0.35
+  local cy = base_y - trunk_len - depth * 1.4
+  local radius = 3 + depth * 1.8
+
+  local max_bloom = math.max(6, math.floor(W * H * 0.045))
+  local bloom_n = math.floor(sbg.clamp(3 + prompts * 1.1, 3, max_bloom))
+  local bloom = {}
+  for i = 1, bloom_n do
+    local a = rng:range(0, 6.283185)
+    local r = rng:range(0, radius)
+    bloom[i] = {
+      x = cx + math.cos(a) * r,
+      y = cy + math.sin(a) * r * 0.55,
+      glyph = BLOOM_GLYPHS[(math.floor(rng:f() * #BLOOM_GLYPHS)) % #BLOOM_GLYPHS + 1],
+      k = rng:range(0.55, 1.0),
+    }
+  end
+
+  local max_petals = math.max(4, math.floor(W * H * 0.03))
+  local petal_n = math.floor(sbg.clamp(4 + files, 4, max_petals))
+  local petals = {}
+  for i = 1, petal_n do
+    petals[i] = {
+      x0 = rng:range(0, W),
+      y0 = rng:range(0, H),
+      speed = rng:range(2.0, 5.0),
+      drift = rng:range(0.25, 0.55),
+      phase = rng:range(0, 6.283185),
+      glyph = PETAL_GLYPHS[(math.floor(rng:f() * #PETAL_GLYPHS)) % #PETAL_GLYPHS + 1],
+    }
+  end
+
+  scene = {
+    root = root,
+    base_x = base_x,
+    base_y = base_y,
+    cx = cx,
+    cy = cy,
+    bloom = bloom,
+    petals = petals,
+  }
+  for i = #PREV_FLOOR, 1, -1 do PREV_FLOOR[i] = nil end
+end
+
+local function signature(state)
+  local j = state.journey or {}
+  return table.concat({
+    jnum(j.tools), jnum(j.prompts), sum_files(j), jstr(j.repo, ""), W, H,
+  }, "/")
+end
+
+local function branch_glyph(sx)
+  if sx > 0.55 then return "_" end
+  if sx > 0.22 then return "╱" end
+  if sx < -0.22 then return "╲" end
+  return "│"
+end
+
+local function put1(fx, x, y, ch, r, g, b)
+  if y >= 1 then fx:put(x, y, ch, r, g, b) end
+end
+
+local function draw_branch(fx, b, x, y, ang, sway, colour, budget, primary_only)
+  if budget[1] <= 0 then return end
+  ang = sbg.clamp(ang, -1.45, 1.45)
+  local n = math.max(1, math.floor(b.len + 0.5))
+  local sx = math.sin(ang)
+  local sy = -math.cos(ang) * 0.6
+  local ch = branch_glyph(sx)
+  local cx, cy = x, y
+  local r, g, bl = colour[1], colour[2], colour[3]
+  for _ = 1, n do
+    cx, cy = cx + sx, cy + sy
+    if budget[1] <= 0 then return end
+    budget[1] = budget[1] - 1
+    put1(fx, math.floor(cx + 0.5), math.floor(cy + 0.5), ch, r, g, bl)
+  end
+  if primary_only then return end
+  for _, kid in ipairs(b.kids) do
+    draw_branch(fx, kid, cx, cy, ang + kid.ang + sway, sway, colour, budget, false)
+  end
+end
+
+function M.init(ctx)
+  W, H = ctx.w, ctx.h
+  SEED = ctx.seed or 0
+  T, PT, SLOW_PT, GUST, FUNNEL = 0.0, 0.0, 0.0, 0.0, 0.0
+  LAST_ERR, ERR_AGE, FRESH_ERR = "", 99.0, false
+  DRIFT = {}
+  PREV_FLOOR = {}
+  scene, sig = nil, ""
+end
+
+function M.step(dt, state)
+  T = T + dt
+  track_error(state, dt)
+  local mode = state.mode
+  if state.changed or scene == nil then
+    local s = signature(state)
+    if s ~= sig then
+      sig = s
+      build(state)
+    end
+  end
+
+  if mode == "waiting" then
+    SLOW_PT = SLOW_PT + dt * 0.6
+  elseif mode == "idle" then
+    PT = PT + dt * 0.5
+  elseif mode ~= "thinking" and mode ~= "compacting" then
+    PT = PT + dt
+  end
+
+  if mode == "tool" then
+    GUST = math.min(1.0, GUST + dt * 2.0)
+  else
+    GUST = math.max(0.0, GUST - dt * 1.4)
+  end
+
+  if mode == "compacting" then
+    FUNNEL = math.min(1.0, FUNNEL + dt * 1.2)
+  else
+    FUNNEL = math.max(0.0, FUNNEL - dt * 0.8)
+  end
+
+  if scene and mode ~= "thinking" and mode ~= "compacting" then
+    local cap = math.max(4, math.floor(W / 3))
+    for i, pt in ipairs(scene.petals) do
+      local speed = pt.speed * (mode == "idle" and 0.5 or 1.0)
+      local clock = (i == 1 and mode == "waiting") and SLOW_PT * pt.speed or PT * speed
+      local y = sbg.wrap(pt.y0 + clock, H)
+      local floory = math.floor(y)
+      local prev = PREV_FLOOR[i]
+      if prev ~= nil and prev ~= H - 1 and floory == H - 1 then
+        DRIFT[#DRIFT + 1] = { glyph = DRIFT_GLYPHS[(sbg.hash(i .. ":" .. math.floor(PT)) % #DRIFT_GLYPHS) + 1] }
+        while #DRIFT > cap do table.remove(DRIFT, 1) end
+      end
+      PREV_FLOOR[i] = floory
+    end
+  end
+end
+
+function M.render(fx, state)
+  if scene == nil or W == 0 or H == 0 then return end
+  local j = state.journey or {}
+  local mode = state.mode
+  local mod = state.mod or {}
+  local p = palette(state)
+  local mood = state.mood or {}
+  local err = (mode == "error") or FRESH_ERR
+
+  local trunk_col = { pal(p, err and 5 or 2, err and 0.35 or 0.42) }
+  local sway = 0.05 * math.sin(T * 0.6)
+  if mode == "thinking" then sway = 0.12 * math.sin(T * 1.3) end
+  local budget = { math.floor(W * H * 0.10) }
+  draw_branch(fx, scene.root, scene.base_x, scene.base_y, sway, sway,
+    trunk_col, budget, mode == "compacting")
+
+  if mode ~= "compacting" then
+    for _, bl in ipairs(scene.bloom) do
+      local r, g, b = pal(p, 4, 0.35 + 0.25 * bl.k)
+      put1(fx, math.floor(bl.x + 0.5), math.floor(bl.y + 0.5), bl.glyph, r, g, b)
+    end
+  end
+
+  if mode == "thinking" then
+    local ocx, ocy = W * 0.62, H * 0.45
+    local orad = math.min(W, H) * 0.16
+    for i, pt in ipairs(scene.petals) do
+      local a = pt.phase + T * 0.35
+      local x = ocx + math.cos(a) * orad
+      local y = ocy + math.sin(a) * orad * 0.5
+      local r, g, b = pal(p, 5, 0.4)
+      put1(fx, math.floor(x + 0.5), math.floor(y + 0.5), pt.glyph, r, g, b)
+    end
+  elseif mode == "compacting" then
+    local tx, ty = W - 2, H - 2
+    for _, pt in ipairs(scene.petals) do
+      local x = sbg.lerp(pt.x0, tx, FUNNEL)
+      local y = sbg.lerp(pt.y0, ty, FUNNEL)
+      local r, g, b = pal(p, 5, 0.30)
+      put1(fx, math.floor(x + 0.5), math.floor(y + 0.5), pt.glyph, r, g, b)
+    end
+  else
+    local dirmul = FRESH_ERR and -1.0 or 1.0
+    local gust_dx = (mod.burst or GUST) * 6.0
+    local errcol = FRESH_ERR
+    for i, pt in ipairs(scene.petals) do
+      local speed = pt.speed * (mode == "idle" and 0.5 or 1.0)
+      local clock = (i == 1 and mode == "waiting") and SLOW_PT * pt.speed or PT * speed
+      if mode == "waiting" and i ~= 1 then clock = 0 end
+      local y = sbg.wrap(pt.y0 + clock, H)
+      local x = sbg.wrap(pt.x0 + clock * pt.drift * dirmul + gust_dx, W)
+      local r, g, b
+      if errcol then
+        r, g, b = sbg.hsl(0.0, 0.55, 0.28)
+      else
+        r, g, b = pal(p, 5, 0.42)
+      end
+      put1(fx, math.floor(x), math.floor(y), pt.glyph, r, g, b)
+    end
+  end
+
+  for i, d in ipairs(DRIFT) do
+    local x = W - 1 - (i - 1)
+    if x < 0 then break end
+    local r, g, b = pal(p, 5, 0.30)
+    fx:put(x, H - 1, d.glyph, r, g, b)
+  end
+
+  if mode == "waiting" and (tonumber(state.age) or 0) > 8 then
+    sbg.text(fx, math.max(0, scene.base_x - 1), math.max(0, math.floor(scene.cy) - 1),
+      "(._.)", pal(p, 3, 0.5))
+  end
+
+  if mode == "idle" and (tonumber(state.age) or 0) > 60 then
+    fx:put(W - 2, 1, "☾", sky_colour(state.context_pct, 1.3))
+  end
+
+  local title = mood.title
+  if type(title) ~= "string" or title == "" then
+    title = "Hanami " .. jstr(j.repo, "unnamed")
+  end
+  local word = table.concat(MODE_WORD[mode] or MODE_WORD.idle)
+  if sbg.text then
+    sbg.text(fx, 1, 0, title .. "  " .. word, pal(p, 5, 0.8))
+  end
+end
+  return M
+end)()
+
+local Kana = (function()
+local M = {}
+
+local W, H = 0, 0
+local SEED = 0
+local T = 0.0
+local RT = 0.0
+local SCAN = 0.0
+local GLITCH = 0.0
+local COLLAPSE = 0.0
+local scene = nil
+local sig = ""
+
+local KANA = {
+  "ｦ", "ｧ", "ｨ", "ｩ", "ｪ", "ｫ", "ｬ", "ｭ", "ｮ", "ｯ", "ｰ",
+  "ｱ", "ｲ", "ｳ", "ｴ", "ｵ", "ｶ", "ｷ", "ｸ", "ｹ", "ｺ",
+  "ｻ", "ｼ", "ｽ", "ｾ", "ｿ", "ﾀ", "ﾁ", "ﾂ", "ﾃ", "ﾄ",
+  "ﾅ", "ﾆ", "ﾇ", "ﾈ", "ﾉ", "ﾊ", "ﾋ", "ﾌ", "ﾍ", "ﾎ",
+  "ﾏ", "ﾐ", "ﾑ", "ﾓ", "ﾔ", "ﾕ", "ﾖ", "ﾗ", "ﾘ", "ﾙ",
+  "ﾚ", "ﾛ", "ﾜ", "ﾝ",
+}
+local DIGITS = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" }
+local GLYPH_POOL = {}
+for _, c in ipairs(KANA) do GLYPH_POOL[#GLYPH_POOL + 1] = c end
+for _, c in ipairs(DIGITS) do GLYPH_POOL[#GLYPH_POOL + 1] = c end
+
+local KANA26 = {
+  "ｱ", "ｲ", "ｳ", "ｴ", "ｵ", "ｶ", "ｷ", "ｸ", "ｹ", "ｺ",
+  "ｻ", "ｼ", "ｽ", "ｾ", "ｿ", "ﾀ", "ﾁ", "ﾂ", "ﾃ", "ﾄ",
+  "ﾅ", "ﾆ", "ﾇ", "ﾈ", "ﾉ", "ﾊ",
+}
+
+local MODE_WORD = {
+  thinking = { "ｼ", "ｺ", "ｰ", "ﾁ", "ｭ", "ｰ" },
+  tool = { "ｼ", "ﾞ", "ｯ", "ｺ", "ｰ", "ﾁ", "ｭ", "ｰ" },
+  waiting = { "ｷ", "ｮ", "ｶ", "ﾏ", "ﾞ", "ﾁ" },
+  error = { "ｴ", "ﾏ", "ｰ" },
+  compacting = { "ｾ", "ｰ", "ﾘ", "ﾁ", "ｭ", "ｰ" },
+  idle = { "ｷ", "ｭ", "ｰ", "ｹ", "ｰ" },
+}
+
+local function jnum(v) return tonumber(v) or 0 end
+
+local function jstr(v, fallback)
+  if type(v) == "string" and v ~= "" then return v end
+  return fallback
+end
+
+local function palette(state)
+  local out = {}
+  local mood = state.mood or {}
+  local p = mood.palette
+  if type(p) == "table" then
+    for i = 1, 5 do
+      local s = p[i]
+      if type(s) == "string" and #s >= 7 then
+        local v = tonumber(s:sub(2, 7), 16)
+        if v then out[#out + 1] = { sbg.hex(v) } end
+      end
+    end
+  end
+  if #out < 3 then
+    out = {
+      { sbg.hex(0x0E1418) }, { sbg.hex(0x172329) }, { sbg.hex(0x21403D) },
+      { sbg.hex(0x315B54) }, { sbg.hex(0x47796D) },
+    }
+  end
+  return out
+end
+
+local function pal(p, i, k)
+  local c = p[((i - 1) % #p) + 1]
+  return sbg.scale(c[1], c[2], c[3], k or 1.0)
+end
+
+local LAST_ERR = ""
+local ERR_AGE = 99.0
+local FRESH_ERR = false
+
+local function track_error(state, dt)
+  local list = (state.journey or {}).recent
+  local fp = nil
+  if type(list) == "table" then
+    for i = #list, math.max(1, #list - 3), -1 do
+      local e = list[i]
+      if type(e) == "table" and e.k == "error" then
+        fp = tostring(e.t) .. "|" .. tostring(e.tool)
+        break
+      end
+    end
+  end
+  if fp ~= nil and fp ~= LAST_ERR then
+    LAST_ERR = fp
+    ERR_AGE = 0.0
+  else
+    ERR_AGE = ERR_AGE + dt
+  end
+  FRESH_ERR = ERR_AGE < 3.0
+  return FRESH_ERR
+end
+
+local function words_of_journey(j)
+  local out = {}
+  local w = j.words
+  if type(w) == "table" then
+    for k, v in pairs(w) do
+      if type(k) == "string" then
+        out[#out + 1] = k
+      elseif type(v) == "string" then
+        out[#out + 1] = v
+      end
+    end
+  end
+  table.sort(out)
+  return out
+end
+
+local function transliterate(word)
+  local out = {}
+  for i = 1, math.min(6, #word) do
+    local c = word:byte(i)
+    if c >= 97 and c <= 122 then
+      out[#out + 1] = KANA26[c - 96]
+    end
+  end
+  return out
+end
+
+local function build(state)
+  local j = state.journey or {}
+  local tools = jnum(j.tools)
+
+  local max_cols = math.max(1, math.floor(W / 6))
+  local col_n = math.min(max_cols, 3 + math.floor(tools / 15))
+  local rng = sbg.rng(sbg.hash(jstr(j.repo, "sbg") .. ":kana") + SEED)
+  local cols = {}
+  for i = 1, col_n do
+    local edge_left = rng:chance(0.5)
+    local x
+    if edge_left then
+      x = rng:below(math.max(1, math.floor(W * 0.25)))
+    else
+      x = W - 1 - rng:below(math.max(1, math.floor(W * 0.25)))
+    end
+    cols[i] = {
+      x = x,
+      edge = edge_left and "left" or "right",
+      phase = rng:range(0, 30.0),
+      speed = rng:range(3.0, 6.0),
+      glyphs = {},
+    }
+    local trail = 4 + math.floor(sbg.clamp((tonumber(state.context_pct) or 0), 0, 100) / 12)
+    for t = 1, trail + 2 do
+      cols[i].glyphs[t] = GLYPH_POOL[(sbg.hash(i .. ":" .. t) % #GLYPH_POOL) + 1]
+    end
+  end
+
+  local words = words_of_journey(j)
+  local sig_n = math.min(6, math.floor(tools / 40))
+  local sigils = {}
+  for i = 1, sig_n do
+    local w = words[((i - 1) % math.max(1, #words)) + 1] or "sbg"
+    local letters = transliterate(w)
+    if #letters == 0 then letters = { KANA26[(i % 26) + 1] } end
+    local edge_left = i % 2 == 0
+    local x = edge_left and (1 + (i % 3)) or (W - 2 - (i % 3))
+    sigils[i] = {
+      x = x,
+      letters = letters,
+      age_rank = i,
+    }
+  end
+
+  scene = {
+    cols = cols,
+    sigils = sigils,
+  }
+end
+
+local function signature(state)
+  local j = state.journey or {}
+  local words = words_of_journey(j)
+  return table.concat({
+    jnum(j.tools), table.concat(words, ","), jstr(j.repo, ""),
+    math.floor(sbg.clamp((tonumber(state.context_pct) or 0), 0, 100) / 12), W, H,
+  }, "/")
+end
+
+function M.init(ctx)
+  W, H = ctx.w, ctx.h
+  SEED = ctx.seed or 0
+  T, RT, SCAN, GLITCH, COLLAPSE = 0.0, 0.0, 0.0, 0.0, 0.0
+  LAST_ERR, ERR_AGE, FRESH_ERR = "", 99.0, false
+  scene, sig = nil, ""
+end
+
+function M.step(dt, state)
+  T = T + dt
+  track_error(state, dt)
+  local mode = state.mode
+  if state.changed or scene == nil then
+    local s = signature(state)
+    if s ~= sig then
+      sig = s
+      build(state)
+    end
+  end
+
+  if mode ~= "waiting" then
+    local factor = 1.0
+    if mode == "idle" then factor = 0.5 end
+    RT = RT + dt * factor
+  end
+
+  if mode == "tool" then
+    SCAN = math.min(1.0, SCAN + dt / 0.8)
+  else
+    SCAN = math.max(0.0, SCAN - dt * 1.6)
+  end
+
+  if mode == "compacting" then
+    COLLAPSE = math.min(1.0, COLLAPSE + dt * 1.1)
+  else
+    COLLAPSE = math.max(0.0, COLLAPSE - dt * 0.8)
+  end
+
+  GLITCH = FRESH_ERR and 1.0 or math.max(0.0, GLITCH - dt * 2.0)
+end
+
+local function put1(fx, x, y, ch, r, g, b)
+  if y >= 1 then fx:put(x, y, ch, r, g, b) end
+end
+
+function M.render(fx, state)
+  if scene == nil or W == 0 or H == 0 then return end
+  local j = state.journey or {}
+  local mode = state.mode
+  local mod = state.mod or {}
+  local p = palette(state)
+  local age = tonumber(state.age) or 0
+
+  local bg = { pal(p, 1, 0.5) }
+
+  if COLLAPSE > 0.02 then
+    local bandw = math.max(1, math.floor(W * 0.06))
+    local x0 = W - bandw
+    for i, c in ipairs(scene.cols) do
+      local tx = x0 + ((i - 1) % bandw)
+      local x = sbg.lerp(c.x, tx, COLLAPSE)
+      local ch = (i % 2 == 0) and "│" or "┆"
+      for row = 1, 6 do
+        local y = math.floor(sbg.wrap(RT * c.speed * 0.4 + row * 2 + c.phase, H))
+        put1(fx, math.floor(x + 0.5), y, ch, bg[1], bg[2], bg[3])
+      end
+    end
+  else
+    for ci, c in ipairs(scene.cols) do
+      if mode ~= "idle" or ci % 2 == 0 then
+        local speed = c.speed
+        if mode == "thinking" and c.edge == "right" then speed = speed * 1.5 end
+        if mode == "idle" then speed = speed * 0.5 end
+        local trail = #c.glyphs
+        local head = RT * speed + c.phase
+        local head_r, head_g, head_b = pal(p, 4, 0.5)
+        for t = 0, trail - 1 do
+          local y = math.floor(sbg.wrap(head - t * 1.4, H))
+          local glyph = c.glyphs[t + 1]
+          local k = 1.0 - (t / trail)
+          local r, g, b
+          if GLITCH > 0.05 and ci == 1 then
+            r, g, b = sbg.hsl(0.0, 0.5, 0.22 * GLITCH + 0.05)
+            glyph = ({ "x", "/", "\\" })[(t % 3) + 1]
+          else
+            r, g, b = sbg.mix(bg[1], bg[2], bg[3], head_r, head_g, head_b, k)
+          end
+          put1(fx, c.x, y, glyph, r, g, b)
+        end
+        if mode == "waiting" then
+          local blink = math.floor(T * 2.0) % 2
+          if blink == 0 then
+            local y = math.floor(sbg.wrap(head, H))
+            put1(fx, c.x, y, "?", pal(p, 5, 0.6))
+          end
+        end
+      end
+    end
+  end
+
+  if SCAN > 0.02 then
+    local rng = sbg.rng(SEED + math.floor(T * 1.7))
+    local sx = rng:below(math.max(1, W))
+    local y = math.floor((1.0 - SCAN) * H)
+    local r, g, b = pal(p, 5, 0.55)
+    put1(fx, sx, y, GLYPH_POOL[(sbg.hash(sx) % #GLYPH_POOL) + 1], r, g, b)
+  end
+
+  for _, s in ipairs(scene.sigils) do
+    local fade = 0.30 + 0.5 * (s.age_rank / math.max(1, #scene.sigils))
+    local r, g, b = pal(p, 3, fade)
+    for i, ch in ipairs(s.letters) do
+      local y = 2 + i
+      if y < H - 1 then
+        put1(fx, s.x, y, ch, r, g, b)
+      end
+    end
+  end
+
+  if mode == "idle" and age > 60 then
+    sbg.text(fx, math.max(0, W - 4), H - 2, "zz", pal(p, 3, 0.30))
+  end
+
+  local title = (state.mood or {}).title
+  if type(title) ~= "string" or title == "" then
+    title = "Rain " .. jstr(j.repo, "unnamed")
+  end
+  local word = table.concat(MODE_WORD[mode] or MODE_WORD.idle)
+  if sbg.text then
+    sbg.text(fx, 1, 0, title .. "  " .. word, pal(p, 5, 0.75))
+  end
+end
+  return M
+end)()
+
+local Shrine = (function()
+local M = {}
+
+local W, H = 0, 0
+local SEED = 0
+local T = 0.0
+local COMPACT = 0.0
+local scene = nil
+local sig = ""
+
+local KANA_THINK = { "ｼ", "ｺ", "ｰ", "ﾁ", "ｭ", "ｰ" }
+local KANA_TOOL = { "ｼ", "ﾞ", "ｯ", "ｺ", "ｰ", "ﾁ", "ｭ", "ｰ" }
+local KANA_WAIT = { "ｷ", "ｮ", "ｶ", "ﾏ", "ﾞ", "ﾁ" }
+local KANA_ERR = { "ｴ", "ﾏ", "ｰ" }
+local KANA_COMPACT = { "ｾ", "ｰ", "ﾘ", "ﾁ", "ｭ", "ｰ" }
+local KANA_IDLE = { "ｷ", "ｭ", "ｰ", "ｹ", "ｰ" }
+
+local function jnum(v) return tonumber(v) or 0 end
+
+local function jstr(v, fallback)
+  if type(v) == "string" and v ~= "" then return v end
+  return fallback
+end
+
+local function palette(state)
+  local out = {}
+  local mood = state.mood or {}
+  local p = mood.palette
+  if type(p) == "table" then
+    for i = 1, 5 do
+      local s = p[i]
+      if type(s) == "string" and #s >= 7 then
+        local v = tonumber(s:sub(2, 7), 16)
+        if v then out[#out + 1] = { sbg.hex(v) } end
+      end
+    end
+  end
+  if #out < 3 then
+    out = {
+      { sbg.hex(0x10131A) }, { sbg.hex(0x1D2431) }, { sbg.hex(0x303E54) },
+      { sbg.hex(0x59454B) }, { sbg.hex(0x78464C) },
+    }
+  end
+  return out
+end
+
+local function pal(p, i, k)
+  local c = p[((i - 1) % #p) + 1]
+  return sbg.scale(c[1], c[2], c[3], k or 1.0)
+end
+
+local function sky_colour(pct, k)
+  local p = sbg.clamp((tonumber(pct) or 0) / 100.0, 0.0, 1.0)
+  local h, l
+  if p < 0.5 then
+    local u = p * 2.0
+    h, l = sbg.lerp(0.06, 0.55, u), sbg.lerp(0.26, 0.40, u)
+  else
+    local u = (p - 0.5) * 2.0
+    h, l = sbg.lerp(0.55, 0.74, u), sbg.lerp(0.40, 0.22, u)
+  end
+  local r, g, b = sbg.hsl(h, 0.40, l)
+  return sbg.scale(r, g, b, k or 1.0)
+end
+
+local LAST_ERR = ""
+local ERR_AGE = 99.0
+local FRESH_ERR = false
+
+local function track_error(state, dt)
+  local list = (state.journey or {}).recent
+  local fp = nil
+  if type(list) == "table" then
+    for i = #list, math.max(1, #list - 3), -1 do
+      local e = list[i]
+      if type(e) == "table" and e.k == "error" then
+        fp = tostring(e.t) .. "|" .. tostring(e.tool)
+        break
+      end
+    end
+  end
+  if fp ~= nil and fp ~= LAST_ERR then
+    LAST_ERR = fp
+    ERR_AGE = 0.0
+  else
+    ERR_AGE = ERR_AGE + dt
+  end
+  FRESH_ERR = ERR_AGE < 3.0
+  return FRESH_ERR
+end
+
+local function build(state)
+  local j = state.journey or {}
+  local tools = jnum(j.tools)
+  local ctx = sbg.clamp((tonumber(state.context_pct) or 0) / 100.0, 0, 1)
+
+  local gate_h = math.max(5, math.floor(H * 0.30))
+  local gy = H - 1
+  local gx = math.max(3, math.floor(W * 0.10))
+
+  local steps = math.min(W, 1 + math.floor(tools / 5))
+  local path_len = math.max(1, W - gx - 3)
+  steps = math.min(steps, path_len)
+
+  local layers = {}
+  local seg = math.min(4, 1 + math.floor(sbg.clamp(ctx, 0, 1) * 4))
+  local tool_layers = math.min(4, math.floor(tools / 60))
+  layers = math.max(seg, tool_layers)
+  layers = sbg.clamp(layers, 0, 4)
+
+  local posts = math.min(8, math.floor(tools / 25))
+  local post_pos = {}
+  for i = 1, posts do
+    local frac = i / (posts + 1)
+    post_pos[i] = gx + 2 + math.floor(frac * path_len)
+  end
+
+  scene = {
+    gate_h = gate_h,
+    gy = gy,
+    gx = gx,
+    steps = steps,
+    path_len = path_len,
+    layers = layers,
+    posts = post_pos,
+    fireflies = math.min(math.floor(W * H * 0.02), 3 + math.floor(jnum(j.prompts))),
+  }
+end
+
+local function signature(state)
+  local j = state.journey or {}
+  return table.concat({
+    jnum(j.tools), jnum(j.prompts), jnum(j.errors),
+    math.floor(sbg.clamp((tonumber(state.context_pct) or 0) / 25.0, 0, 4)), W, H,
+  }, "/")
+end
+
+local function kana_for(mode)
+  if mode == "thinking" then return KANA_THINK end
+  if mode == "tool" then return KANA_TOOL end
+  if mode == "waiting" then return KANA_WAIT end
+  if mode == "error" then return KANA_ERR end
+  if mode == "compacting" then return KANA_COMPACT end
+  return KANA_IDLE
+end
+
+function M.init(ctx)
+  W, H = ctx.w, ctx.h
+  SEED = ctx.seed or 0
+  T = 0.0
+  COMPACT = 0.0
+  LAST_ERR, ERR_AGE, FRESH_ERR = "", 99.0, false
+  scene, sig = nil, ""
+end
+
+function M.step(dt, state)
+  T = T + dt
+  track_error(state, dt)
+  if state.mode == "compacting" then
+    COMPACT = math.min(1.0, COMPACT + dt * 1.5)
+  else
+    COMPACT = math.max(0.0, COMPACT - dt * 0.6)
+  end
+  if state.changed or scene == nil then
+    local s = signature(state)
+    if s ~= sig then
+      sig = s
+      build(state)
+    end
+  end
+end
+
+function M.render(fx, state)
+  if scene == nil or W == 0 or H == 0 then return end
+  local j = state.journey or {}
+  local mode = state.mode
+  local mod = state.mod or {}
+  local p = palette(state)
+  local mood = state.mood or {}
+
+  local title = mood.title
+  if type(title) ~= "string" or title == "" then
+    title = "Jinja " .. jstr(j.repo, "unnamed")
+  end
+  local kana = kana_for(mode)
+  local status = title .. "  " .. table.concat(kana)
+  if sbg.text then
+    sbg.text(fx, 1, 0, status, pal(p, 5, 0.85))
+  end
+
+  local gx, gy, gh = scene.gx, scene.gy, scene.gate_h
+  local err = (mode == "error") or FRESH_ERR
+  local gr, gg, gb = pal(p, 5, 0.55)
+  if err then
+    local er, eg, eb = sbg.hsl(0.98, 0.55, 0.42)
+    gr, gg, gb = er, eg, eb
+  end
+
+  local top_y = math.max(0, gy - gh)
+  fx:put(gx - 1, top_y, "╭", gr, gg, gb)
+  fx:put(gx + 5, top_y, "╮", gr, gg, gb)
+  for x = gx, gx + 4 do
+    fx:put(x, top_y, "━", gr, gg, gb)
+  end
+  local beam2_y = top_y + 1
+  if beam2_y < gy then
+    for x = gx - 2, gx + 6 do
+      if x >= 0 and x < W then fx:put(x, beam2_y, "═", gr, gg, gb) end
+    end
+  end
+  local pr1, pr2, pr3 = pal(p, 5, 0.45)
+  for y = top_y + 2, gy do
+    fx:put(gx, y, "┃", pr1, pr2, pr3)
+    fx:put(gx + 4, y, "┃", pr1, pr2, pr3)
+  end
+
+  if mode == "waiting" and (tonumber(state.age) or 0) > 8 then
+    if sbg.text then sbg.text(fx, gx - 4, gy - 1, "(-_-)", pal(p, 4, 0.5)) end
+  end
+
+  local layer_y0 = math.max(0, top_y - 8)
+  local layer_y1 = math.max(0, top_y - 1)
+  local tr, tg, tb = pal(p, 3, 0.5)
+  local shown_layers = math.floor(math.max(1, scene.layers) * (1.0 - COMPACT) + 0.5)
+  for li = 1, shown_layers do
+    local y = layer_y1 - (li - 1)
+    if y >= layer_y0 then
+      local fade = (1.0 - (shown_layers - li) * 0.15) * (1.0 - COMPACT)
+      for x = 0, W - 1, 2 do
+        local n = sbg.noise2(x * 0.15 + li * 3.1, T * 0.02)
+        if n > -0.15 then
+          local mask = 1 + (math.floor(sbg.clamp((n + 1) * 4, 0, 7)))
+          local ch = sbg.glyphs.braille[mask]
+          fx:put(x, y, ch, sbg.scale(tr, tg, tb, math.max(0.2, fade)))
+        end
+      end
+    end
+  end
+
+  local dot_r, dot_g, dot_b = pal(p, 2, 0.4)
+  for s = 1, scene.steps do
+    local x = gx + 1 + s
+    if x >= W then break end
+    local age_fade = 1.0
+    if s > scene.steps - 3 then
+      age_fade = 0.5 + 0.5 * (scene.steps - s) / 3.0
+    end
+    local ch = (s % 3 == 0) and "▪" or ((s % 2 == 0) and "∙" or "·")
+    fx:put(x, gy, ch, sbg.scale(dot_r, dot_g, dot_b, age_fade))
+  end
+
+  if mode == "tool" then
+    local marker_s = math.max(1, math.min(scene.steps, math.floor(scene.steps * (1.0 - (mod.burst or 0)))))
+    local mx = gx + 1 + marker_s
+    if mx < W then
+      fx:put(mx, gy - 1, "▸", pal(p, 4, 0.6))
+    end
+  end
+
+  local lr, lg, lb = sbg.hsl(0.10, 0.55, 0.42)
+  for i, x in ipairs(scene.posts) do
+    if x < W then
+      fx:put(x, gy - 1, "┬", pal(p, 3, 0.45))
+      local bright = 0.35
+      if mode == "tool" and i == #scene.posts then
+        bright = 0.35 + 0.5 * (mod.burst or 0)
+      end
+      fx:put(x, gy - 2, "▣", sbg.scale(lr, lg, lb, bright))
+    end
+  end
+
+  local nff = scene.fireflies
+  local gather = (mode == "thinking")
+  for i = 1, nff do
+    local seed_i = SEED + i * 733
+    local bx = (sbg.hash(tostring(seed_i)) % math.max(1, W))
+    local by_base = math.max(0, gy - 6 - (sbg.hash(tostring(seed_i + 1)) % 6))
+    local nx = sbg.noise2(i * 0.7, T * 0.3)
+    local ny = sbg.noise2(i * 0.7 + 50.0, T * 0.3)
+    local x, y
+    if gather then
+      local tx = gx + 1 + scene.steps
+      x = sbg.wrap(tx + nx * 3.0, W)
+      y = math.max(0, gy - 1 + ny * 2.0)
+    else
+      x = sbg.wrap(bx + nx * 4.0, W)
+      y = math.max(0, by_base + ny * 2.0)
+    end
+    local ch = (i % 2 == 0) and "·" or "."
+    local blink = 0.4 + 0.4 * (0.5 + 0.5 * math.sin(T * 2.0 + i))
+    fx:put(math.floor(x), math.floor(y), ch, sbg.hsl(0.16, 0.5, 0.30 * blink + 0.1))
+  end
+
+  if mode == "idle" and (tonumber(state.age) or 0) > 60 then
+    fx:put(math.min(W - 1, gx + 6), math.max(0, top_y - 6), "☾", sky_colour(state.context_pct, 1.2))
+  end
+end
+  return M
+end)()
+
+local Hangar = (function()
+local M = {}
+
+local W, H = 0, 0
+local SEED = 0
+local T = 0.0
+local scene = nil
+local sig = ""
+
+local KANA_THINK = { "ｼ", "ｺ", "ｰ", "ﾁ", "ｭ", "ｰ" }
+local KANA_TOOL = { "ｼ", "ﾞ", "ｯ", "ｺ", "ｰ", "ﾁ", "ｭ", "ｰ" }
+local KANA_WAIT = { "ｷ", "ｮ", "ｶ", "ﾏ", "ﾞ", "ﾁ" }
+local KANA_ERR = { "ｴ", "ﾏ", "ｰ" }
+local KANA_COMPACT = { "ｾ", "ｰ", "ﾘ", "ﾁ", "ｭ", "ｰ" }
+local KANA_IDLE = { "ｷ", "ｭ", "ｰ", "ｹ", "ｰ" }
+
+local function jnum(v) return tonumber(v) or 0 end
+
+local function jstr(v, fallback)
+  if type(v) == "string" and v ~= "" then return v end
+  return fallback
+end
+
+local function palette(state)
+  local out = {}
+  local mood = state.mood or {}
+  local p = mood.palette
+  if type(p) == "table" then
+    for i = 1, 5 do
+      local s = p[i]
+      if type(s) == "string" and #s >= 7 then
+        local v = tonumber(s:sub(2, 7), 16)
+        if v then out[#out + 1] = { sbg.hex(v) } end
+      end
+    end
+  end
+  if #out < 3 then
+    out = {
+      { sbg.hex(0x0D1217) }, { sbg.hex(0x1A2530) }, { sbg.hex(0x30414E) },
+      { sbg.hex(0x4E6D60) }, { sbg.hex(0x81694A) },
+    }
+  end
+  return out
+end
+
+local function pal(p, i, k)
+  local c = p[((i - 1) % #p) + 1]
+  return sbg.scale(c[1], c[2], c[3], k or 1.0)
+end
+
+local function sky_colour(pct, k)
+  local p = sbg.clamp((tonumber(pct) or 0) / 100.0, 0.0, 1.0)
+  local h, l
+  if p < 0.5 then
+    local u = p * 2.0
+    h, l = sbg.lerp(0.06, 0.55, u), sbg.lerp(0.26, 0.40, u)
+  else
+    local u = (p - 0.5) * 2.0
+    h, l = sbg.lerp(0.55, 0.74, u), sbg.lerp(0.40, 0.22, u)
+  end
+  local r, g, b = sbg.hsl(h, 0.40, l)
+  return sbg.scale(r, g, b, k or 1.0)
+end
+
+local LAST_ERR = ""
+local ERR_AGE = 99.0
+local FRESH_ERR = false
+
+local function track_error(state, dt)
+  local list = (state.journey or {}).recent
+  local fp = nil
+  if type(list) == "table" then
+    for i = #list, math.max(1, #list - 3), -1 do
+      local e = list[i]
+      if type(e) == "table" and e.k == "error" then
+        fp = tostring(e.t) .. "|" .. tostring(e.tool)
+        break
+      end
+    end
+  end
+  if fp ~= nil and fp ~= LAST_ERR then
+    LAST_ERR = fp
+    ERR_AGE = 0.0
+  else
+    ERR_AGE = ERR_AGE + dt
+  end
+  FRESH_ERR = ERR_AGE < 3.0
+  return FRESH_ERR
+end
+
+local function build(state)
+  local j = state.journey or {}
+  local tools = jnum(j.tools)
+  local kinds = j.tool_kinds or {}
+
+  local top_y = math.max(1, math.floor(H * 0.14))
+  local bot_y = math.min(H - 2, H - 1 - math.floor(H * 0.14))
+  local bay_h = math.min(5, math.max(3, bot_y - top_y - 1))
+  local bay_y0 = math.max(top_y + 1, math.floor((top_y + bot_y) / 2) - math.floor(bay_h / 2))
+  local bay_y1 = math.min(bot_y - 1, bay_y0 + bay_h)
+
+  local bay_w = 8
+  local max_bays = math.max(1, math.floor((W - 4) / bay_w))
+  local total_bays = math.floor(tools / 30) + 1
+  local shown = math.min(max_bays, total_bays)
+  local first = total_bays - shown
+
+  local bays = {}
+  for i = 0, shown - 1 do
+    local idx = first + i
+    local x = 2 + i * bay_w
+    if x + 6 <= W then
+      local age = total_bays - 1 - idx
+      bays[#bays + 1] = {
+        x = x,
+        idx = idx,
+        newest = idx == total_bays - 1,
+        fade = math.max(0.35, 1.0 - age * 0.15),
+      }
+    end
+  end
+
+  local subs = math.floor(sbg.clamp(jnum(j.subagents), 0, 6))
+
+  local total_kind = jnum(kinds.exec) + jnum(kinds.edit) + jnum(kinds.read) + jnum(kinds.web) + 0.0001
+  scene = {
+    top_y = top_y,
+    bot_y = bot_y,
+    bay_y0 = bay_y0,
+    bay_y1 = bay_y1,
+    bays = bays,
+    total_bays = total_bays,
+    subs = subs,
+    lamp_mix = {
+      exec = jnum(kinds.exec) / total_kind,
+      edit = jnum(kinds.edit) / total_kind,
+      read = jnum(kinds.read) / total_kind,
+      web = jnum(kinds.web) / total_kind,
+    },
+    errors = math.min(6, jnum(j.errors)),
+  }
+end
+
+local function signature(state)
+  local j = state.journey or {}
+  local kinds = j.tool_kinds or {}
+  return table.concat({
+    jnum(j.tools), jnum(j.subagents), jnum(j.errors),
+    jnum(kinds.exec), jnum(kinds.edit), jnum(kinds.read), jnum(kinds.web), W, H,
+  }, "/")
+end
+
+local function kana_for(mode)
+  if mode == "thinking" then return KANA_THINK end
+  if mode == "tool" then return KANA_TOOL end
+  if mode == "waiting" then return KANA_WAIT end
+  if mode == "error" then return KANA_ERR end
+  if mode == "compacting" then return KANA_COMPACT end
+  return KANA_IDLE
+end
+
+function M.init(ctx)
+  W, H = ctx.w, ctx.h
+  SEED = ctx.seed or 0
+  T = 0.0
+  LAST_ERR, ERR_AGE, FRESH_ERR = "", 99.0, false
+  scene, sig = nil, ""
+end
+
+function M.step(dt, state)
+  T = T + dt
+  track_error(state, dt)
+  if state.changed or scene == nil then
+    local s = signature(state)
+    if s ~= sig then
+      sig = s
+      build(state)
+    end
+  end
+end
+
+function M.render(fx, state)
+  if scene == nil or W == 0 or H == 0 then return end
+  local j = state.journey or {}
+  local mode = state.mode
+  local mod = state.mod or {}
+  local p = palette(state)
+  local mood = state.mood or {}
+
+  local title = mood.title
+  if type(title) ~= "string" or title == "" then
+    title = "Bay " .. jstr(j.repo, "unnamed")
+  end
+  local pct = sbg.clamp((tonumber(state.context_pct) or 0) / 100.0, 0, 1)
+  local bars = math.floor(pct * 5 + 0.5)
+  local pwr = "PWR "
+  for i = 1, 5 do
+    pwr = pwr .. (i <= bars and "\226\150\147" or "\226\150\145")
+  end
+  local kana = kana_for(mode)
+  local status = title .. "  " .. pwr .. "  " .. table.concat(kana)
+  if sbg.text then
+    sbg.text(fx, 1, 0, status, pal(p, 5, 0.85))
+  end
+
+  local rail_r, rail_g, rail_b = pal(p, 3, 0.4)
+  local tick = math.floor(T * 6.0) % (2 * math.max(1, W))
+  for x = 0, W - 1 do
+    if x % 2 == 0 then
+      fx:put(x, scene.top_y, "\226\149\170", rail_r, rail_g, rail_b)
+      fx:put(x, scene.bot_y, "\226\148\128", rail_r, rail_g, rail_b)
+    end
+  end
+
+  if mode == "tool" then
+    local burst = mod.burst or 0
+    if burst > 0.05 then
+      local travel = sbg.wrap(T * 24.0, W)
+      local bx = math.floor(travel)
+      local ch = (bx % 2 == 0) and "=" or ">"
+      fx:put(bx, scene.top_y, ch, sbg.scale(rail_r, rail_g, rail_b, 1.6 * burst + 0.4))
+    end
+  end
+
+  local shutter = (mode == "compacting")
+
+  for _, bay in ipairs(scene.bays) do
+    local br, bg, bb = pal(p, 2, 0.5 * bay.fade)
+    local x, y0, y1 = bay.x, scene.bay_y0, scene.bay_y1
+    if y1 - y0 >= 2 then
+      local ring = mode == "thinking" and bay.newest
+      local tl, tr_, bl, br_ = "\226\148\140", "\226\148\144", "\226\148\148", "\226\148\152"
+      if ring and math.floor(T * 3.0) % 2 == 0 then
+        tl, tr_, bl, br_ = "\226\149\148", "\226\149\151", "\226\149\154", "\226\149\157"
+      end
+      if shutter then
+        fx:put(x + 2, y0, "\226\148\128", br, bg, bb)
+        fx:put(x + 2, y1, "\226\148\128", br, bg, bb)
+      else
+        fx:put(x, y0, tl, br, bg, bb)
+        fx:put(x + 4, y0, tr_, br, bg, bb)
+        fx:put(x, y1, bl, br, bg, bb)
+        fx:put(x + 4, y1, br_, br, bg, bb)
+        for xx = x + 1, x + 3 do
+          fx:put(xx, y0, "\226\148\128", br, bg, bb)
+          fx:put(xx, y1, "\226\148\128", br, bg, bb)
+        end
+        for yy = y0 + 1, y1 - 1 do
+          fx:put(x, yy, "\226\148\130", br, bg, bb)
+          fx:put(x + 4, yy, "\226\148\130", br, bg, bb)
+        end
+
+        local mr, mg, mb = sbg.hsl(0.60, 0.15, 0.32 * bay.fade)
+        local midy = math.floor((y0 + y1) / 2)
+        fx:put(x + 1, midy - 1, "\226\150\159", mr, mg, mb)
+        fx:put(x + 2, midy - 1, "\226\150\136", mr, mg, mb)
+        fx:put(x + 3, midy - 1, "\226\150\153", mr, mg, mb)
+        fx:put(x + 1, midy, "\226\150\144", mr, mg, mb)
+        fx:put(x + 3, midy, "\226\150\140", mr, mg, mb)
+        fx:put(x + 2, midy + 1, "=", mr, mg, mb)
+
+        local mix = scene.lamp_mix
+        local lr, lg, lb
+        if mix.exec >= mix.edit and mix.exec >= mix.read and mix.exec >= mix.web then
+          lr, lg, lb = sbg.hsl(0.35, 0.55, 0.38)
+        elseif mix.edit >= mix.read and mix.edit >= mix.web then
+          lr, lg, lb = sbg.hsl(0.10, 0.55, 0.38)
+        elseif mix.read >= mix.web then
+          lr, lg, lb = sbg.hsl(0.58, 0.55, 0.38)
+        else
+          lr, lg, lb = sbg.hsl(0.50, 0.55, 0.38)
+        end
+        local lamp_ch = "\226\151\139"
+        if mode == "idle" then
+          local blink = math.floor(T * 0.8 + bay.idx) % 4
+          lamp_ch = (blink ~= 0) and "\226\151\139" or "\226\128\162"
+        end
+        fx:put(x + 1, y1 - 1, lamp_ch, sbg.scale(lr, lg, lb, bay.fade))
+
+        if bay.newest and mode == "error" and scene.errors > 0 then
+          fx:put(x + 3, y1 - 1, "x", sbg.hsl(0.98, 0.6, 0.42))
+        elseif bay.newest and FRESH_ERR then
+          fx:put(x + 3, y1 - 1, "x", sbg.hsl(0.98, 0.6, 0.42))
+        elseif bay.newest and scene.errors > 0 then
+          fx:put(x + 3, y1 - 1, "x", sbg.hsl(0.98, 0.25, 0.22))
+        end
+
+        if bay.newest and mode == "waiting" then
+          if sbg.text then sbg.text(fx, x + 5, midy, "HOLD", sbg.hsl(0.10, 0.5, 0.4)) end
+        end
+
+        if bay.newest and mode == "idle" and (tonumber(state.age) or 0) > 60 then
+          fx:put(x + 2, y0 - 1, "z", sbg.hsl(0.55, 0.2, 0.3))
+          fx:put(x + 3, y0 - 2, "z", sbg.hsl(0.55, 0.2, 0.28))
+        end
+      end
+    end
+  end
+
+  local dr, dg, db = pal(p, 4, 0.4)
+  for i = 1, scene.subs do
+    local x = sbg.wrap(math.floor(T * (3 + i) + i * 17), W)
+    local y = scene.top_y + 1 + (i % math.max(1, scene.bot_y - scene.top_y - 1))
+    local ch = (i % 2 == 0) and "*" or "+"
+    fx:put(x, y, ch, dr, dg, db)
+  end
+end
+  return M
+end)()
+
+local Dojo = (function()
+local M = {}
+
+local W, H = 0, 0
+local SEED = 0
+local T = 0.0
+local ERR_FLASH = 0.0
+local WIPE = 0.0
+local scene = nil
+local sig = ""
+
+local KANA_THINK = { "ｼ", "ｺ", "ｰ", "ﾁ", "ｭ", "ｰ" }
+local KANA_TOOL = { "ｼ", "ﾞ", "ｯ", "ｺ", "ｰ", "ﾁ", "ｭ", "ｰ" }
+local KANA_WAIT = { "ｷ", "ｮ", "ｶ", "ﾏ", "ﾞ", "ﾁ" }
+local KANA_ERR = { "ｴ", "ﾏ", "ｰ" }
+local KANA_COMPACT = { "ｾ", "ｰ", "ﾘ", "ﾁ", "ｭ", "ｰ" }
+local KANA_IDLE = { "ｷ", "ｭ", "ｰ", "ｹ", "ｰ" }
+
+local SPEED_GLYPHS = { "/", "\\", "-", "=", ">", "<", "|" }
+
+local CHIBI_STAND = { " o ", "/|\\" }
+local CHIBI_RUN_A = { "o/ ", "/> " }
+local CHIBI_RUN_B = { " o ", "\\|/" }
+local CHIBI_SIT = { " o ", "_|_" }
+local CHIBI_THINK = { "o? ", "/| " }
+local CHIBI_ERR = { ">_<", "/ \\" }
+
+local function jnum(v) return tonumber(v) or 0 end
+
+local function jstr(v, fallback)
+  if type(v) == "string" and v ~= "" then return v end
+  return fallback
+end
+
+local function palette(state)
+  local out = {}
+  local mood = state.mood or {}
+  local p = mood.palette
+  if type(p) == "table" then
+    for i = 1, 5 do
+      local s = p[i]
+      if type(s) == "string" and #s >= 7 then
+        local v = tonumber(s:sub(2, 7), 16)
+        if v then out[#out + 1] = { sbg.hex(v) } end
+      end
+    end
+  end
+  if #out < 3 then
+    out = {
+      { sbg.hex(0x17171C) }, { sbg.hex(0x292A33) }, { sbg.hex(0x454756) },
+      { sbg.hex(0x79644F) }, { sbg.hex(0x98545B) },
+    }
+  end
+  return out
+end
+
+local function pal(p, i, k)
+  local c = p[((i - 1) % #p) + 1]
+  return sbg.scale(c[1], c[2], c[3], k or 1.0)
+end
+
+local function sky_colour(pct, k)
+  local p = sbg.clamp((tonumber(pct) or 0) / 100.0, 0.0, 1.0)
+  local h, l
+  if p < 0.5 then
+    local u = p * 2.0
+    h, l = sbg.lerp(0.06, 0.55, u), sbg.lerp(0.26, 0.40, u)
+  else
+    local u = (p - 0.5) * 2.0
+    h, l = sbg.lerp(0.55, 0.74, u), sbg.lerp(0.40, 0.22, u)
+  end
+  local r, g, b = sbg.hsl(h, 0.40, l)
+  return sbg.scale(r, g, b, k or 1.0)
+end
+
+local LAST_ERR = ""
+local ERR_AGE = 99.0
+local FRESH_ERR = false
+
+local function track_error(state, dt)
+  local list = (state.journey or {}).recent
+  local fp = nil
+  if type(list) == "table" then
+    for i = #list, math.max(1, #list - 3), -1 do
+      local e = list[i]
+      if type(e) == "table" and e.k == "error" then
+        fp = tostring(e.t) .. "|" .. tostring(e.tool)
+        break
+      end
+    end
+  end
+  if fp ~= nil and fp ~= LAST_ERR then
+    LAST_ERR = fp
+    ERR_AGE = 0.0
+  else
+    ERR_AGE = ERR_AGE + dt
+  end
+  FRESH_ERR = ERR_AGE < 3.0
+  return FRESH_ERR
+end
+
+local function kana_for(mode)
+  if mode == "thinking" then return KANA_THINK end
+  if mode == "tool" then return KANA_TOOL end
+  if mode == "waiting" then return KANA_WAIT end
+  if mode == "error" then return KANA_ERR end
+  if mode == "compacting" then return KANA_COMPACT end
+  return KANA_IDLE
+end
+
+local function draw_sprite(fx, x0, y0, rows, r, g, b)
+  for ri, row in ipairs(rows) do
+    for ci = 1, #row do
+      local ch = row:sub(ci, ci)
+      if ch ~= " " then
+        fx:put(x0 + ci - 1, y0 + ri - 1, ch, r, g, b)
+      end
+    end
+  end
+end
+
+local function build(state)
+  local j = state.journey or {}
+  local tools = jnum(j.tools)
+  local prompts = jnum(j.prompts)
+  local band_w = math.max(2, math.floor(W / 6))
+  local top_y = 2
+  local bot_y = math.max(top_y + 1, H - 4)
+  local band_h = math.max(1, bot_y - top_y + 1)
+  local band_cap = math.max(2, math.floor(band_h * 0.55))
+  local total_cap = band_cap * 2
+  local nlines = math.min(total_cap, math.floor(tools / 4))
+  local speed = {}
+  for i = 1, nlines do
+    local hs = sbg.hash("dojo-line-" .. i)
+    local band = (i % 2 == 0) and "L" or "R"
+    local y = top_y + (hs % band_h)
+    local offset = math.floor(hs / 7) % math.max(1, band_w - 1)
+    local glyph = SPEED_GLYPHS[(hs % #SPEED_GLYPHS) + 1]
+    speed[#speed + 1] = { band = band, y = y, offset = offset, glyph = glyph, age = nlines - i }
+  end
+
+  local group_w = 10
+  local group_cap = math.max(0, math.floor((W * 0.5) / group_w))
+  local groups = math.min(group_cap, math.floor(prompts / 5))
+
+  local ticks = math.floor(sbg.clamp((tonumber(state.context_pct) or 0) / 10.0, 0, 10))
+
+  scene = {
+    band_w = band_w,
+    top_y = top_y,
+    bot_y = bot_y,
+    speed = speed,
+    groups = groups,
+    ticks = ticks,
+    lvl = math.floor(tools / 25) + 1,
+    chibi_x = math.max(band_w + 1, math.floor(W * 0.5) - math.floor(band_w * 0.5)),
+    chibi_y = math.max(top_y, H - 3),
+  }
+end
+
+local function signature(state)
+  local j = state.journey or {}
+  return table.concat({
+    jnum(j.tools), jnum(j.prompts),
+    math.floor(sbg.clamp((tonumber(state.context_pct) or 0) / 5.0, 0, 20)), W, H,
+  }, "/")
+end
+
+function M.init(ctx)
+  W, H = ctx.w, ctx.h
+  SEED = ctx.seed or 0
+  T = 0.0
+  ERR_FLASH, WIPE = 0.0, 0.0
+  LAST_ERR, ERR_AGE, FRESH_ERR = "", 99.0, false
+  scene, sig = nil, ""
+end
+
+function M.step(dt, state)
+  T = T + dt
+  track_error(state, dt)
+  if state.changed or scene == nil then
+    local s = signature(state)
+    if s ~= sig then
+      sig = s
+      build(state)
+    end
+  end
+  if state.mode == "error" or FRESH_ERR then
+    ERR_FLASH = math.min(1.0, ERR_FLASH + dt * 4.0)
+  else
+    ERR_FLASH = math.max(0.0, ERR_FLASH - dt * 1.5)
+  end
+  if state.mode == "compacting" then
+    WIPE = math.min(1.0, WIPE + dt * 3.0)
+  else
+    WIPE = math.max(0.0, WIPE - dt * 1.2)
+  end
+end
+
+function M.render(fx, state)
+  if scene == nil or W == 0 or H == 0 then return end
+  local j = state.journey or {}
+  local mode = state.mode
+  local mod = state.mod or {}
+  local p = palette(state)
+  local mood = state.mood or {}
+
+  local title = mood.title
+  if type(title) ~= "string" or title == "" then
+    title = "Dojo " .. jstr(j.repo, "unnamed")
+  end
+  local kana = kana_for(mode)
+  if sbg.text then
+    sbg.text(fx, 1, 0, title .. "  " .. table.concat(kana), pal(p, 5, 0.85))
+  end
+
+  local lr, lg, lb = pal(p, 3, 0.5)
+  if sbg.text then sbg.text(fx, 0, 1, "LV" .. tostring(scene.lvl), pal(p, 4, 0.6)) end
+  for i = 1, scene.ticks do
+    local y = scene.bot_y - (i - 1)
+    if y >= 2 then
+      fx:put(0, y, "+", lr, lg, lb)
+    end
+  end
+  if scene.ticks > 0 then
+    fx:put(0, scene.bot_y - scene.ticks, "^", sky_colour(state.context_pct, 0.9))
+  end
+
+  if WIPE > 0.5 then
+    local wr, wg, wb = pal(p, 2, 0.5)
+    local ys = { math.floor(H * 0.25), math.floor(H * 0.5), math.floor(H * 0.75) }
+    for _, y in ipairs(ys) do
+      for x = 0, scene.band_w - 1 do
+        fx:put(x, y, "═", wr, wg, wb)
+        fx:put(W - 1 - x, y, "═", wr, wg, wb)
+      end
+    end
+  else
+    local err = (mode == "error") or FRESH_ERR
+    local err_band = jnum(j.errors) % 2 == 0 and "L" or "R"
+    for _, s in ipairs(scene.speed) do
+      local fade = 0.35 + 0.55 * sbg.clamp(1.0 - s.age / math.max(1, #scene.speed), 0, 1)
+      local off = s.offset
+      local ch = s.glyph
+      if mode == "thinking" then
+        local pull = math.floor(1.5 + 1.5 * math.sin(T * 1.1 + s.offset))
+        off = sbg.clamp(off - pull, 0, scene.band_w - 1)
+      elseif mode == "tool" then
+        off = off + math.floor((mod.burst or 0) * 3)
+        off = off % math.max(1, scene.band_w - 1)
+        if s.band == "L" then ch = ">" else ch = "-" end
+      end
+      local x = (s.band == "L") and off or (W - 1 - off)
+      local cr, cg, cb = pal(p, 2, fade)
+      if err and s.band == err_band then
+        cr, cg, cb = sbg.hsl(0.98, 0.55, 0.40 * fade)
+      end
+      fx:put(x, s.y, ch, cr, cg, cb)
+    end
+
+    if err and ERR_FLASH > 0.05 then
+      local bx = (err_band == "L") and 1 or (W - 2)
+      for k = 0, 3 do
+        local y = scene.top_y + k * 2
+        if y <= scene.bot_y then
+          local dx = (err_band == "L") and (bx + k) or (bx - k)
+          fx:put(sbg.clamp(dx, 0, W - 1), y, "/", sbg.hsl(0.98, 0.6, 0.45 * ERR_FLASH))
+        end
+      end
+    end
+
+    for gi = 1, scene.groups do
+      local side = (gi % 2 == 1) and "L" or "R"
+      local slot = math.floor((gi - 1) / 2)
+      local x0
+      if side == "L" then
+        x0 = 1 + slot * 10
+      else
+        x0 = W - 2 - 9 - slot * 10
+      end
+      if x0 >= 0 and x0 + 8 < W then
+        local tr, tg, tb = pal(p, 4, 0.45)
+        local tally = "| | | | /"
+        for ci = 1, #tally do
+          local ch = tally:sub(ci, ci)
+          if ch ~= " " then
+            fx:put(x0 + ci - 1, H - 1, ch, tr, tg, tb)
+          end
+        end
+      end
+    end
+  end
+
+  local age = tonumber(state.age) or 0
+  local rows = CHIBI_STAND
+  local sr, sg, sb = pal(p, 5, 0.6)
+  if mode == "error" then
+    rows = CHIBI_ERR
+    sr, sg, sb = sbg.hsl(0.98, 0.55, 0.42)
+  elseif mode == "thinking" then
+    rows = CHIBI_THINK
+  elseif mode == "tool" then
+    rows = (math.floor(T * 6) % 2 == 0) and CHIBI_RUN_A or CHIBI_RUN_B
+  elseif mode == "waiting" then
+    rows = CHIBI_SIT
+  elseif mode == "idle" or mode == "start" or mode == "end" then
+    rows = CHIBI_SIT
+  end
+  if WIPE <= 0.5 then
+    draw_sprite(fx, scene.chibi_x, scene.chibi_y, rows, sr, sg, sb)
+
+    if mode == "thinking" then
+      local radius = math.min(5, 1 + math.floor(age / 3))
+      local cx, cy = scene.chibi_x + 1, scene.chibi_y
+      for r = 1, radius do
+        local mask = 1 + ((r * 37 + math.floor(T * 2)) % 8)
+        local ch = sbg.braille(mask)
+        local ax = cx - r - 1
+        local bxp = cx + r + 1
+        if ax >= 0 then fx:put(ax, cy - 1, ch, pal(p, 3, 0.4)) end
+        if bxp < W then fx:put(bxp, cy - 1, ch, pal(p, 3, 0.4)) end
+      end
+    elseif mode == "waiting" then
+      if sbg.text then sbg.text(fx, scene.chibi_x, scene.chibi_y - 1, "...", pal(p, 4, 0.5)) end
+    elseif mode == "error" then
+      if sbg.text then sbg.text(fx, scene.chibi_x, scene.chibi_y - 1, "!!!", sbg.hsl(0.98, 0.6, 0.45)) end
+    elseif (mode == "idle" or mode == "start" or mode == "end") and age > 60 then
+      fx:put(scene.chibi_x + 2, scene.chibi_y - 1, "z", pal(p, 3, 0.35))
+    elseif mode == "idle" or mode == "start" or mode == "end" then
+      local flick = math.floor(T * 0.6) % 5
+      if flick == 0 then
+        fx:put(scene.chibi_x - 2, scene.chibi_y - 1, ".", pal(p, 2, 0.3))
+      end
+    end
+  end
+end
+  return M
+end)()
+
+local Hud = (function()
+local M = {}
+
+local W, H = 0, 0
+local SEED = 0
+local T = 0.0
+local scene = nil
+local sig = ""
+
+local KANA_WAIT = { "ｷ", "ｮ", "ｶ", "ﾏ", "ﾞ", "ﾁ" }
+local KANA_COMPACT = { "ｾ", "ｰ", "ﾘ", "ﾁ", "ｭ", "ｰ" }
+
+local function jnum(v) return tonumber(v) or 0 end
+
+local function jstr(v, fallback)
+  if type(v) == "string" and v ~= "" then return v end
+  return fallback
+end
+
+local function palette(state)
+  local out = {}
+  local mood = state.mood or {}
+  local p = mood.palette
+  if type(p) == "table" then
+    for i = 1, 5 do
+      local s = p[i]
+      if type(s) == "string" and #s >= 7 then
+        local v = tonumber(s:sub(2, 7), 16)
+        if v then out[#out + 1] = { sbg.hex(v) } end
+      end
+    end
+  end
+  if #out < 3 then
+    out = {
+      { sbg.hex(0x0E1515) }, { sbg.hex(0x172828) }, { sbg.hex(0x25413E) },
+      { sbg.hex(0x385B54) }, { sbg.hex(0x52766C) },
+    }
+  end
+  return out
+end
+
+local function pal(p, i, k)
+  local c = p[((i - 1) % #p) + 1]
+  return sbg.scale(c[1], c[2], c[3], k or 1.0)
+end
+
+local function sky_colour(pct, k)
+  local p = sbg.clamp((tonumber(pct) or 0) / 100.0, 0.0, 1.0)
+  local h, l
+  if p < 0.5 then
+    local u = p * 2.0
+    h, l = sbg.lerp(0.06, 0.55, u), sbg.lerp(0.26, 0.40, u)
+  else
+    local u = (p - 0.5) * 2.0
+    h, l = sbg.lerp(0.55, 0.74, u), sbg.lerp(0.40, 0.22, u)
+  end
+  local r, g, b = sbg.hsl(h, 0.40, l)
+  return sbg.scale(r, g, b, k or 1.0)
+end
+
+local LAST_ERR = ""
+local ERR_AGE = 99.0
+local FRESH_ERR = false
+
+local function track_error(state, dt)
+  local list = (state.journey or {}).recent
+  local fp = nil
+  if type(list) == "table" then
+    for i = #list, math.max(1, #list - 3), -1 do
+      local e = list[i]
+      if type(e) == "table" and e.k == "error" then
+        fp = tostring(e.t) .. "|" .. tostring(e.tool)
+        break
+      end
+    end
+  end
+  if fp ~= nil and fp ~= LAST_ERR then
+    LAST_ERR = fp
+    ERR_AGE = 0.0
+  else
+    ERR_AGE = ERR_AGE + dt
+  end
+  FRESH_ERR = ERR_AGE < 3.0
+  return FRESH_ERR
+end
+
+local function cell_len(s)
+  if type(s) ~= "string" then return 0 end
+  local n = 0
+  for i = 1, #s do
+    local b = s:byte(i)
+    if b < 128 or b >= 192 then n = n + 1 end
+  end
+  return n
+end
+
+local function trunc_cells(s, maxcells)
+  if type(s) ~= "string" or maxcells <= 0 then return "" end
+  local n, i, len = 0, 1, #s
+  while i <= len do
+    local b = s:byte(i)
+    local seqlen = 1
+    if b >= 240 then seqlen = 4
+    elseif b >= 224 then seqlen = 3
+    elseif b >= 192 then seqlen = 2 end
+    if n >= maxcells then break end
+    n = n + 1
+    i = i + seqlen
+  end
+  return s:sub(1, i - 1)
+end
+
+local function top_n(tbl, n)
+  local list = {}
+  for k, v in pairs(tbl or {}) do
+    if type(k) == "string" then list[#list + 1] = { k, jnum(v) } end
+  end
+  table.sort(list, function(a, b)
+    if a[2] == b[2] then return a[1] < b[1] end
+    return a[2] > b[2]
+  end)
+  local out = {}
+  for i = 1, math.min(n, #list) do out[i] = list[i][1] .. ":" .. tostring(list[i][2]) end
+  return out
+end
+
+local function build(state)
+  local j = state.journey or {}
+  local shrink = H < 20
+  local width = shrink and math.min(24, W - 2) or math.min(34, W - 2)
+  width = math.max(10, width)
+  local x0 = math.max(0, W - width - 1)
+
+  local rows = {}
+  if jnum(j.prompts) > 0 then rows[#rows + 1] = { key = "PROMPTS", text = "PROMPTS " .. tostring(jnum(j.prompts)) } end
+  if jnum(j.tools) > 0 then rows[#rows + 1] = { key = "TOOLS", text = "TOOLS " .. tostring(jnum(j.tools)) } end
+  local exts = top_n(j.files, 3)
+  if #exts > 0 then rows[#rows + 1] = { key = "FILES", text = "FILES " .. table.concat(exts, " ") } end
+  if jnum(j.subagents_peak) > 0 then rows[#rows + 1] = { key = "PARTY", text = "PARTY x" .. tostring(jnum(j.subagents_peak)) } end
+  if (tonumber(state.context_pct) or 0) > 0 then rows[#rows + 1] = { key = "MANA", text = "MANA" } end
+  if jnum(j.errors) > 0 then rows[#rows + 1] = { key = "WOUNDS", text = "WOUNDS " .. tostring(jnum(j.errors)) } end
+  if jnum(j.compactions) > 0 then rows[#rows + 1] = { key = "RESTS", text = "RESTS " .. tostring(jnum(j.compactions)) } end
+
+  local words = {}
+  for k, v in pairs(j.words or {}) do
+    if type(k) == "string" then words[#words + 1] = { k, jnum(v) } end
+  end
+  table.sort(words, function(a, b)
+    if a[2] == b[2] then return a[1] < b[1] end
+    return a[2] > b[2]
+  end)
+  local skills = {}
+  for i = 1, math.min(4, #words) do skills[i] = words[i][1] end
+
+  local prompt_src = jstr(j.last_prompt, jstr(state.prompt, ""))
+  local qmax = math.max(4, math.floor(W / 3))
+  prompt_src = trunc_cells(prompt_src, qmax)
+
+  scene = {
+    x0 = x0,
+    width = width,
+    shrink = shrink,
+    rows = rows,
+    skills = skills,
+    quest = prompt_src,
+    lvl = math.floor(jnum(j.tools) / 25) + 1,
+    xp = jnum(j.tools) % 25,
+    sparkle_n = 2 + jnum(j.subagents),
+  }
+end
+
+local function signature(state)
+  local j = state.journey or {}
+  local exts = 0
+  for _ in pairs(j.files or {}) do exts = exts + 1 end
+  return table.concat({
+    jnum(j.tools), jnum(j.prompts), jnum(j.errors), jnum(j.compactions),
+    jnum(j.subagents_peak), jnum(j.subagents), exts,
+    jstr(j.last_prompt, jstr(state.prompt, "")), W, H,
+  }, "/")
+end
+
+local function box_row(fx, x0, y, width, ch_l, ch_m, ch_r, r, g, b)
+  fx:put(x0, y, ch_l, r, g, b)
+  for x = x0 + 1, x0 + width - 2 do fx:put(x, y, ch_m, r, g, b) end
+  fx:put(x0 + width - 1, y, ch_r, r, g, b)
+end
+
+function M.init(ctx)
+  W, H = ctx.w, ctx.h
+  SEED = ctx.seed or 0
+  T = 0.0
+  LAST_ERR, ERR_AGE, FRESH_ERR = "", 99.0, false
+  scene, sig = nil, ""
+end
+
+function M.step(dt, state)
+  T = T + dt
+  track_error(state, dt)
+  if state.changed or scene == nil then
+    local s = signature(state)
+    if s ~= sig then
+      sig = s
+      build(state)
+    end
+  end
+end
+
+function M.render(fx, state)
+  if scene == nil or W == 0 or H == 0 then return end
+  local j = state.journey or {}
+  local mode = state.mode
+  local mod = state.mod or {}
+  local p = palette(state)
+  local mood = state.mood or {}
+  local x0, width = scene.x0, scene.width
+
+  local title = mood.title
+  if type(title) ~= "string" or title == "" then
+    title = jstr(j.repo, "unnamed")
+  end
+
+  local dim = (mode == "idle") and 0.55 or 1.0
+  local br, bg, bb = pal(p, 3, 0.55 * dim)
+
+  local content_rows = {}
+  if mode == "compacting" then
+    content_rows = {}
+  elseif mode ~= "idle" then
+    for _, row in ipairs(scene.rows) do content_rows[#content_rows + 1] = row end
+  end
+
+  local mode_row = nil
+  if mode == "thinking" then
+    mode_row = "STATE FOCUS"
+  elseif mode == "tool" then
+    mode_row = "ACTION >>>"
+  elseif mode == "waiting" then
+    mode_row = "CONFIRM ?"
+  elseif mode == "error" then
+    mode_row = "ERROR"
+  end
+
+  local box_h
+  if mode == "compacting" then
+    box_h = 2
+  else
+    box_h = 3 + #content_rows + (mode_row and 1 or 0)
+    local max_h = H - 1
+    box_h = math.min(box_h, max_h)
+  end
+  local y0 = 0
+
+  box_row(fx, x0, y0, width, "┌", "─", "┐", br, bg, bb)
+  if mode == "compacting" then
+    box_row(fx, x0, y0 + 1, width, "└", "─", "┘", br, bg, bb)
+    local cr, cg, cb = sky_colour(state.context_pct, 0.8)
+    if sbg.text then
+      sbg.text(fx, x0 + 2, y0 + 1, "COMPRESS", cr, cg, cb)
+    end
+    local kx = x0 + width - 1 - #KANA_COMPACT
+    for i, ch in ipairs(KANA_COMPACT) do
+      local x = kx + i - 1
+      if x > x0 and x < x0 + width - 1 then fx:put(x, y0, ch, pal(p, 4, 0.6)) end
+    end
+    return
+  end
+
+  local y = y0 + 1
+  fx:put(x0, y, "│", br, bg, bb)
+  fx:put(x0 + width - 1, y, "│", br, bg, bb)
+  if sbg.text then
+    local xp_bar_w = 6
+    local filled = math.floor((scene.xp / 25) * xp_bar_w)
+    local bar = {}
+    for i = 1, xp_bar_w do bar[i] = (i <= filled) and "█" or "░" end
+    if mode == "thinking" then
+      local shim = 1 + (math.floor(T * 4) % xp_bar_w)
+      bar[shim] = "▒"
+    end
+    local suffix = " LV" .. tostring(scene.lvl) .. " " .. table.concat(bar)
+    local title_budget = math.max(0, width - 3 - cell_len(suffix))
+    local label = trunc_cells(title, title_budget) .. suffix
+    sbg.text(fx, x0 + 1, y, label, pal(p, 5, 0.9 * dim))
+  end
+
+  if mode_row and not scene.shrink then
+    y = y + 1
+    fx:put(x0, y, "│", br, bg, bb)
+    fx:put(x0 + width - 1, y, "│", br, bg, bb)
+    local mr, mg, mb = pal(p, 4, 0.6)
+    local text = mode_row
+    if mode == "error" then
+      local flash = FRESH_ERR and 1.0 or 0.3
+      mr, mg, mb = sbg.hsl(0.98, 0.45, 0.30 * flash)
+    end
+    if sbg.text then
+      local n = sbg.text(fx, x0 + 1, y, text, mr, mg, mb)
+      local cx = x0 + 1 + n + 1
+      if mode == "tool" then
+        local marchn = 1 + math.floor((mod.burst or 0) * 3)
+        for i = 1, marchn do
+          if cx + i - 1 < x0 + width - 1 then fx:put(cx + i - 1, y, ">", mr, mg, mb) end
+        end
+      elseif mode == "waiting" then
+        if math.floor(T * 2) % 2 == 0 then fx:put(cx, y, "?", mr, mg, mb) end
+        local kx = cx + 2
+        for i, ch in ipairs(KANA_WAIT) do
+          if kx + i - 1 < x0 + width - 1 then fx:put(kx + i - 1, y, ch, mr, mg, mb) end
+        end
+      elseif mode == "error" and jnum(j.errors) > 0 then
+        if sbg.text then sbg.text(fx, cx, y, tostring(jnum(j.errors)), mr, mg, mb) end
+      end
+    end
+  end
+
+  if not scene.shrink and mode ~= "idle" then
+    for _, row in ipairs(content_rows) do
+      y = y + 1
+      if y >= H - 1 then break end
+      fx:put(x0, y, "│", br, bg, bb)
+      fx:put(x0 + width - 1, y, "│", br, bg, bb)
+      local text = row.text
+      if row.key == "MANA" then
+        local pct = sbg.clamp(100 - (tonumber(state.context_pct) or 0), 0, 100)
+        local bar_w = 10
+        local filled = math.floor((pct / 100) * bar_w)
+        local bar = {}
+        for i = 1, bar_w do bar[i] = (i <= filled) and "█" or "░" end
+        text = "MANA [" .. table.concat(bar) .. "]"
+      end
+      text = trunc_cells(text, width - 3)
+      local rr, rg, rb = pal(p, 2, 0.6)
+      if row.key == "WOUNDS" and FRESH_ERR then rr, rg, rb = sbg.hsl(0.98, 0.45, 0.35) end
+      if sbg.text then sbg.text(fx, x0 + 1, y, text, rr, rg, rb) end
+    end
+  end
+
+  y = y + 1
+  if y < H then box_row(fx, x0, y, width, "└", "─", "┘", br, bg, bb) end
+
+  if #scene.skills > 0 and y + 3 <= H - 1 then
+    local py = y + 1
+    box_row(fx, x0, py, width, "┌", "─", "┐", pal(p, 2, 0.4 * dim))
+    fx:put(x0, py + 1, "│", pal(p, 2, 0.4 * dim))
+    fx:put(x0 + width - 1, py + 1, "│", pal(p, 2, 0.4 * dim))
+    local text = trunc_cells("SKILL " .. table.concat(scene.skills, " "), width - 3)
+    if sbg.text then sbg.text(fx, x0 + 1, py + 1, text, pal(p, 4, 0.5 * dim)) end
+    box_row(fx, x0, py + 2, width, "└", "─", "┘", pal(p, 2, 0.4 * dim))
+  end
+
+  if mode == "idle" and (tonumber(state.age) or 0) > 60 then
+    if sbg.text then sbg.text(fx, math.max(0, x0 - 9), y0, "(-_-) zz", pal(p, 3, 0.4)) end
+  end
+
+  if #scene.quest > 0 and sbg.text then
+    sbg.text(fx, 1, H - 1, ">> " .. scene.quest, pal(p, 3, 0.5))
+  end
+
+  local nsp = scene.sparkle_n
+  local sparkle = { "⠁", "⠂", "⠄" }
+  for i = 1, nsp do
+    local hs = sbg.hash("hud-sp-" .. i)
+    local bx = hs % math.max(1, math.min(3, W))
+    local phase = (hs % 100) / 100.0
+    local yy = sbg.wrap((H - 1) - (T * 1.2 + phase * H), H)
+    local ch = sparkle[(hs % #sparkle) + 1]
+    fx:put(bx, math.floor(yy), ch, pal(p, 2, 0.35))
+  end
+end
+  return M
+end)()
+
 
 local MOTIFS = {
   forest = Forest,
@@ -1506,8 +3527,14 @@ local MOTIFS = {
   reef = Reef,
   circuit = Circuit,
   office = Office,
+  sakura = Sakura,
+  kana = Kana,
+  shrine = Shrine,
+  hangar = Hangar,
+  dojo = Dojo,
+  hud = Hud,
 }
-local ORDER = { "forest", "skyline", "reef", "circuit", "office" }
+local ORDER = { "forest", "skyline", "reef", "circuit", "office", "sakura", "kana", "shrine", "hangar", "dojo", "hud" }
 
 local CTX = nil
 local CURRENT = nil

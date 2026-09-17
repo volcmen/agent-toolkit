@@ -7,7 +7,10 @@ import subprocess
 import sys
 import time
 
-MOTIFS = ("forest", "skyline", "reef", "circuit", "office")
+MOTIFS = (
+    "forest", "skyline", "reef", "circuit", "office",
+    "sakura", "kana", "shrine", "hangar", "dojo", "hud",
+)
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 TIMEOUT_SECONDS = 40
 PROMPT_LIMIT = 600
@@ -38,9 +41,12 @@ def build_prompt(journey, session):
     last_prompt = session.get("prompt") or journey.get("last_prompt") or ""
     parts = [
         "Reply with STRICT JSON only, no prose, matching this shape:",
-        '{"motif":"forest|skyline|reef|circuit|office","palette":["#rrggbb"x5],'
+        '{"motif":"' + "|".join(MOTIFS) + '","palette":["#rrggbb"x5],'
         '"tempo":0.5-2.0,"title":"<=24 chars","mood":"one word"}.',
         "Repo: {}.".format(repo),
+        "Motifs: forest skyline reef circuit office are calm workplaces and nature;"
+        " sakura kana shrine hangar dojo hud are anime-flavoured (cherry blossoms, katakana rain,"
+        " shrine at night, mecha hangar, shonen training arc, RPG status window).",
     ]
     if languages:
         parts.append("Top languages: {}.".format(", ".join(languages)))

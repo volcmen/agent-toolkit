@@ -18,6 +18,11 @@ def main() -> int:
         ([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"], ROOT),
         ([sys.executable, "scripts/state-smoke.py"], ROOT),
     ]
+    commands.append(([sys.executable, "scripts/world/bundle.py", "--check"], ROOT))
+    if shutil.which("lua"):
+        commands.append((["lua", "scripts/world/drive.lua"], ROOT))
+    else:
+        print("skip world drive: lua not on PATH")
     if shutil.which("tattoy"):
         commands.append(([sys.executable, "scripts/smoke.py"], ROOT))
     else:
