@@ -1,6 +1,6 @@
 {
   "name": "session-bg",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Drives per-pane animated terminal backgrounds from live Claude Code / Codex session state.",
   "author": {
     "name": "David David"
