@@ -197,6 +197,8 @@ def publish_session_bg(data, pct, tin, size, cost, branch) -> None:
             "context_size": size,
             "cost_usd": cost,
             "duration_ms": int(get(data, "cost", "total_duration_ms", default=0) or 0),
+            "lines_added": int(get(data, "cost", "total_lines_added", default=0) or 0),
+            "lines_removed": int(get(data, "cost", "total_lines_removed", default=0) or 0),
             "model": get(data, "model", "display_name"),
             "branch": branch,
         }

@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime};
 
 use mlua::{AnyUserData, HookTriggers, Lua, Table, Value, VmState};
+use serde_json::Value as JsonValue;
 
 use crate::api::{Fx, FxBuf};
 use crate::effects::Effect;
@@ -75,6 +76,41 @@ struct Instance {
     has_init: bool,
     has_resize: bool,
     has_step: bool,
+    journey: RefCell<Option<Table>>,
+    mood: RefCell<Option<Table>>,
+}
+
+fn json_to_lua(lua: &Lua, value: &JsonValue) -> mlua::Result<Value> {
+    Ok(match value {
+        JsonValue::Null => Value::Nil,
+        JsonValue::Bool(b) => Value::Boolean(*b),
+        JsonValue::Number(n) => match n.as_i64() {
+            Some(i) => Value::Integer(i),
+            None => Value::Number(n.as_f64().unwrap_or(0.0)),
+        },
+        JsonValue::String(s) => Value::String(lua.create_string(s)?),
+        JsonValue::Array(items) => {
+            let table = lua.create_table_with_capacity(items.len(), 0)?;
+            for (i, item) in items.iter().enumerate() {
+                table.set(i + 1, json_to_lua(lua, item)?)?;
+            }
+            Value::Table(table)
+        }
+        JsonValue::Object(map) => {
+            let table = lua.create_table_with_capacity(0, map.len())?;
+            for (key, item) in map {
+                table.set(key.as_str(), json_to_lua(lua, item)?)?;
+            }
+            Value::Table(table)
+        }
+    })
+}
+
+fn json_to_table(lua: &Lua, value: Option<&JsonValue>) -> mlua::Result<Table> {
+    match value.map(|v| json_to_lua(lua, v)).transpose()? {
+        Some(Value::Table(table)) => Ok(table),
+        _ => lua.create_table(),
+    }
 }
 
 const ALLOWED: &[&str] = &[
@@ -171,11 +207,25 @@ impl Instance {
             buf,
             budget,
             lua,
+            journey: RefCell::new(None),
+            mood: RefCell::new(None),
         })
     }
 
     fn function(&self, name: &str) -> Option<mlua::Function> {
         self.lua.globals().get::<mlua::Function>(name).ok()
+    }
+
+    fn generic_tables(&self, state: &ScriptState) -> mlua::Result<(Table, Table)> {
+        if state.changed || self.journey.borrow().is_none() {
+            let journey = json_to_table(&self.lua, state.journey.as_ref())?;
+            let mood = json_to_table(&self.lua, state.mood.as_ref())?;
+            *self.journey.borrow_mut() = Some(journey);
+            *self.mood.borrow_mut() = Some(mood);
+        }
+        let journey = self.journey.borrow().clone().expect("journey cached");
+        let mood = self.mood.borrow().clone().expect("mood cached");
+        Ok((journey, mood))
     }
 
     fn state_table(&self, state: &ScriptState) -> mlua::Result<Table> {
@@ -204,6 +254,12 @@ impl Instance {
         params.set("opacity", state.params.opacity)?;
         params.set("palette", state.params.palette.as_str())?;
         table.set("params", params)?;
+        table.set("lines_added", state.lines_added as i64)?;
+        table.set("lines_removed", state.lines_removed as i64)?;
+        table.set("duration", state.duration)?;
+        let (journey, mood) = self.generic_tables(state)?;
+        table.set("journey", journey)?;
+        table.set("mood", mood)?;
         Ok(table)
     }
 
@@ -764,5 +820,129 @@ end
         } else {
             assert!(p95 < Duration::from_millis(8), "release p95 {p95:?}");
         }
+    }
+
+    fn build_script_state(state_dir: &Path) -> ScriptState {
+        let mut watcher = crate::state::Watcher::new(Some(state_dir.to_path_buf()));
+        let snapshot = watcher.poll().clone();
+        let modulation = crate::state::modulation(&snapshot, 0.0, 0.0);
+        crate::state::script_state(&snapshot, &modulation, 0.0)
+    }
+
+    #[test]
+    fn journey_and_mood_round_trip_into_lua() {
+        let scratch = Scratch::new("journey");
+        let state_dir = scratch.0.join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(
+            state_dir.join("journey.json"),
+            r#"{"tools":["exec","edit","web"]}"#,
+        )
+        .unwrap();
+        std::fs::write(state_dir.join("mood.json"), r#"{"title":"calm"}"#).unwrap();
+        let script_state = build_script_state(&state_dir);
+
+        let path = scratch.write(
+            "journey.lua",
+            r##"
+function render(fx, state)
+  local tools = state.journey.tools or {}
+  for i = 1, #tools do
+    fx:put(i - 1, 0, "#", 1, 1, 1)
+  end
+  sbg.text(fx, 0, 1, state.mood.title or "", 1, 1, 1)
+end
+"##,
+        );
+        let mut effect = ScriptEffect::load(&path, 1, 1.0, 12.0).expect("loads");
+        let mut rng = Rng::new(1);
+        effect.resize(20, 10, &mut rng);
+        effect.set_state(&script_state);
+        let mut out = Vec::new();
+        effect.render(&mut out);
+
+        let hashes = out.iter().filter(|g| g.ch == '#').count();
+        assert_eq!(hashes, 3, "expected one # per journey tool");
+        let mut title: Vec<(u16, char)> = out
+            .iter()
+            .filter(|g| g.y == 1)
+            .map(|g| (g.x, g.ch))
+            .collect();
+        title.sort_by_key(|(x, _)| *x);
+        let text: String = title.into_iter().map(|(_, c)| c).collect();
+        assert_eq!(text, "calm");
+    }
+
+    #[test]
+    fn missing_journey_and_mood_yield_empty_tables_without_erroring() {
+        let scratch = Scratch::new("journey-missing");
+        let state_dir = scratch.0.join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let script_state = build_script_state(&state_dir);
+
+        let path = scratch.write(
+            "missing.lua",
+            r#"
+function render(fx, state)
+  local recent = state.journey.recent or {}
+  fx:put(0, 0, tostring(#recent), 1, 1, 1)
+  if next(state.mood) ~= nil then error("mood should be empty") end
+end
+"#,
+        );
+        let mut effect = ScriptEffect::load(&path, 1, 1.0, 12.0).expect("loads");
+        let mut rng = Rng::new(1);
+        effect.resize(20, 10, &mut rng);
+        effect.set_state(&script_state);
+        let mut out = Vec::new();
+        effect.render(&mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].ch, '0');
+    }
+
+    #[test]
+    fn text_clips_at_the_right_edge_without_panicking() {
+        let scratch = Scratch::new("text-clip");
+        let path = scratch.write(
+            "clip.lua",
+            r#"
+function render(fx, state)
+  local n = sbg.text(fx, 8, 0, "hello world", 1, 1, 1)
+  fx:put(0, 1, tostring(n), 1, 1, 1)
+  local c = sbg.text_center(fx, 2, "a very long centered line", 0.5, 0.5, 0.5)
+  fx:put(0, 3, tostring(c), 1, 1, 1)
+end
+"#,
+        );
+        let out = run(&path, 0, 10, 5);
+        assert!(!out.is_empty());
+        let n: i64 = out
+            .iter()
+            .find(|g| g.y == 1)
+            .map(|g| g.ch.to_digit(10).unwrap() as i64)
+            .unwrap();
+        assert_eq!(n, 2, "only two cells of the clipped string should fit");
+    }
+
+    #[test]
+    fn hash_and_pick_are_deterministic() {
+        let scratch = Scratch::new("hash");
+        let path = scratch.write(
+            "hash.lua",
+            r#"
+function render(fx, state)
+  local h1 = sbg.hash("hello")
+  local h2 = sbg.hash("hello")
+  if h1 ~= h2 then error("hash not deterministic") end
+  local list = {"a", "b", "c", "d"}
+  local p1 = sbg.pick(list, "session-key")
+  local p2 = sbg.pick(list, "session-key")
+  if p1 ~= p2 then error("pick not deterministic") end
+  sbg.text(fx, 0, 0, p1, 1, 1, 1)
+end
+"#,
+        );
+        let out = run(&path, 0, 10, 5);
+        assert_eq!(out.len(), 1);
     }
 }

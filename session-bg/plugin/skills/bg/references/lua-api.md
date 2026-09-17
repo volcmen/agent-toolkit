@@ -46,6 +46,42 @@ function render(fx, state) end  -- paint the frame
 | `mod.bright` | float | brightness multiplier the host applies after `render` |
 | `mod.burst` | float | 0..1, decays after a tool call; use for one-shot spawns/flashes |
 | `params.density` `.speed` `.hue` `.opacity` `.palette` | number\|string\|nil | user knobs from `sbg set` |
+| `lines_added` `lines_removed` | number | diff size accumulated this session |
+| `duration` | number | seconds of wall-clock session time |
+| `journey` | table | session counters, see below (may be `{}`) |
+| `mood` | table | derived look, see below (may be `{}`) |
+
+### `state.journey`
+
+Monotonic counters for the whole session. Every field may be missing, so read
+them as `local j = state.journey or {}` and `tonumber(j.tools) or 0`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `started_at` | number | epoch seconds when the session began |
+| `repo` | string | repository/workspace name |
+| `prompts` | int | user prompts submitted ("chapters") |
+| `tools` | int | tool calls so far |
+| `tool_kinds` | table | `{exec, edit, read, web, task, mcp, other}` counts |
+| `files` | table | `{ext = count}` of files touched |
+| `errors` | int | failed tool calls |
+| `compactions` | int | context compactions |
+| `waits` | int | permission/user waits |
+| `subagents` | int | subagents alive now |
+| `subagents_peak` | int | most subagents alive at once |
+| `last_prompt` | string | the last user prompt |
+| `words` | table | `{word = count}` from the prompts |
+| `recent` | array | up to 64 newest `{t, k, tool, ext}` events, oldest first |
+
+### `state.mood`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `motif` | string | requested world: `forest` `skyline` `reef` `circuit` `office` |
+| `palette` | array | five `"#rrggbb"` strings; parse with `sbg.hex(tonumber(s:sub(2, 7), 16))` |
+| `tempo` | number | suggested motion multiplier |
+| `title` | string | a name for the session |
+| `mood` | string | a one-word label |
 
 The host applies `mod.hue`, `mod.bright`, and an error tint to every glyph
 your script emits, after `render` returns. Do not re-apply `mod.hue`/`mod.bright`
@@ -59,6 +95,10 @@ which glyphs you draw).
   drawn on by the host application are filtered out for you.
 - `fx:clear()` — remove everything you painted this frame.
 - `fx:count()` — how many cells you have painted so far this frame.
+- `fx:size()` — returns `w, h`, the current grid size (same as `ctx.w/h`).
+- `sbg.text(fx, x, y, str, r, g, b)` — paint a whole string on one row, one
+  cell per character, spaces left transparent; returns how many cells landed.
+- `sbg.text_center(fx, y, str, r, g, b)` — the same, horizontally centred.
 
 ## The `sbg` table
 
@@ -88,8 +128,16 @@ sbg.glyphs.braille      -- all 256 braille characters, indexed 1..256
 sbg.glyphs.ascii         -- ".":"-" "=" "+" "*" "#" "%" "@"
 sbg.glyphs.dots           -- "·" "•" "∙" "●"
 sbg.glyphs.box             -- box-drawing characters
+sbg.glyphs.sprites          -- ☺ ☻ ♟ ♙ ⚙ ☕ ✎ ⌨ ▣ ▤ ▥ ▦ ▧ ▨ ▩ ♥ ★ ✦ ✧ ⚡ ☁ ☂ ☀ ☾
+sbg.glyphs.tree              -- │ ┃ ╱ ╲ ╭ ╮ ╯ ╰ Y y v ^ ♠ ♣ * ° •
 
 sbg.braille(mask8)     -- 8-bit dot mask -> one braille character
+
+sbg.hsl(h, s, l)       -- hue/saturation/lightness in [0, 1] -> r, g, b
+sbg.hash(str)          -- stable non-negative integer hash of a string
+sbg.pick(list, key)    -- list[hash(key) % #list + 1]; deterministic choice
+sbg.time()             -- seconds since the plugin started (NOT epoch; do not
+                       --  compare it with journey timestamps)
 
 sbg.lerp(a, b, t)
 sbg.clamp(v, lo, hi)
@@ -119,3 +167,10 @@ blows it badly falls back to the builtin effect.
 - React to `state.mode`, `state.mod.burst`, `state.context_pct`, `state.age`,
   and `state.changed` — not to `state.mod.hue`/`state.mod.bright`, which the
   host already applies for you.
+- For a journey-driven world, rebuild the whole scene from the counters when
+  `state.changed` flips and the counters actually differ, instead of
+  accumulating per-frame state. Replays then match frame for frame and memory
+  stays bounded. Keep growth monotonic and scroll or fade the oldest parts once
+  the canvas is full.
+- Guard everything the session may not have yet: `local j = state.journey or {}`,
+  `tonumber(j.tools) or 0`, `type(j.repo) == "string"`. A pane can be 1x1.

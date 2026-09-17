@@ -132,6 +132,38 @@ pub fn ramp(name: &str, t: f32) -> [f32; 3] {
     )
 }
 
+pub fn hsl(h: f32, s: f32, l: f32) -> [f32; 3] {
+    let h = h.rem_euclid(1.0);
+    let s = s.clamp(0.0, 1.0);
+    let l = l.clamp(0.0, 1.0);
+    if s <= 0.0 {
+        return [l, l, l];
+    }
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
+    let p = 2.0 * l - q;
+    let hue_to_rgb = |p: f32, q: f32, t: f32| -> f32 {
+        let t = t.rem_euclid(1.0);
+        if t < 1.0 / 6.0 {
+            p + (q - p) * 6.0 * t
+        } else if t < 0.5 {
+            q
+        } else if t < 2.0 / 3.0 {
+            p + (q - p) * (2.0 / 3.0 - t) * 6.0
+        } else {
+            p
+        }
+    };
+    [
+        hue_to_rgb(p, q, h + 1.0 / 3.0),
+        hue_to_rgb(p, q, h),
+        hue_to_rgb(p, q, h - 1.0 / 3.0),
+    ]
+}
+
 pub fn braille(mask: u32) -> char {
     char::from_u32(0x2800 + (mask & 0xff)).unwrap_or('⠀')
 }

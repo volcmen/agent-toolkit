@@ -68,8 +68,34 @@ sbg fx use off                         # clear the script override
 ```
 
 `sbg install` copies the shipped ports (`matrix.lua`, `plasma.lua`,
-`waves.lua`, `stars.lua`, `context-bars.lua`, `pulse.lua`, `template.lua`)
-into `~/.config/sbg/fx/` without overwriting anything already there.
+`waves.lua`, `stars.lua`, `context-bars.lua`, `pulse.lua`, the living worlds
+below, and `template.lua`) into `~/.config/sbg/fx/` without overwriting
+anything already there.
+
+### Living worlds
+
+These scripts draw the session's own history, so a long session looks nothing
+like a short one. Growth is monotonic and comes from `state.journey`:
+
+| Script | World | What grows |
+|---|---|---|
+| `forest` | L-system woodland | a tree per N tools (N adapts to width), branch depth from `lines_added`, leaves tinted per file extension, scars per error |
+| `skyline` | city | a tower per ~10 tools, heights from `lines_added`, a lit window per recent tool, crane while a tool runs |
+| `reef` | braille coral | a cluster per ~12 tools, a fish per subagent, plankton by `context_pct`, bleaching on error |
+| `circuit` | etched board | a node per tool coloured by `tool_kind`, traces between consecutive events, pulses while thinking |
+| `office` | side-on studio | a desk per subagent, a floor per ~40 tools, a plant that grows with the diff, the whiteboard scrolls your last prompt |
+| `world` | all five | uses `state.mood.motif`, else `sbg.pick` on the repo name |
+
+Across all of them `context_pct` is the time of day (dawn to dusk on the sky
+rows), `mode` drives motion (`thinking` sways, `tool` bursts, `waiting` idles,
+`error` flashes, `compacting` sweeps), and `state.mood.palette` is used when
+present, otherwise a hue derived from the repo name. Each scene is rebuilt
+from the counters when they change — replays are identical and memory is
+bounded — and the oldest parts fade or scroll off once the pane is full.
+
+`world.lua` is a generated bundle: every motif is the body of its standalone
+`plugins/fx/<motif>.lua` in a closure, because the sandbox has no `require`.
+Edit the standalone file and re-bundle; never hand-edit the copies in it.
 
 ### Authoring a new animation live
 

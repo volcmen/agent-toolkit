@@ -153,6 +153,36 @@ throws keeps the last good version running — the failure is recorded in
 The `/bg` skill (`plugin/skills/bg/`) covers day-to-day control and
 authoring guidance for both Claude Code and Codex.
 
+## Living worlds: art that grows with the session
+
+`sbg auto` (and the `claude`/`codex` shims) launch `~/.config/sbg/fx/world.lua`
+when it exists (`SBG_WORLD=0` returns to the builtin effects). A world is a
+generative scene rebuilt deterministically from the session's cumulative
+`journey.json` (written by the hooks: prompts, tools by kind, files by
+extension, errors, subagents, recent events) plus `status.json`
+(`context_pct`, `lines_added/removed`), so a three-hour session looks different
+from a five-minute one and the scene never loops:
+
+| Motif | Grows by |
+|---|---|
+| `office` | desks and workers per agent/subagent, typing while thinking, ☕ when waiting, ⚡ on error, floors every ~40 tools, banner with the office name and `+lines` |
+| `forest` | one L-system tree per N tools, leaves coloured by file language, sky by context %, lightning on errors |
+| `skyline` | buildings rise with lines added, windows light per tool, crane while a tool runs, night falls with context |
+| `reef` | braille coral per tool, fish = subagents, bleaching on errors |
+| `circuit` | nodes per tool, traces between recent events, pulses while thinking |
+
+`world.lua` bundles all five and picks one from `mood.json` (`motif`) or a
+hash of the repository name; `sbg fx use office` pins one. Every motif keeps
+under ~25 % coverage and fades the oldest parts when the pane fills.
+
+**Art director (optional, spends tokens).** `sbg set director=true` lets the
+`UserPromptSubmit` hook spawn `plugin/scripts/sbg_director.py` detached, at
+most every 2 minutes. It asks `claude -p --model haiku` (fallback `codex exec`)
+for strict JSON — motif, 5-colour palette, tempo, a scene title, a mood word —
+from the repo, languages, and prompt words, and writes `mood.json`; the world
+adopts it on the next frame. Nothing blocks the session; failures write
+nothing. Without the director the same choices are derived deterministically.
+
 ## How the plugin works
 
 `sbg-fx` speaks Tattoy's JSON plugin protocol on stdio. Tattoy sends

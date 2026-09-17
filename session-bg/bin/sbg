@@ -179,7 +179,7 @@ def validate_set_args(args: list[str]) -> tuple[dict, dict]:
             direct["mode"] = None if value == "" else value
             if direct["mode"] is not None and direct["mode"] not in MODES:
                 raise ValueError(f"invalid mode {value!r}; choose from {', '.join(MODES)} or empty")
-        elif key in ("frozen", "enabled"):
+        elif key in ("frozen", "enabled", "director"):
             direct[key] = parse_bool_value(value)
         elif key == "palette":
             params["palette"] = value
@@ -351,6 +351,15 @@ def install_fx_scripts() -> list[Path]:
         shutil.copyfile(source, target)
         copied.append(target)
     return copied
+
+
+def default_script(theme: str, explicit: Path | None) -> Path | None:
+    if explicit is not None:
+        return explicit.expanduser()
+    if theme != "auto" or os.environ.get("SBG_WORLD", "1") == "0":
+        return None
+    world = fx_dir() / "world.lua"
+    return world if world.is_file() else None
 
 
 def choose_effect(theme: str) -> str:
@@ -657,11 +666,12 @@ def main() -> int:
         SBG_PANE=pane,
         SBG_STATE=str(state_dir),
     )
-    if args.script:
-        env["SBG_SCRIPT"] = str(args.script.expanduser())
+    script = default_script(args.theme, args.script)
+    if script is not None:
+        env["SBG_SCRIPT"] = str(script)
     argv = [tattoy, "--main-config", str(config), "--disable-indicator", "--command", command_line(command)]
     if args.dry_run:
-        script_part = f" SBG_SCRIPT={env['SBG_SCRIPT']}" if args.script else ""
+        script_part = f" SBG_SCRIPT={env['SBG_SCRIPT']}" if script is not None else ""
         print(
             f"SBG_EFFECT={effect} SBG_SEED={env['SBG_SEED']} SBG_FPS={args.fps} "
             f"SBG_DENSITY={args.density} SBG_ACTIVE=1 SBG_PANE={pane} SBG_STATE={state_dir}{script_part}"

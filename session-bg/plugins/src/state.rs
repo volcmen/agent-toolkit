@@ -32,6 +32,9 @@ pub struct Status {
     pub cost_usd: f32,
     pub model: String,
     pub ts: f64,
+    pub lines_added: u64,
+    pub lines_removed: u64,
+    pub duration_ms: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -53,6 +56,8 @@ pub struct Snapshot {
     pub session: Option<Session>,
     pub status: Option<Status>,
     pub override_: Override,
+    pub journey: Option<Value>,
+    pub mood: Option<Value>,
     pub changed: bool,
 }
 
@@ -119,6 +124,11 @@ pub struct ScriptState {
     pub changed: bool,
     pub modulation: Modulation,
     pub params: Params,
+    pub journey: Option<Value>,
+    pub mood: Option<Value>,
+    pub lines_added: u64,
+    pub lines_removed: u64,
+    pub duration: f32,
 }
 
 impl Default for Modulation {
@@ -165,6 +175,9 @@ fn parse_status(value: &Value) -> Status {
         cost_usd: f(value, "cost_usd").unwrap_or(0.0).max(0.0) as f32,
         model: s(value, "model").unwrap_or_default(),
         ts: f(value, "ts").unwrap_or(0.0),
+        lines_added: f(value, "lines_added").unwrap_or(0.0).max(0.0) as u64,
+        lines_removed: f(value, "lines_removed").unwrap_or(0.0).max(0.0) as u64,
+        duration_ms: f(value, "duration_ms").unwrap_or(0.0).max(0.0),
     }
 }
 
@@ -199,7 +212,13 @@ pub struct Watcher {
     snapshot: Snapshot,
 }
 
-const FILES: [&str; 3] = ["session.json", "status.json", "override.json"];
+const FILES: [&str; 5] = [
+    "session.json",
+    "status.json",
+    "override.json",
+    "journey.json",
+    "mood.json",
+];
 
 impl Watcher {
     pub fn new(dir: Option<PathBuf>) -> Self {
@@ -256,6 +275,8 @@ impl Watcher {
                     .get("override.json")
                     .map(parse_override)
                     .unwrap_or_default(),
+                journey: self.values.get("journey.json").cloned(),
+                mood: self.values.get("mood.json").cloned(),
                 changed: true,
             };
         } else {
@@ -390,6 +411,11 @@ pub fn script_state(snapshot: &Snapshot, modulation: &Modulation, now: f64) -> S
             opacity: o.opacity.unwrap_or(defaults.opacity),
             palette: o.palette.clone().unwrap_or(defaults.palette),
         },
+        journey: snapshot.journey.clone(),
+        mood: snapshot.mood.clone(),
+        lines_added: status.map_or(0, |s| s.lines_added),
+        lines_removed: status.map_or(0, |s| s.lines_removed),
+        duration: status.map_or(0.0, |s| (s.duration_ms / 1000.0) as f32),
     }
 }
 
@@ -405,6 +431,8 @@ mod tests {
             override_: override_
                 .map(|t| parse_override(&parse(t)))
                 .unwrap_or_default(),
+            journey: None,
+            mood: None,
             changed: true,
         }
     }
@@ -488,6 +516,47 @@ mod tests {
         assert_eq!(snap.override_.effect.as_deref(), Some("stars"));
         std::fs::remove_file(&path).unwrap();
         assert_eq!(w.poll().override_.effect, None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn watcher_reads_journey_and_mood_and_keeps_previous_on_malformed() {
+        let dir = std::env::temp_dir().join(format!("sbg-state-journey-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let journey_path = dir.join("journey.json");
+        let mood_path = dir.join("mood.json");
+        std::fs::write(
+            &journey_path,
+            r#"{"tools":["exec","edit"],"recent":[{"n":1}]}"#,
+        )
+        .unwrap();
+        std::fs::write(&mood_path, r#"{"title":"calm"}"#).unwrap();
+        let mut w = Watcher::new(Some(dir.clone()));
+        let snap = w.poll();
+        assert!(snap.changed);
+        assert_eq!(
+            snap.journey.as_ref().and_then(|v| v.get("tools")).cloned(),
+            Some(serde_json::json!(["exec", "edit"]))
+        );
+        assert_eq!(
+            snap.mood.as_ref().and_then(|v| v.get("title")).cloned(),
+            Some(serde_json::json!("calm"))
+        );
+        assert!(!w.poll().changed);
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&journey_path, "{ not json").unwrap();
+        let snap = w.poll();
+        assert_eq!(
+            snap.journey.as_ref().and_then(|v| v.get("tools")).cloned(),
+            Some(serde_json::json!(["exec", "edit"]))
+        );
+
+        std::fs::remove_file(&journey_path).unwrap();
+        std::fs::remove_file(&mood_path).unwrap();
+        let snap = w.poll();
+        assert!(snap.journey.is_none());
+        assert!(snap.mood.is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

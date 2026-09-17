@@ -1,7 +1,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::OnceLock;
+use std::time::Instant;
 
-use mlua::{AnyUserData, Lua, Result as LuaResult, Table, UserData, UserDataMethods, Value};
+use mlua::{
+    AnyUserData, Integer, Lua, ObjectLike, Result as LuaResult, Table, UserData, UserDataMethods,
+    Value,
+};
 
 use crate::frame::{self, Glyph};
 use crate::noise;
@@ -72,6 +77,65 @@ impl UserData for Fx {
             Ok(())
         });
         methods.add_method("count", |_, this, ()| Ok(this.0.borrow().glyphs.len()));
+        methods.add_method("size", |_, this, ()| {
+            let buf = this.0.borrow();
+            Ok((buf.width, buf.height))
+        });
+    }
+}
+
+fn finite_channel(v: f32) -> Option<f32> {
+    v.is_finite().then(|| v.clamp(0.0, 1.0))
+}
+
+fn paint_text(buf: &mut FxBuf, x0: f64, y0: f64, text: &str, r: f32, g: f32, b: f32) -> i64 {
+    let (Some(r), Some(g), Some(b)) = (finite_channel(r), finite_channel(g), finite_channel(b))
+    else {
+        return 0;
+    };
+    if !x0.is_finite() || !y0.is_finite() {
+        return 0;
+    }
+    let y = y0.floor();
+    if y < 0.0 || y >= f64::from(buf.height) {
+        return 0;
+    }
+    let mut count = 0i64;
+    let mut cx = x0.floor();
+    for ch in text.chars() {
+        if cx >= 0.0 && cx < f64::from(buf.width) {
+            buf.glyphs.push(Glyph {
+                x: cx as u16,
+                y: y as u16,
+                ch,
+                rgb: [r, g, b],
+            });
+            count += 1;
+        }
+        cx += 1.0;
+    }
+    count
+}
+
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+const HASH_MASK: u64 = (1u64 << 53) - 1;
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = FNV_OFFSET;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+fn hash_value(value: &Value) -> u64 {
+    match value {
+        Value::String(s) => fnv1a64(&s.as_bytes()),
+        Value::Integer(i) => fnv1a64(&i.to_le_bytes()),
+        Value::Number(n) => fnv1a64(&n.to_le_bytes()),
+        _ => 0,
     }
 }
 
@@ -111,8 +175,19 @@ fn glyphs(lua: &Lua) -> LuaResult<Table> {
     table.set("box", glyph_table(lua, frame::BOX_GLYPHS)?)?;
     let braille: Vec<char> = (0..256).map(frame::braille).collect();
     table.set("braille", glyph_table(lua, &braille)?)?;
+    table.set("sprites", glyph_table(lua, SPRITE_GLYPHS)?)?;
+    table.set("tree", glyph_table(lua, TREE_GLYPHS)?)?;
     Ok(table)
 }
+
+const SPRITE_GLYPHS: &[char] = &[
+    '☺', '☻', '♟', '♙', '⚙', '☕', '✎', '⌨', '▣', '▤', '▥', '▦', '▧', '▨', '▩', '♥', '★', '✦', '✧',
+    '⚡', '☁', '☂', '☀', '☾',
+];
+
+const TREE_GLYPHS: &[char] = &[
+    '│', '┃', '╱', '╲', '╭', '╮', '╯', '╰', 'Y', 'y', 'v', '^', '♠', '♣', '*', '°', '•',
+];
 
 pub fn install(lua: &Lua) -> LuaResult<AnyUserData> {
     let sbg = lua.create_table()?;
@@ -215,6 +290,59 @@ pub fn install(lua: &Lua) -> LuaResult<AnyUserData> {
             } else {
                 v - n * (v / n).floor()
             })
+        })?,
+    )?;
+    sbg.set(
+        "hsl",
+        lua.create_function(|_, (h, s, l): (f32, f32, f32)| {
+            let rgb = frame::hsl(h, s, l);
+            Ok((rgb[0], rgb[1], rgb[2]))
+        })?,
+    )?;
+    sbg.set(
+        "text",
+        lua.create_function(
+            |_, (fx, x, y, text, r, g, b): (AnyUserData, f64, f64, String, f32, f32, f32)| {
+                let fx = fx.borrow::<Fx>()?;
+                let mut buf = fx.0.borrow_mut();
+                Ok(paint_text(&mut buf, x, y, &text, r, g, b))
+            },
+        )?,
+    )?;
+    sbg.set(
+        "text_center",
+        lua.create_function(
+            |_, (fx, y, text, r, g, b): (AnyUserData, f64, String, f32, f32, f32)| {
+                let (width, _height): (u16, u16) = fx.call_method("size", ())?;
+                let x = (f64::from(width) - text.chars().count() as f64) / 2.0;
+                let fx = fx.borrow::<Fx>()?;
+                let mut buf = fx.0.borrow_mut();
+                Ok(paint_text(&mut buf, x, y, &text, r, g, b))
+            },
+        )?,
+    )?;
+    sbg.set(
+        "hash",
+        lua.create_function(|_, text: String| {
+            Ok((fnv1a64(text.as_bytes()) & HASH_MASK) as Integer)
+        })?,
+    )?;
+    sbg.set(
+        "pick",
+        lua.create_function(|_, (list, key): (Table, Value)| {
+            let len = list.raw_len();
+            if len == 0 {
+                return Ok(Value::Nil);
+            }
+            let index = (hash_value(&key) % len as u64) as Integer + 1;
+            list.get::<Value>(index)
+        })?,
+    )?;
+    sbg.set(
+        "time",
+        lua.create_function(|_, ()| {
+            static START: OnceLock<Instant> = OnceLock::new();
+            Ok(START.get_or_init(Instant::now).elapsed().as_secs_f64())
         })?,
     )?;
     sbg.set("glyphs", glyphs(lua)?)?;

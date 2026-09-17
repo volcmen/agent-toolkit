@@ -17,7 +17,7 @@ KNOWN_HINTS = {
     "start", "thinking", "tool", "error", "waiting",
     "subagent-start", "subagent-stop", "compacting", "idle", "end",
 }
-STATE_FILES = ("session.json", "status.json", "override.json", "error.json")
+STATE_FILES = ("session.json", "status.json", "override.json", "error.json", "journey.json")
 
 
 def run_hook(hint, payload=None, state_dir=None, env_extra=None):
@@ -45,6 +45,10 @@ def run_hook(hint, payload=None, state_dir=None, env_extra=None):
 
 def read_session(state_dir):
     return json.loads((Path(state_dir) / "session.json").read_text(encoding="utf-8"))
+
+
+def read_journey(state_dir):
+    return json.loads((Path(state_dir) / "journey.json").read_text(encoding="utf-8"))
 
 
 class HintCoverageTests(unittest.TestCase):
@@ -282,6 +286,146 @@ class SafetyTests(unittest.TestCase):
             elapsed = time.monotonic() - start
             self.assertEqual(result.returncode, 0)
             self.assertLess(elapsed, 0.1, f"invocation took {elapsed * 1000:.1f} ms")
+
+
+class JourneyTests(unittest.TestCase):
+    def test_start_creates_journey_with_repo_from_cwd(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as repo:
+            repo_path = Path(repo) / "my-project"
+            (repo_path / "src").mkdir(parents=True)
+            (repo_path / ".git").mkdir()
+            result = run_hook(
+                "start",
+                {"hook_event_name": "SessionStart", "source": "startup", "session_id": "a", "cwd": str(repo_path / "src")},
+                tmp,
+            )
+            self.assertEqual(result.returncode, 0)
+            journey = read_journey(tmp)
+            self.assertEqual(journey["v"], 1)
+            self.assertEqual(journey["repo"], "my-project")
+            self.assertEqual(journey["prompts"], 0)
+            self.assertEqual(journey["tools"], 0)
+            self.assertEqual(journey["tool_kinds"], {"exec": 0, "edit": 0, "read": 0, "web": 0, "task": 0, "mcp": 0, "other": 0})
+            self.assertEqual(journey["files"], {})
+            self.assertEqual(journey["subagents_peak"], 0)
+            self.assertEqual(journey["recent"], [])
+
+    def test_tools_are_counted_by_kind(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_hook("tool", {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "echo hi"}}, tmp)
+            run_hook("tool", {"hook_event_name": "PreToolUse", "tool_name": "Edit", "tool_input": {"file_path": "/repo/a.py"}}, tmp)
+            run_hook("tool", {"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": "/repo/b.rs"}}, tmp)
+            journey = read_journey(tmp)
+            self.assertEqual(journey["tools"], 3)
+            self.assertEqual(journey["tool_kinds"]["exec"], 1)
+            self.assertEqual(journey["tool_kinds"]["edit"], 1)
+            self.assertEqual(journey["tool_kinds"]["read"], 1)
+
+    def test_files_counted_by_extension_from_edit_write_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_hook("tool", {"hook_event_name": "PreToolUse", "tool_name": "Write", "tool_input": {"file_path": "/repo/main.py"}}, tmp)
+            run_hook("tool", {"hook_event_name": "PreToolUse", "tool_name": "Edit", "tool_input": {"file_path": "/repo/lib.rs"}}, tmp)
+            run_hook("tool", {"hook_event_name": "PreToolUse", "tool_name": "Read", "tool_input": {"file_path": "/repo/app.ts"}}, tmp)
+            run_hook("tool", {"hook_event_name": "PreToolUse", "tool_name": "NotebookEdit", "tool_input": {"notebook_path": "/repo/nb.ipynb"}}, tmp)
+            run_hook("tool", {"hook_event_name": "PreToolUse", "tool_name": "Write", "tool_input": {"file_path": "/repo/Makefile"}}, tmp)
+            run_hook("tool", {"hook_event_name": "PreToolUse", "tool_name": "Write", "tool_input": {"file_path": "/repo/NOTES"}}, tmp)
+            journey = read_journey(tmp)
+            self.assertEqual(journey["files"]["py"], 1)
+            self.assertEqual(journey["files"]["rs"], 1)
+            self.assertEqual(journey["files"]["ts"], 1)
+            self.assertEqual(journey["files"]["ipynb"], 1)
+            self.assertEqual(journey["files"]["makefile"], 1)
+            self.assertEqual(journey["files"]["none"], 1)
+
+    def test_files_counted_by_extension_from_bash_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_hook("tool", {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "pytest tests/test_foo.py -q"}}, tmp)
+            journey = read_journey(tmp)
+            self.assertEqual(journey["files"]["py"], 1)
+
+    def test_glob_uses_pattern_free_path_argument(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_hook("tool", {"hook_event_name": "PreToolUse", "tool_name": "Glob", "tool_input": {"pattern": "*.py", "path": "/repo/src"}}, tmp)
+            journey = read_journey(tmp)
+            self.assertNotIn("py", journey["files"])
+            self.assertEqual(journey["files"].get("none"), 1)
+
+    def test_prompts_and_words_accumulate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_hook("thinking", {"hook_event_name": "UserPromptSubmit", "prompt": "fix the flaky test in checkout module"}, tmp)
+            run_hook("thinking", {"hook_event_name": "UserPromptSubmit", "prompt": "fix the flaky test again please"}, tmp)
+            journey = read_journey(tmp)
+            self.assertEqual(journey["prompts"], 2)
+            self.assertEqual(journey["last_prompt"], "fix the flaky test again please")
+            self.assertIn("flaky", journey["words"])
+            self.assertLessEqual(len(journey["words"]), 8)
+
+    def test_post_tool_use_thinking_does_not_count_as_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_hook("thinking", {"hook_event_name": "PostToolUse", "tool_name": "Bash"}, tmp)
+            journey = read_journey(tmp)
+            self.assertEqual(journey["prompts"], 0)
+
+    def test_errors_waits_compactions_counted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_hook("error", {"hook_event_name": "PostToolUseFailure"}, tmp)
+            run_hook("error", {"hook_event_name": "StopFailure"}, tmp)
+            run_hook("waiting", {"hook_event_name": "PermissionRequest"}, tmp)
+            run_hook("compacting", {"hook_event_name": "PreCompact"}, tmp)
+            journey = read_journey(tmp)
+            self.assertEqual(journey["errors"], 2)
+            self.assertEqual(journey["waits"], 1)
+            self.assertEqual(journey["compactions"], 1)
+
+    def test_subagent_peak_tracks_the_maximum(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_hook("subagent-start", {"hook_event_name": "SubagentStart"}, tmp)
+            run_hook("subagent-start", {"hook_event_name": "SubagentStart"}, tmp)
+            run_hook("subagent-stop", {"hook_event_name": "SubagentStop"}, tmp)
+            journey = read_journey(tmp)
+            self.assertEqual(journey["subagents"], 1)
+            self.assertEqual(journey["subagents_peak"], 2)
+
+    def test_recent_ring_capped_at_64(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for _ in range(70):
+                run_hook("tool", {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "echo hi"}}, tmp)
+            journey = read_journey(tmp)
+            self.assertEqual(len(journey["recent"]), 64)
+            self.assertEqual(journey["recent"][-1]["k"], "tool")
+
+    def test_clear_resets_journey(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_hook("start", {"hook_event_name": "SessionStart", "source": "startup", "session_id": "a"}, tmp)
+            run_hook("thinking", {"hook_event_name": "UserPromptSubmit", "prompt": "some prior work happened here"}, tmp)
+            self.assertEqual(read_journey(tmp)["prompts"], 1)
+            run_hook("start", {"hook_event_name": "SessionStart", "source": "clear", "session_id": "a"}, tmp)
+            self.assertEqual(read_journey(tmp)["prompts"], 0)
+
+    def test_resume_keeps_journey_when_session_id_matches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_hook("start", {"hook_event_name": "SessionStart", "source": "startup", "session_id": "same"}, tmp)
+            run_hook("thinking", {"hook_event_name": "UserPromptSubmit", "prompt": "some prior work happened here"}, tmp)
+            self.assertEqual(read_journey(tmp)["prompts"], 1)
+            run_hook("start", {"hook_event_name": "SessionStart", "source": "resume", "session_id": "same"}, tmp)
+            self.assertEqual(read_journey(tmp)["prompts"], 1)
+
+    def test_resume_resets_journey_when_session_id_differs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_hook("start", {"hook_event_name": "SessionStart", "source": "startup", "session_id": "one"}, tmp)
+            run_hook("thinking", {"hook_event_name": "UserPromptSubmit", "prompt": "some prior work happened here"}, tmp)
+            self.assertEqual(read_journey(tmp)["prompts"], 1)
+            run_hook("start", {"hook_event_name": "SessionStart", "source": "resume", "session_id": "two"}, tmp)
+            self.assertEqual(read_journey(tmp)["prompts"], 0)
+
+    def test_end_deletes_journey(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "pane"
+            state_dir.mkdir()
+            run_hook("start", {"hook_event_name": "SessionStart", "source": "clear"}, state_dir)
+            self.assertTrue((state_dir / "journey.json").exists())
+            run_hook("end", {"hook_event_name": "SessionEnd"}, state_dir)
+            self.assertFalse((state_dir / "journey.json").exists())
 
 
 class HooksManifestTests(unittest.TestCase):
