@@ -14,7 +14,7 @@ MOTIFS = (
 )
 HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 TIMEOUT_SECONDS = 40
-PROMPT_LIMIT = 600
+PROMPT_LIMIT = 900
 
 
 def read_json(path):
@@ -45,11 +45,9 @@ def build_prompt(journey, session):
         '{"motif":"' + "|".join(MOTIFS) + '","palette":["#rrggbb"x5],'
         '"tempo":0.5-2.0,"title":"<=24 chars","mood":"one word"}.',
         "Repo: {}.".format(repo),
-        "Motifs: forest skyline reef circuit office are calm workplaces and nature;"
-        " sakura kana shrine hangar dojo hud are anime-flavoured (cherry blossoms, katakana rain,"
-        " shrine at night, mecha hangar, shonen training arc, RPG status window);"
-        " studyroom sparkfield dust are cosy or whimsical (lo-fi study room, magical constellation,"
-        " dust-sprite workshop).",
+        "Motifs: forest skyline reef circuit office (calm); sakura kana shrine hangar dojo hud"
+        " studyroom sparkfield dust (anime: blossoms, katakana rain, shrine, mecha, training arc,"
+        " status window, study room, constellation, dust sprites).",
     ]
     if languages:
         parts.append("Top languages: {}.".format(", ".join(languages)))
