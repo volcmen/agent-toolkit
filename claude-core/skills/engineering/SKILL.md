@@ -19,6 +19,21 @@ rest. `CLAUDE.md` invariants apply throughout and are not repeated here.
 | Any phase — a second model would help | codex-pair, `/codex:rescue`, ChatGPT | `references/second-opinion.md` |
 | Any phase — text a human will read | Slack, Jira, MR text, review, email, docs | `references/writing.md` |
 
+## Recurring work
+
+The phase tells you how to work; this tells you what a request is made of.
+
+| Request | Collect | Deliverable |
+|---|---|---|
+| Prepare a ticket for development | the ticket, the workspace map, the owning repositories, their tests | the affected repositories, the change plan, the open questions |
+| Investigate a failure or incident | the symptom, logs, the code path, runtime state, the data | the cause, or the hypotheses that would separate it, each with its check |
+| Land a change | the ticket, the owning repository, the tests that already cover it | the change, the checks observed, commit and MR once authorised |
+| Answer a question about the system or its data | repository documentation, code, read-only queries | the answer and the evidence it rests on |
+| Verify a deploy or release | the pipeline, the deploy, the running version, errors, service state | the version actually running and the deviations found |
+
+Before changing anything in a cross-repository task, name the repositories it
+touches, the link between their merge requests, and the order they merge in.
+
 ## Proportionality
 
 Work directly when the change is clear and its diff fits one sentence. Enter

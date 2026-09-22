@@ -4,7 +4,10 @@ When the next step depends on CI, a deploy, build, server, test suite,
 container, or queue, observe the terminal condition; never sleep for a guessed
 delay. Use the highest available option:
 
-1. Event or stream: `Monitor` on a command, log, or state-change stream.
+1. Event or stream: `Monitor` on a command, log, or state-change stream. A
+   watch always carries a deadline of at most 30 minutes, 10 in a single-prompt
+   `-p` run, and notifies on expiry so it can be re-armed; there is no
+   unbounded watch.
 2. Native wait: `glab ci status --wait`, `gh pr checks --watch`, `kubectl wait`,
    `kubectl rollout status`, `docker wait`, `docker compose up --wait`, a test
    command that exits. Anything beyond a few seconds runs with
