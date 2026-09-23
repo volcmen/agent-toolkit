@@ -43,6 +43,7 @@ def main() -> int:
         return 1
     with tempfile.TemporaryDirectory() as tmp:
         env = dict(os.environ, SBG_STATE=tmp, SBG_EFFECT="matrix", SBG_SEED="3", SBG_FPS="20")
+        env.pop("SBG_SCRIPT", None)
         proc = subprocess.Popen([str(PLUGIN)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env, text=True, bufsize=1)
         proc.stdin.write(json.dumps({"pty_update": {"size": [120, 40], "cells": [], "cursor": [0, 0]}}) + "\n")
         proc.stdin.flush()
