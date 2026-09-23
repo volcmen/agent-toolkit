@@ -1,8 +1,7 @@
 #!/bin/sh
-# Build the plugin if needed, then link sbg and the claude/codex PATH shims.
+# Build the compatible backend and plugin, then link sbg and the PATH shims.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
-if [ ! -x "$root/plugins/target/release/sbg-fx" ]; then
-    (cd "$root/plugins" && cargo build --release --quiet)
-fi
+python3 "$root/scripts/build-tattoy.py"
+(cd "$root/plugins" && cargo build --release --workspace --locked --quiet)
 exec python3 "$root/bin/sbg" install

@@ -6,6 +6,37 @@ writes it atomically (tmp file in the same directory, then `os.replace`).
 `sbg-fx` merges them each frame by polling mtimes. The hook writer serializes
 concurrent read/modify/write operations with `.writer.lock`.
 
+## `runtime.json` — written by the running host
+
+The host atomically refreshes this heartbeat about once a second and on effect
+transitions. It is diagnostic output, never an input or authority for selecting
+an effect. `sbg state` and `sbg doctor` show it alongside user overrides.
+
+```json
+{
+  "v": 1,
+  "ts": 1789725000.0,
+  "pid": 1234,
+  "status": "recovering",
+  "requested": {"kind": "script", "path": "/path/to/fortress.lua"},
+  "active": {"kind": "builtin", "name": "matrix"},
+  "fps": 12.0,
+  "reason": "repeated script failures",
+  "retry_at": 1789725005.0
+}
+```
+
+Status is `running`, `recovering`, `paused` or `disabled`. The active choice is
+the loaded effect, even when paused/disabled; disabled reports zero FPS and no
+scheduled retry. Reason and retry time are null during healthy operation.
+Check heartbeat age: a stale record is not proof of a currently running host.
+Older binaries have no runtime heartbeat, so the CLI reports unknown.
+
+Retries use 5/10/20/40/60-second backoff, reset after 30 seconds of healthy
+operation. Pause and disable suspend attempts. Selecting another effect resets
+recovery; changing session metadata or unrelated settings does not bypass it.
+Successful recovery reloads `fortress.json` using the ordinary restore contract.
+
 ## `session.json` — written by the hook plugin
 
 ```
@@ -14,6 +45,7 @@ concurrent read/modify/write operations with `.writer.lock`.
   "ts": <float epoch seconds>,
   "agent": "claude" | "codex" | "unknown",
   "session_id": <string|null>,
+  "session_name": <sanitized display name, <=160 characters>,
   "cwd": <string|null>,
   "mode": "start" | "idle" | "thinking" | "tool" | "waiting" | "error" | "compacting",
   "event": <hook event name, string|null>,
@@ -29,6 +61,17 @@ concurrent read/modify/write operations with `.writer.lock`.
 which only adjust `subagents` (clamped to `>= 0`) and carry the previous
 `mode` forward. `prompt` is null for every event; no raw snippets are retained. `waiting_for_permission` distinguishes real permission
 requests from idle notifications and is internal to hook routing.
+
+`sbg_name.py` shares `.writer.lock` with the hooks. A launcher-owned thread polls
+once a second and updates only `session_name` and `detected_name`, plus the
+compatibility `journey.session_name` field. It never advances event timestamps,
+sequence or counters. Codex reads only the exact thread's explicit SQLite `name`
+(not `title`, which can be a prompt); older clients can use `thread_name` in
+`session_index.jsonl`. Claude reads matching `custom-title`/`customTitle` records
+from the hook's `transcript_path`, or `customTitle` from `sessions-index.json`.
+Log reads are bounded to 512 KiB; malformed reads retain the last known title.
+`transcript_path` and `detected_name` are internal local metadata. Missing names
+fall back to the working-directory basename. Identity changes clear old names.
 
 ## `journey.json` — legacy v1 shape (read-only compatibility)
 
@@ -82,7 +125,7 @@ files.
   "v": 1,
   "ts": <float epoch seconds>,
   "source": "haiku" | "codex",
-  "motif": "forest" | "skyline" | "reef" | "circuit" | "office",
+  "motif": <string, legacy; ignored by the Fortress-only world.lua>,
   "palette": [<5 "#rrggbb" strings>],
   "tempo": <float, 0.5-2.0>,
   "title": <string, <= 24 chars>,
@@ -113,9 +156,13 @@ one while the lock is younger than 120 seconds. Not cleaned up by
   "cost_usd": <float>,
   "duration_ms": <int>,
   "model": <string>,
+  "effort": <string|null>,
   "branch": <string|null>
 }
 ```
+
+`effort` is Claude Code's reasoning effort level. The host passes `low`,
+`medium`, `high`, `xhigh` or `max` to scripts and treats anything else as absent.
 
 Only present when `SBG_STATE` is set in the environment the statusline runs
 in. Codex has no equivalent hook, so this file is simply absent for Codex
@@ -129,12 +176,20 @@ sessions and treated as neutral by `sbg-fx`.
   "ts": <float epoch seconds>,
   "effect": <builtin effect name, string|null>,
   "script": <path to a Lua script, string|null>,
+  "session_name": <optional display override; empty restores automatic names>,
   "params": {
     "density": <float|null>,
     "speed": <float|null>,
     "hue": <float|null>,
     "opacity": <float|null>,
-    "palette": <string|null>
+    "palette": <string|null>,
+    "fortress": <optional settlement name>,
+    "difficulty": "calm" | "classic" | "chaos",
+    "presentation": "auto" | "compact",
+    "reduced_motion": <bool, default false>,
+    "paused": <bool, default false>,
+    "scene": "studio" | "settlement", default "studio"; "office" is rejected by sbg set,
+    "glyphs": "unicode" | "ascii", default "unicode"
   },
   "mode": <pinned mode, string|null>,
   "frozen": <bool>,
@@ -145,7 +200,9 @@ sessions and treated as neutral by `sbg-fx`.
 
 `override.json` takes precedence over `status.json`, which takes precedence
 over `session.json`. An unset (`null`) field means "no override; fall
-through." `director` (absent by default, meaning off) opts the pane into
+through." No field reports whether the window is hidden, focused or occluded; use
+`paused` or `enabled` to stop the effect instead of inferring visibility.
+`director` (absent by default, meaning off) opts the pane into
 the optional, token-spending director: when `true`, `sbg_state.py` spawns
 `sbg_director.py` in the background on the next `UserPromptSubmit` to
 refresh `mood.json`, throttled by `director.lock`.

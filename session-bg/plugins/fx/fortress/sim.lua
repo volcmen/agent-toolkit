@@ -54,6 +54,22 @@ function Sim:title(xp)
   end
   return title
 end
+-- Building work is earned by ordered tool activity, never idle time or spending.
+-- Three starter rooms are free; every following room takes fifteen labors.
+function Sim:construction(index)
+  if index<=3 then return 1 end
+  return math.max(0,math.min(1,(self.counts.tools-(index-4)*15)/15))
+end
+function Sim:progression()
+  local complete=math.min(Sim.CAPS.rooms,3+math.floor(self.counts.tools/15))
+  local rank,name=1,"Camp"
+  for i,v in ipairs({{6,"Outpost"},{12,"Village"},{24,"Citadel"},{48,"Capital"}}) do
+    if complete>=v[1] then rank,name=i+1,v[2] end
+  end
+  local capped=complete==Sim.CAPS.rooms
+  return {rank=rank,name=name,rooms=complete,total=Sim.CAPS.rooms,
+    work=capped and 15 or self.counts.tools%15,goal=15,capped=capped}
+end
 function Sim:id() self.next_id=self.next_id+1; return self.next_id end
 function Sim:legend(kind, text, ref, priority)
   local e = {id=self:id(), seq=self.seq, tick=self.clock, year=self.year, kind=kind,
@@ -107,7 +123,7 @@ function Sim.new(seed, identity)
     mood_arc=false, cave_until=0, gap_to=0, last_routine=-80},Sim)
   for _,k in ipairs(KINDS) do s.counts.tool_kinds[k]=0 end
   s.name=PREFIX[Sim.roll(seed,0,"fortress-prefix",#PREFIX)]..SUFFIX[Sim.roll(seed,0,"fortress-suffix",#SUFFIX)]
-  s:dwarf("founder"); s:room("plan"); s:room("workshop"); s:room("rest")
+  s:dwarf("founder"); s:room("plan"); s:room("workshop"); s:room("rest"); s:room("craft")
   return s
 end
 function Sim:snapshot()
@@ -280,7 +296,14 @@ function Sim:push(e)
       if #self.items<Sim.CAPS.items then self.items[#self.items+1]={id=self:id(),kind="block",room=1,quality="worked"} end
     end
     self.material=({rs="steel",py="slate",ts="copper",lua="amber",go="iron"})[p.ext] or self.material
-    local target=math.min(Sim.CAPS.rooms,3+math.floor(self.counts.tools/15))
+    if self.counts.tools%15==0 and self.counts.tools<=15*(Sim.CAPS.rooms-3) then
+      local p=self:progression()
+      self:legend("room_built",string.format("Room %d opens; the settlement grows through shared practice.",p.rooms),0,2)
+      if p.rooms==6 or p.rooms==12 or p.rooms==24 or p.rooms==48 then
+        self:legend("rank_up","The settlement becomes a "..p.name..".",0,4)
+      end
+    end
+    local target=math.min(Sim.CAPS.rooms,4+math.floor(self.counts.tools/15))
     while #self.rooms<target do self:room(jobkind) end
     self:inspire()
   elseif k=="success" then
@@ -350,7 +373,7 @@ function Sim:reconcile(j)
   for i=#self.incidents,1,-1 do self:close_incident(i,"The record is incomplete; the watch stands down.") end
   self.jobs={}; for _,d in ipairs(self.dwarves) do d.job=0 end
   self.z=self.counts.compactions; self.year=self.z+1
-  while #self.rooms<math.min(Sim.CAPS.rooms,3+math.floor(self.counts.tools/15)) do self:room("archive") end
+  while #self.rooms<math.min(Sim.CAPS.rooms,4+math.floor(self.counts.tools/15)) do self:room("archive") end
 end
 function Sim:observe(state)
   self.wealth=math.max(self.wealth,num(state.lines_added))

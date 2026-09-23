@@ -1,0 +1,8 @@
+{
+  "date": "2026-09-22",
+  "scope": "private nested PTY only",
+  "wrapper_exit": -9,
+  "outer_termios_changed_after_wrapper_sigkill": true,
+  "fixture_restored_after_probe": true,
+  "acceptance": "not met; killed wrapper cannot execute its RAII cleanup"
+}

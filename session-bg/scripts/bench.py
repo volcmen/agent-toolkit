@@ -30,7 +30,7 @@ def spawn(effect: str, seconds: int, state_dir: Path, script: str = "") -> tuple
     )
     config = dry.stdout.splitlines()[1].split()[2]
     argv = [shutil.which("tattoy"), "--main-config", config, "--disable-indicator", "--command", str(ROOT / "scripts" / "bench-child.sh")]
-    env = dict(os.environ, TERM="xterm-kitty", COLORTERM="truecolor", SBG_EFFECT=effect, SBG_SEED="1", SBG_FPS="12", BENCH_SECONDS=str(seconds))
+    env = dict(os.environ, TERM="xterm-kitty", COLORTERM="truecolor", TATTOY_NEST="allow", SBG_EFFECT=effect, SBG_SEED="1", SBG_FPS="12", BENCH_SECONDS=str(seconds))
     env["SBG_STATE"] = str(state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
     if script:

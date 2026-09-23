@@ -1,0 +1,79 @@
+{
+  "method": "steady-state ps CPU-time delta, backend plus effect; native child excluded",
+  "results": [
+    {
+      "backend": "tattoy",
+      "workload": "busy",
+      "viewport": "200x60",
+      "requested_fps": 12,
+      "reported_fps": 12.0,
+      "sample_seconds": 30.177,
+      "cpu_seconds": 24.42,
+      "last_render_cpu_ms": 3.006792,
+      "last_render_wall_ms": 4.681583,
+      "cpu_percent_one_core": 80.923,
+      "rss_median_mib": 80.53,
+      "rss_peak_mib": 85.5,
+      "terminal_bytes": 139314,
+      "terminal_bytes_per_second": 4617,
+      "processes_measured": 2
+    },
+    {
+      "backend": "own",
+      "workload": "busy",
+      "viewport": "200x60",
+      "requested_fps": 12,
+      "reported_fps": 12.0,
+      "sample_seconds": 30.013,
+      "cpu_seconds": 0.61,
+      "last_render_cpu_ms": 3.083875,
+      "last_render_wall_ms": 684.713333,
+      "cpu_percent_one_core": 2.032,
+      "rss_median_mib": 6.43,
+      "rss_peak_mib": 6.47,
+      "terminal_bytes": 80758,
+      "terminal_bytes_per_second": 2691,
+      "processes_measured": 1,
+      "own_lifetime_metrics": {
+        "backend": "own",
+        "elapsed_seconds": 33.080748,
+        "cpu_seconds": 0.704422,
+        "max_rss_bytes": 6815744,
+        "input_bytes": 0,
+        "native_bytes": 80476,
+        "background_bytes": 15115,
+        "frames": 7,
+        "changed_cells": 2765,
+        "skipped_frames": 378
+      }
+    },
+    {
+      "backend": "tattoy",
+      "workload": "busy",
+      "viewport": "200x60",
+      "requested_fps": 12,
+      "reported_fps": 12.0,
+      "sample_seconds": 30.24,
+      "cpu_seconds": 22.63,
+      "last_render_cpu_ms": 1.245625,
+      "last_render_wall_ms": 1.245917,
+      "cpu_percent_one_core": 74.835,
+      "rss_median_mib": 75.06,
+      "rss_peak_mib": 79.97,
+      "terminal_bytes": 130292,
+      "terminal_bytes_per_second": 4309,
+      "processes_measured": 2
+    }
+  ],
+  "stage": "Studio default scene, memoised glyph split",
+  "observed": "2026-09-23",
+  "platform": "macOS arm64, loaded host (load average 10.2-6.1)",
+  "attribution": {
+    "method": "ps cumulative CPU time over the same 27 s window of the tattoy-only busy run",
+    "window_seconds": 27,
+    "tattoy_cpu_seconds": 19.88,
+    "sbg_fx_cpu_seconds": 0.71,
+    "tattoy_percent_one_core": 73.6,
+    "sbg_fx_percent_one_core": 2.6
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "method": "steady-state ps CPU-time delta, backend plus effect; native child excluded",
+  "results": [
+    {
+      "backend": "own",
+      "workload": "updates",
+      "viewport": "200x60",
+      "requested_fps": 12,
+      "reported_fps": 12.0,
+      "sample_seconds": 20.011,
+      "cpu_seconds": 0.62,
+      "last_render_cpu_ms": 2.019625,
+      "last_render_wall_ms": 2.0195,
+      "cpu_percent_one_core": 3.098,
+      "rss_median_mib": 7.1,
+      "rss_peak_mib": 7.67,
+      "terminal_bytes": 63685,
+      "terminal_bytes_per_second": 3182,
+      "processes_measured": 1,
+      "own_lifetime_metrics": {
+        "backend": "own",
+        "elapsed_seconds": 23.026287625,
+        "cpu_seconds": 0.7355630000000001,
+        "max_rss_bytes": 8060928,
+        "input_bytes": 0,
+        "native_bytes": 1540,
+        "background_bytes": 81920,
+        "frames": 131,
+        "changed_cells": 9507,
+        "skipped_frames": 3
+      }
+    }
+  ]
+}

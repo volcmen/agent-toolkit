@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import fcntl
 import os
 import subprocess
 import sys
@@ -17,10 +18,10 @@ KNOWN_HINTS = {
     "start", "thinking", "tool", "error", "waiting",
     "subagent-start", "subagent-stop", "compacting", "idle", "end",
 }
-STATE_FILES = ("session.json", "status.json", "override.json", "error.json", "journey.json")
+STATE_FILES = ("session.json", "status.json", "override.json", "error.json", "runtime.json", "journey.json")
 
 
-def run_hook(hint, payload=None, state_dir=None, env_extra=None):
+def run_hook(hint, payload=None, state_dir=None, env_extra=None, timeout=5):
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)
     for key in list(env):
@@ -40,6 +41,7 @@ def run_hook(hint, payload=None, state_dir=None, env_extra=None):
         text=True,
         env=env,
         cwd=str(ROOT),
+        timeout=timeout,
     )
 
 
@@ -286,6 +288,24 @@ class SafetyTests(unittest.TestCase):
             elapsed = time.monotonic() - start
             self.assertEqual(result.returncode, 0)
             self.assertLess(elapsed, 0.1, f"invocation took {elapsed * 1000:.1f} ms")
+
+
+class WriterContentionTests(unittest.TestCase):
+    def test_busy_writer_exits_before_host_timeout_and_next_event_recovers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pane = Path(tmp)
+            run_hook("start", {"session_id": "one"}, pane)
+            before = {name: (pane / name).read_bytes() for name in ("session.json", "journey.json")}
+            for hint in ("tool", "end"):
+                with (pane / ".writer.lock").open("a") as lock:
+                    fcntl.flock(lock, fcntl.LOCK_EX)
+                    result = run_hook(hint, {"session_id": "one"}, pane, timeout=2)
+                self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+                self.assertEqual(before, {name: (pane / name).read_bytes() for name in before})
+            result = run_hook("tool", {"session_id": "one", "tool_name": "Edit"}, pane, timeout=2)
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(read_journey(pane)["tools"], 1)
+            self.assertEqual(read_session(pane)["seq"], 2)
 
 
 class JourneyTests(unittest.TestCase):

@@ -1,0 +1,975 @@
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -3158,8 +3158,6 @@
+ [[package]]
+ name = "shadow-terminal"
+ version = "0.2.3"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "7ab4566cd23dd35d3fd0425052ed3a80663d7a2cdad7122e6f64fc71a5aefcfd"
+ dependencies = [
+  "portable-pty",
+  "schemars",
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -97,3 +97,6 @@
+ std_instead_of_alloc = "allow"
+ std_instead_of_core = "allow"
+ float_arithmetic = "allow"
++
++[patch.crates-io]
++shadow-terminal = { path = "shadow-terminal" }
+--- a/crates/tattoy/src/compositor.rs
++++ b/crates/tattoy/src/compositor.rs
+@@ -97,6 +97,15 @@
+         let is_composited_cell_pixel = composited_cell.str() == "▀" || composited_cell.str() == "▄";
+         let is_character_above_pixel = character_above == "▀" || character_above == "▄";
+         let is_character_above_empty = character_above.is_empty() || character_above == " ";
++        // An opaque application panel owns its spaces too. Erase lower-layer
++        // glyphs so automatic text contrast cannot make them reappear.
++        if is_character_above_empty && opacity >= 1.0
++            && crate::blender::Blender::extract_colour(cell_above.attrs().background())
++                .is_some_and(|color| color.3 >= 1.0)
++        {
++            *composited_cell = cell_above.clone();
++            return;
++        }
+         let is_character_above_text = !is_character_above_empty && !is_character_above_pixel;
+         let is_pixel_onto_non_pixel = is_character_above_pixel && !is_composited_cell_pixel;
+ 
+@@ -169,3 +178,30 @@
+         }
+     }
+ }
++
++#[cfg(test)]
++mod sbg_compat_tests {
++    use super::*;
++
++    #[test]
++    fn opaque_panel_spaces_erase_scenery_even_with_contrast() {
++        let default = termwiz::color::SrgbaTuple(0.1, 0.1, 0.1, 1.0);
++        let bg = termwiz::color::SrgbaTuple(0.2, 0.2, 0.25, 1.0);
++        let mut attrs = termwiz::cell::CellAttributes::default();
++        attrs.set_background(termwiz::color::ColorAttribute::TrueColorWithDefaultFallback(bg));
++        let panel = termwiz::cell::Cell::new(' ', attrs);
++        let mut scenery = termwiz::cell::Cell::new('#', termwiz::cell::CellAttributes::default());
++        Compositor::composite_cells(&mut scenery, &panel, 1.0, default);
++        Compositor::auto_text_contrast(&mut scenery, 2.0, true, default);
++        assert_eq!(scenery.str(), " ");
++        assert_eq!(scenery.attrs().background(), panel.attrs().background());
++    }
++
++    #[test]
++    fn default_background_spaces_leave_scenery_visible() {
++        let default = termwiz::color::SrgbaTuple(0.1, 0.1, 0.1, 1.0);
++        let mut scenery = termwiz::cell::Cell::new('#', termwiz::cell::CellAttributes::default());
++        Compositor::composite_cells(&mut scenery, &termwiz::cell::Cell::blank(), 1.0, default);
++        assert_eq!(scenery.str(), "#");
++    }
++}
+--- a/crates/tattoy/src/palette/converter.rs
++++ b/crates/tattoy/src/palette/converter.rs
+@@ -11,6 +11,17 @@
+ }
+ 
+ impl Palette {
++    /// Use the same colors for application queries as for the compositor.
++    pub fn terminal_palette(&self) -> shadow_terminal::wezterm_term::color::ColorPalette {
++        let mut colors = shadow_terminal::wezterm_term::color::ColorPalette::default();
++        colors.foreground = self.foreground_colour();
++        colors.background = self.background_colour();
++        for index in 0..=255u8 {
++            colors.colors.0[usize::from(index)] = self.true_colour_tuple_from_index(index);
++        }
++        colors
++    }
++
+     /// Convert a palette index to a Termwiz-compatible true colour.
+     pub fn true_colour_attribute_from_index(&self, index: u8) -> termwiz::color::ColorAttribute {
+         let srgba = self.true_colour_tuple_from_index(index);
+--- a/crates/tattoy/src/raw_input.rs
++++ b/crates/tattoy/src/raw_input.rs
+@@ -1,105 +1,377 @@
+-//! Handle all the raw input directly from the end user.
+-
++//! Frame user input without changing its bytes; decode only for Tattoy shortcuts.
++
++use color_eyre::eyre::Result;
++use shadow_terminal::termwiz::input::{InputEvent, InputParser};
+ use std::io::Read as _;
+ 
+-use color_eyre::eyre::Result;
+-use shadow_terminal::termwiz;
+-
+-/// Bytes from STDIN
+-pub type BytesFromSTDIN = [u8; 128];
+-
+-/// Input from STDIN that has been parsed into known mouse/keyboard/etc events.
++/// Input with the exact bytes belonging to this event (Wake means opaque input).
+ #[derive(Debug, Clone)]
+ pub(crate) struct ParsedInput {
+-    /// The raw bytes that made up the parsed event
+     pub bytes: Vec<u8>,
+-    /// The parsed event
+-    pub event: termwiz::input::InputEvent,
+-}
+-
+-/// Handle input from the user
+-pub(crate) struct RawInput {
+-    /// The main Tattoy protocol channel.
+-    protocol_tx: tokio::sync::broadcast::Sender<crate::run::Protocol>,
+-}
++    pub event: InputEvent,
++}
++
++#[derive(Clone, Copy, Debug, Default)]
++enum Mode {
++    #[default]
++    Ground,
++    Escape,
++    Utf8(u8),
++    Csi,
++    Ss3,
++    X10(u8),
++    String {
++        osc: bool,
++        escape: bool,
++    },
++    Paste(usize),
++}
++
++/// Small framing layer: unknown sequences and paste contents are opaque. The
++/// existing termwiz parser remains responsible for recognizing shortcut keys.
++#[derive(Default)]
++struct InputDecoder {
++    mode: Mode,
++    pending: Vec<u8>,
++    // Retain a tiny CSI signature even after a stalled prefix was forwarded.
++    sequence: Vec<u8>,
++    opaque: bool,
++    parser: InputParser,
++}
++
++impl InputDecoder {
++    fn emit(&mut self, output: &mut Vec<ParsedInput>, decode: bool) {
++        if self.pending.is_empty() {
++            return;
++        }
++        let bytes = std::mem::take(&mut self.pending);
++        let event = if decode && !self.opaque && std::str::from_utf8(&bytes).is_ok() {
++            let mut events = self.parser.parse_as_vec(&bytes, false);
++            if events.len() == 1 {
++                events.remove(0)
++            } else {
++                // Unknown sequences must not turn into several shortcut keys.
++                self.parser = InputParser::new();
++                InputEvent::Wake
++            }
++        } else {
++            InputEvent::Wake
++        };
++        if matches!(event, InputEvent::Wake) {
++            if let Some(last) = output.last_mut() {
++                if matches!(last.event, InputEvent::Wake) && last.bytes.len() + bytes.len() <= 4096
++                {
++                    last.bytes.extend(bytes);
++                    return;
++                }
++            }
++        }
++        output.push(ParsedInput { bytes, event });
++    }
++
++    fn finish(&mut self, output: &mut Vec<ParsedInput>, decode: bool) {
++        self.emit(output, decode);
++        self.mode = Mode::Ground;
++        self.opaque = false;
++        self.sequence.clear();
++    }
++
++    fn character(&mut self, byte: u8, output: &mut Vec<ParsedInput>) {
++        self.pending.push(byte);
++        match byte {
++            0xc2..=0xdf => self.mode = Mode::Utf8(1),
++            0xe0..=0xef => self.mode = Mode::Utf8(2),
++            0xf0..=0xf4 => self.mode = Mode::Utf8(3),
++            _ => self.finish(output, true),
++        }
++    }
++
++    fn feed(&mut self, bytes: &[u8]) -> Vec<ParsedInput> {
++        let mut output = Vec::new();
++        for &byte in bytes {
++            // An invalid UTF-8 prefix cannot swallow the following key.
++            if matches!(self.mode, Mode::Utf8(_)) && !(0x80..=0xbf).contains(&byte) {
++                self.finish(&mut output, false);
++            }
++            match self.mode {
++                Mode::Ground => {
++                    if byte == 0x1b {
++                        self.pending.push(byte);
++                        self.mode = Mode::Escape;
++                    } else {
++                        self.character(byte, &mut output);
++                    }
++                }
++                Mode::Escape => match byte {
++                    0x1b => {
++                        self.finish(&mut output, true);
++                        self.pending.push(byte);
++                        self.mode = Mode::Escape;
++                    }
++                    b'[' | b'O' => {
++                        self.pending.push(byte);
++                        self.sequence = self.pending.clone();
++                        self.mode = if byte == b'[' { Mode::Csi } else { Mode::Ss3 };
++                    }
++                    b']' | b'P' | b'_' | b'^' | b'X' => {
++                        self.pending.push(byte);
++                        self.mode = Mode::String {
++                            osc: byte == b']',
++                            escape: false,
++                        };
++                    }
++                    _ => self.character(byte, &mut output),
++                },
++                Mode::Utf8(remaining) | Mode::X10(remaining) => {
++                    self.pending.push(byte);
++                    if remaining == 1 {
++                        self.finish(&mut output, true);
++                    } else {
++                        self.mode = if matches!(self.mode, Mode::Utf8(_)) {
++                            Mode::Utf8(remaining - 1)
++                        } else {
++                            Mode::X10(remaining - 1)
++                        };
++                    }
++                }
++                Mode::Csi | Mode::Ss3 => {
++                    self.pending.push(byte);
++                    if self.sequence.len() < 7 {
++                        self.sequence.push(byte);
++                    }
++                    if (0x40..=0x7e).contains(&byte) {
++                        if self.sequence == b"\x1b[200~" {
++                            self.emit(&mut output, false);
++                            self.mode = Mode::Paste(0);
++                        } else if self.sequence == b"\x1b[M" {
++                            self.mode = Mode::X10(3);
++                        } else {
++                            self.finish(&mut output, true);
++                        }
++                    } else if byte < 0x20 || byte > 0x3f {
++                        self.finish(&mut output, false);
++                    }
++                }
++                Mode::String { osc, escape } => {
++                    self.pending.push(byte);
++                    if (osc && byte == 7) || (escape && byte == b'\\') {
++                        self.finish(&mut output, false);
++                    } else {
++                        self.mode = Mode::String {
++                            osc,
++                            escape: byte == 0x1b,
++                        };
++                    }
++                }
++                Mode::Paste(matched) => {
++                    const END: &[u8] = b"\x1b[201~";
++                    self.pending.push(byte);
++                    let next = if byte == END[matched] {
++                        matched + 1
++                    } else {
++                        usize::from(byte == END[0])
++                    };
++                    if next == END.len() {
++                        self.finish(&mut output, false);
++                    } else {
++                        self.mode = Mode::Paste(next);
++                    }
++                }
++            }
++            if self.pending.len() >= 4096 {
++                self.emit(&mut output, false);
++                self.opaque = true;
++            }
++        }
++        // Stream even unfinished pastes/control strings with bounded memory.
++        if matches!(self.mode, Mode::Paste(_) | Mode::String { .. }) {
++            self.emit(&mut output, false);
++        }
++        output
++    }
++
++    /// Resolve bare Escape promptly. For a truncated sequence, forward the
++    /// prefix but keep its framing state so the suffix cannot trigger shortcuts.
++    fn expire(&mut self) -> Vec<ParsedInput> {
++        let mut output = Vec::new();
++        if matches!(self.mode, Mode::Escape) || self.pending == b"\x1b[" || self.pending == b"\x1bO"
++        {
++            self.finish(&mut output, true);
++        } else {
++            self.emit(&mut output, false);
++            self.opaque = true;
++        }
++        output
++    }
++}
++
++/// Handle input from the user.
++pub(crate) struct RawInput;
+ 
+ impl RawInput {
+-    /// Start a thread to listen and parse the end user's STDIN and forward it to the rest of the
+-    /// application.
+     pub fn start(
+         protocol_tx: tokio::sync::broadcast::Sender<crate::run::Protocol>,
+-    ) -> std::thread::JoinHandle<std::result::Result<(), color_eyre::eyre::Error>> {
+-        // The Tokio docs actually suggest using `std::thread` to listen on STDIN for interactive
+-        // applications.
+-        std::thread::spawn(move || -> Result<()> {
+-            let protocol_for_shutdown = protocol_tx.clone();
+-            let input = Self { protocol_tx };
+-            let result = input.consume_stdin();
+-            if let Err(error) = result {
+-                crate::run::broadcast_protocol_end(&protocol_for_shutdown);
+-                return Err(error);
+-            }
+-            Ok(())
++        input_tx: tokio::sync::mpsc::Sender<Vec<ParsedInput>>,
++    ) -> std::thread::JoinHandle<Result<()>> {
++        std::thread::spawn(move || {
++            let result = Self::consume_stdin(input_tx);
++            if result.is_err() {
++                crate::run::broadcast_protocol_end(&protocol_tx);
++            }
++            result
+         })
+     }
+ 
+-    /// Listen to the end user's STDIN. Try to parse all the bytes, and if any Tattoy-specific
+-    /// mouse or keyboard events are detected, handle them seperately.
+-    fn consume_stdin(&self) -> Result<()> {
+-        tracing::debug!("Starting to listen on STDIN");
+-
+-        let stdin = std::io::stdin();
+-        let mut reader = std::io::BufReader::new(stdin);
+-        let mut parser = termwiz::input::InputParser::new();
+-        let mut accumulated: Vec<u8> = Vec::new();
+-        let mut is_accumulating = false;
+-
++    fn consume_stdin(input_tx: tokio::sync::mpsc::Sender<Vec<ParsedInput>>) -> Result<()> {
++        // Keep the blocking read separate so a lone Escape needs no second key.
++        // Both queues apply backpressure; input never uses a lossy broadcast bus.
++        let (tx, rx) = std::sync::mpsc::sync_channel(1);
++        std::thread::spawn(move || {
++            let mut stdin = std::io::stdin().lock();
++            loop {
++                let mut buffer = vec![0; 4096];
++                match stdin.read(&mut buffer) {
++                    Ok(0) => break,
++                    Ok(size) => {
++                        buffer.truncate(size);
++                        if tx.send(Ok(buffer)).is_err() {
++                            break;
++                        }
++                    }
++                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
++                    Err(error) => {
++                        let _ = tx.send(Err(error));
++                        break;
++                    }
++                }
++            }
++        });
++        let mut decoder = InputDecoder::default();
+         loop {
+-            let mut buffer: BytesFromSTDIN = [0; 128];
+-            match reader.read(&mut buffer[..]) {
+-                Ok(size) => {
+-                    let is_full = size == 128;
+-                    if is_full {
+-                        is_accumulating = true;
+-                    }
+-
+-                    accumulated = if is_accumulating {
+-                        [accumulated.clone(), buffer.to_vec()].concat()
+-                    } else {
+-                        buffer.to_vec()
+-                    };
+-
+-                    if let Some(bytes) = buffer.get(0..size) {
+-                        let sample = String::from_utf8_lossy(&buffer);
+-                        tracing::trace!("Received STDIN input: {sample} ({bytes:?})");
+-
+-                        let wait_for_more = is_accumulating;
+-                        parser.parse(
+-                            bytes,
+-                            |event| {
+-                                self.parsed_bytes_callback(event, accumulated.clone());
+-                                is_accumulating = false;
+-                            },
+-                            wait_for_more,
+-                        );
+-                    } else {
+-                        tracing::warn!("Couldn't get bytes from STDIN input buffer");
+-                    }
+-                }
+-                Err(err) => {
+-                    return Err(color_eyre::eyre::Error::new(err));
+-                }
+-            }
+-        }
+-    }
+-
+-    /// The callback for when the input parser detects known keyboard/mouse events.
+-    fn parsed_bytes_callback(&self, event: termwiz::input::InputEvent, bytes: Vec<u8>) {
+-        let result = self
+-            .protocol_tx
+-            .send(crate::run::Protocol::Input(ParsedInput { bytes, event }));
+-        if let Err(error) = result {
+-            tracing::error!("Error sending input event from thread to task: {error:?}");
+-        }
+-    }
+-}
++            let received = if decoder.pending.is_empty() {
++                rx.recv()
++                    .map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected)
++            } else {
++                rx.recv_timeout(std::time::Duration::from_millis(40))
++            };
++            let (batch, ended) = match received {
++                Ok(bytes) => (decoder.feed(&bytes?), false),
++                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => (decoder.expire(), false),
++                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => (decoder.expire(), true),
++            };
++            if !batch.is_empty() && input_tx.blocking_send(batch).is_err() {
++                break;
++            }
++            if ended {
++                break;
++            }
++        }
++        Ok(())
++    }
++}
++
++#[cfg(test)]
++mod sbg_compat_tests {
++    use super::*;
++    use shadow_terminal::termwiz;
++
++    fn raw(events: &[ParsedInput]) -> Vec<u8> {
++        events
++            .iter()
++            .flat_map(|e| e.bytes.iter().copied())
++            .collect()
++    }
++
++    #[test]
++    fn fragments_preserve_bytes_and_shortcut_boundaries() {
++        let bytes = b"hi\r\x1b[13;2u\xf0\x9f\x8c\x8d\0\xff\x1bt\x1b[999;2u";
++        for split in 0..=bytes.len() {
++            let mut decoder = InputDecoder::default();
++            let mut events = decoder.feed(&bytes[..split]);
++            events.extend(decoder.feed(&bytes[split..]));
++            events.extend(decoder.expire());
++            assert_eq!(raw(&events), bytes);
++            assert_eq!(events.iter().filter(|e| e.bytes == b"\x1bt").count(), 1);
++            let shortcut = events.iter().find(|e| e.bytes == b"\x1bt").unwrap();
++            assert!(matches!(&shortcut.event, InputEvent::Key(k)
++                if k.key == termwiz::input::KeyCode::Char('t')
++                    && k.modifiers == termwiz::input::Modifiers::ALT));
++        }
++    }
++
++    #[test]
++    fn paste_and_control_strings_do_not_trigger_shortcuts() {
++        for bytes in [
++            b"\x1b[200~hi\x1bt\0\xff\x1b[201~".as_slice(),
++            b"\x1b]52;c;\x1bt\x07",
++            b"\x1bP\x1bt\x1b\\",
++        ] {
++            for split in 0..=bytes.len() {
++                let mut decoder = InputDecoder::default();
++                let mut events = decoder.feed(&bytes[..split]);
++                events.extend(decoder.feed(&bytes[split..]));
++                assert_eq!(raw(&events), bytes);
++                assert!(events.iter().all(|e| matches!(e.event, InputEvent::Wake)));
++                assert!(matches!(decoder.mode, Mode::Ground));
++            }
++        }
++    }
++
++    #[test]
++    fn escape_and_incomplete_input_flush_without_another_key() {
++        let mut decoder = InputDecoder::default();
++        assert!(decoder.feed(b"\x1b").is_empty());
++        assert_eq!(raw(&decoder.expire()), b"\x1b");
++        assert!(decoder.feed(b"\x1b[13;").is_empty());
++        assert_eq!(raw(&decoder.expire()), b"\x1b[13;");
++        let suffix = decoder.feed(b"2u");
++        assert_eq!(raw(&suffix), b"2u");
++        assert!(suffix.iter().all(|e| matches!(e.event, InputEvent::Wake)));
++    }
++
++    #[test]
++    fn delayed_paste_opener_still_protects_its_payload() {
++        let mut decoder = InputDecoder::default();
++        assert!(decoder.feed(b"\x1b[20").is_empty());
++        assert_eq!(raw(&decoder.expire()), b"\x1b[20");
++        let events = decoder.feed(b"0~\x1bt\x1b[201~");
++        assert_eq!(raw(&events), b"0~\x1bt\x1b[201~");
++        assert!(events.iter().all(|e| matches!(e.event, InputEvent::Wake)));
++    }
++
++    #[test]
++    fn arbitrary_bytes_are_never_lost_or_duplicated() {
++        let mut seed = 123456_u32;
++        let bytes: Vec<u8> = (0..65536)
++            .map(|_| {
++                seed ^= seed << 13;
++                seed ^= seed >> 17;
++                seed ^= seed << 5;
++                seed as u8
++            })
++            .collect();
++        for size in [1, 7, 128, 4096] {
++            let mut decoder = InputDecoder::default();
++            let mut actual = Vec::new();
++            for chunk in bytes.chunks(size) {
++                actual.extend(raw(&decoder.feed(chunk)));
++                assert!(decoder.pending.len() < 4096);
++            }
++            actual.extend(raw(&decoder.expire()));
++            assert_eq!(actual, bytes);
++        }
++    }
++
++    #[test]
++    fn long_paste_streams_with_bounded_memory() {
++        let mut decoder = InputDecoder::default();
++        assert_eq!(raw(&decoder.feed(b"\x1b[200~")), b"\x1b[200~");
++        for _ in 0..100 {
++            let bytes = vec![b'x'; 4096];
++            assert_eq!(raw(&decoder.feed(&bytes)), bytes);
++            assert!(decoder.pending.is_empty());
++        }
++        assert_eq!(raw(&decoder.feed(b"\x1b[201~after")), b"\x1b[201~after");
++        assert!(matches!(decoder.mode, Mode::Ground));
++    }
++}
+--- a/crates/tattoy/src/run.rs
++++ b/crates/tattoy/src/run.rs
+@@ -78,7 +78,8 @@
+     let palette = crate::config::main::Config::load_palette(Arc::clone(state_arc)).await?;
+     *state_arc.default_background.write().await = palette.background_colour();
+ 
+-    let input_thread_handle = RawInput::start(protocol_tx.clone());
++    let (input_tx, input_rx) = tokio::sync::mpsc::channel(8);
++    let input_thread_handle = RawInput::start(protocol_tx.clone(), input_tx);
+ 
+     let users_tty_size = crate::renderer::Renderer::get_users_tty_size()?;
+     state_arc
+@@ -106,6 +107,7 @@
+         height: users_tty_size.rows.try_into()?,
+         command: get_startup_command(state_arc, cli_args).await?,
+         scrollback_size: scrollback_size.try_into()?,
++        palette: palette.terminal_palette(),
+         ..Default::default()
+     };
+     crate::terminal_proxy::proxy::Proxy::start(
+@@ -113,6 +115,7 @@
+         surfaces_tx,
+         protocol_tx.clone(),
+         shadow_terminal_config,
++        input_rx,
+     )
+     .await?;
+     tracing::debug!("🏁 left PTY thread, exiting Tattoy...");
+--- a/crates/tattoy/src/tattoys/bg_command.rs
++++ b/crates/tattoy/src/tattoys/bg_command.rs
+@@ -69,6 +69,7 @@
+                 command: command.iter().map(std::convert::Into::into).collect(),
+                 scrollback_size: 100,
+                 scrollback_step: 1,
++                palette: palette.terminal_palette(),
+             },
+         );
+ 
+--- a/crates/tattoy/src/tattoys/plugins.rs
++++ b/crates/tattoy/src/tattoys/plugins.rs
+@@ -195,7 +195,12 @@
+         for (y, line) in self.tattoy.screen.surface.screen_cells().iter().enumerate() {
+             for (x, cell) in line.iter().enumerate() {
+                 let character = cell.str();
+-                if character.is_empty() || character == " " {
++                // Colored blank cells belong to the application (panels,
++                // selections, prompts). Only default-background blanks are free.
++                if (character.is_empty() || character == " ")
++                    && matches!(cell.attrs().background(), shadow_terminal::termwiz::color::ColorAttribute::Default)
++                    && !cell.attrs().reverse()
++                {
+                     continue;
+                 }
+ 
+--- a/crates/tattoy/src/terminal_proxy/input_handler.rs
++++ b/crates/tattoy/src/terminal_proxy/input_handler.rs
+@@ -1,6 +1,6 @@
+ //! Handle parsed input events
+ 
+-use color_eyre::eyre::{ContextCompat as _, Result};
++use color_eyre::eyre::Result;
+ use shadow_terminal::termwiz;
+ 
+ impl crate::terminal_proxy::proxy::Proxy {
+@@ -19,35 +19,8 @@
+ 
+     /// Forward raw input bytes to the underlying PTY.
+     async fn forward_input_to_pty(&self, input: crate::raw_input::ParsedInput) -> Result<()> {
+-        // If the input is from an OSC paste event, then only forward the contents of the paste,
+-        // and not the surrounding OSC codes.
+-        let bytes = if let termwiz::input::InputEvent::Paste(string) = input.event {
+-            string.into_bytes()
+-        } else {
+-            input.bytes
+-        };
+-
+-        tracing::trace!(
+-            "Terminal proxy received input bytes: {}",
+-            String::from_utf8_lossy(&bytes)
+-        );
+-
+-        for chunk in bytes.chunks(128) {
+-            let mut buffer: crate::raw_input::BytesFromSTDIN = [0; 128];
+-            for (i, chunk_byte) in chunk.iter().enumerate() {
+-                let buffer_byte = buffer.get_mut(i).context("Couldn't get byte from buffer")?;
+-                *buffer_byte = *chunk_byte;
+-            }
+-            tracing::trace!(
+-                "Proxying input to shadow terminal from Tattoy: {}",
+-                String::from_utf8_lossy(&buffer)
+-            );
+-            let result = self.shadow_terminal.send_input(buffer).await;
+-            if let Err(error) = result {
+-                tracing::error!("Couldn't forward STDIN bytes on PTY input channel: {error:?}");
+-            }
+-        }
+-
++        // Preserve bytes, including bracketed-paste markers and embedded NULs.
++        self.shadow_terminal.send_input(input.bytes).await?;
+         Ok(())
+     }
+ 
+--- a/crates/tattoy/src/terminal_proxy/proxy.rs
++++ b/crates/tattoy/src/terminal_proxy/proxy.rs
+@@ -47,6 +47,7 @@
+         surfaces_tx: tokio::sync::mpsc::Sender<crate::run::FrameUpdate>,
+         tattoy_protocol: tokio::sync::broadcast::Sender<crate::run::Protocol>,
+         config: shadow_terminal::shadow_terminal::Config,
++        mut input_rx: tokio::sync::mpsc::Receiver<Vec<crate::raw_input::ParsedInput>>,
+     ) -> Result<()> {
+         let shadow_terminal = shadow_terminal::active_terminal::ActiveTerminal::start(config);
+ 
+@@ -63,6 +64,16 @@
+                 Ok(message) = tattoy_protocol_rx.recv() => {
+                     proxy.handle_tattoy_protocol_message(message).await?;
+                 }
++                Some(batch) = input_rx.recv() => {
++                    for input in batch {
++                        proxy.handle_input(&input).await?;
++                        // Mouse observers may use the broadcast bus; application input
++                        // itself must never depend on a lossy broadcast receiver.
++                        if matches!(input.event, shadow_terminal::termwiz::input::InputEvent::Mouse(_)) {
++                            let _ = proxy.tattoy_protocol.send(crate::run::Protocol::Input(input));
++                        }
++                    }
++                }
+                 result = &mut proxy.shadow_terminal.task_handle => {
+                     if let Err(error) = result {
+                         tracing::error!("{error:?}");
+@@ -211,9 +222,6 @@
+             crate::run::Protocol::Resize { width, height } => {
+                 self.shadow_terminal.resize(width, height)?;
+             }
+-            crate::run::Protocol::Input(input) => {
+-                self.handle_input(&input).await?;
+-            }
+             _ => (),
+         }
+ 
+--- a/shadow-terminal/src/pty.rs
++++ b/shadow-terminal/src/pty.rs
+@@ -5,7 +5,7 @@
+ 
+ use std::{ffi::OsString, io::Read as _};
+ 
+-use snafu::{OptionExt as _, ResultExt as _};
++use snafu::ResultExt as _;
+ use tokio::sync::mpsc;
+ use tracing::Instrument as _;
+ 
+@@ -13,7 +13,7 @@
+ /// doesn't seem adjustable.
+ pub type BytesFromPTY = [u8; 4096];
+ /// A single payload from the user's input stream (or sometimes internal input).
+-pub type BytesFromSTDIN = [u8; 128];
++pub type BytesFromSTDIN = Vec<u8>;
+ 
+ /// This is the PTY process that replaces the user's current TTY
+ #[non_exhaustive]
+@@ -342,14 +342,8 @@
+                 .replace('\x1b', "^")
+         );
+ 
+-        let maybe_size = bytes.iter().position(|byte| byte == &0);
+-        let size = maybe_size.unwrap_or(128);
+-        let byte_slice = bytes.get(0..size).with_whatever_context(|| {
+-            "Couldn't get slice of input payload. Should be impossible."
+-        })?;
+-
+         pty_stdin
+-            .write_all(byte_slice)
++            .write_all(&bytes)
+             .with_whatever_context(|err| {
+                 format!("`handle_input_bytes()`: couldn't write bytes into PTY's STDIN: {err:?}")
+             })?;
+@@ -373,27 +367,7 @@
+         }
+     }
+ 
+-    /// Insert bytes into a buffer.
+-    pub(crate) fn add_bytes_to_buffer(
+-        buffer: &mut BytesFromSTDIN,
+-        bytes: &[u8],
+-    ) -> Result<(), crate::errors::PTYError> {
+-        if bytes.len() > buffer.len() {
+-            snafu::whatever!(
+-                "Bytes ({}) to add to buffer are more than the buffer size ({}).",
+-                bytes.len(),
+-                buffer.len()
+-            );
+-        }
+-        for (i, chunk_byte) in bytes.iter().enumerate() {
+-            let buffer_byte = buffer
+-                .get_mut(i)
+-                .with_whatever_context(|| "Couldn't get byte from buffer")?;
+-            *buffer_byte = *chunk_byte;
+-        }
+-
+-        Ok(())
+-    }
++
+ }
+ 
+ impl Drop for PTY {
+@@ -485,13 +459,7 @@
+     }
+ 
+     fn stdin_bytes(input: &str) -> BytesFromSTDIN {
+-        let mut buffer: BytesFromSTDIN = [0; 128];
+-        #[expect(
+-            clippy::indexing_slicing,
+-            reason = "How do I do a range slice with []?"
+-        )]
+-        buffer[..input.len()].copy_from_slice(input.as_bytes());
+-        buffer
++        input.as_bytes().to_vec()
+     }
+ 
+     #[tokio::test(flavor = "multi_thread")]
+--- a/shadow-terminal/src/shadow_terminal.rs
++++ b/shadow-terminal/src/shadow_terminal.rs
+@@ -9,6 +9,7 @@
+ struct WeztermConfig {
+     /// The number of lines to store in the scrollback
+     scrollback: usize,
++    palette: wezterm_term::color::ColorPalette,
+ }
+ 
+ impl wezterm_term::TerminalConfiguration for WeztermConfig {
+@@ -17,7 +18,7 @@
+     }
+ 
+     fn color_palette(&self) -> wezterm_term::color::ColorPalette {
+-        wezterm_term::color::ColorPalette::default()
++        self.palette.clone()
+     }
+ }
+ 
+@@ -43,6 +44,8 @@
+     pub scrollback_size: usize,
+     /// The number of lines that each scroll trigger moves.
+     pub scrollback_step: usize,
++    /// The application-visible palette, including OSC 10/11 replies.
++    pub palette: wezterm_term::color::ColorPalette,
+ }
+ 
+ impl Default for Config {
+@@ -54,6 +57,7 @@
+             command: vec!["bash".into()],
+             scrollback_size: 1000,
+             scrollback_step: 5,
++            palette: wezterm_term::color::ColorPalette::default(),
+         }
+     }
+ }
+@@ -83,9 +87,6 @@
+     pub pty_size: (usize, usize),
+ }
+ 
+-/// The special ANSI code that applications send to get a reply with the current cursor position.
+-const CURSOR_POSITION_REQUEST: &str = "\x1b[6n";
+-
+ /// Enable the user's terminal's 'application mode'.
+ const APPLICATION_MODE_START: &str = "\x1b[?1h";
+ 
+@@ -98,6 +99,28 @@
+ // TODO: Would it be useful to keep the PTY's task handle on here, and `await` it in the main loop,
+ // so that the PTY module always has time to do its shutdown?
+ //
++// Wezterm delivers replies on its own writer thread, after advance_bytes returns.
++// Send them straight to the existing PTY input channel; draining a Vec after
++// advance_bytes races that thread and loses replies while the app waits.
++#[derive(Clone, Default)]
++struct TerminalReplies(std::sync::Arc<std::sync::Mutex<Option<tokio::sync::mpsc::Sender<crate::pty::BytesFromSTDIN>>>>);
++
++impl std::io::Write for TerminalReplies {
++    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
++        let sender = self.0.lock()
++            .map_err(|_| std::io::Error::other("terminal replies poisoned"))?.clone();
++        if let Some(sender) = sender {
++            for chunk in bytes.chunks(128) {
++                sender.blocking_send(chunk.to_vec())
++                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "PTY input closed"))?;
++            }
++        }
++        Ok(bytes.len())
++    }
++
++    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
++}
++
+ /// This is the main Shadow Terminal struct that helps run everything is this crate.
+ ///
+ /// Instantiating this struct will allow you to have steppable control over the shadow terminal. If you
+@@ -105,6 +128,7 @@
+ /// more convenient ready-made wrapper to interect with a running shadow terminal.
+ #[non_exhaustive]
+ pub struct ShadowTerminal {
++    replies: TerminalReplies,
+     /// The Wezterm terminal that does most of the actual work of maintaining the terminal 🙇
+     pub terminal: wezterm_term::Terminal,
+     /// The shadow terminal's config
+@@ -132,18 +156,21 @@
+         let (output_tx, output_rx) = tokio::sync::mpsc::channel(1);
+ 
+         tracing::debug!("Creating the in-memory Wezterm terminal");
++        let replies = TerminalReplies::default();
+         let terminal = wezterm_term::Terminal::new(
+             Self::wezterm_size(config.width.into(), config.height.into()),
+             std::sync::Arc::new(WeztermConfig {
+                 scrollback: config.scrollback_size,
++                palette: config.palette.clone(),
+             }),
+             "Tattoy",
+             "O_o",
+-            Box::<Vec<u8>>::default(),
++            Box::new(replies.clone()),
+         );
+ 
+         let pty_size = (config.width.into(), config.height.into());
+         Self {
++            replies,
+             terminal,
+             config,
+             channels: Channels {
+@@ -170,6 +197,7 @@
+         user_input_rx: tokio::sync::mpsc::Receiver<crate::pty::BytesFromSTDIN>,
+     ) -> tokio::task::JoinHandle<Result<(), crate::errors::PTYError>> {
+         let (internal_input_tx, internal_input_rx) = tokio::sync::mpsc::channel(1);
++        *self.replies.0.lock().unwrap() = Some(internal_input_tx.clone());
+         self.channels.internal_input_tx = Some(internal_input_tx);
+ 
+         let pty = crate::pty::PTY {
+@@ -287,7 +315,6 @@
+                 })?;
+         }
+ 
+-        self.handle_cursor_position_request(bytes).await?;
+         self.terminal.advance_bytes(bytes);
+         tracing::trace!("Wezterm shadow terminal advanced {} bytes", bytes.len());
+         let result = self.send_outputs().await;
+@@ -296,50 +323,6 @@
+         }
+         self.accumulated_pty_output.clear();
+         self.wait_for_output_until = None;
+-        Ok(())
+-    }
+-
+-    /// Some CLI applications need to know where the current cursor is, so that they can decide how
+-    /// to draw themselves. They request the cursor position from the host terminal emulator by
+-    /// sending the special code: `^[6n`. It is the responsibility of the terminal emulator to
+-    /// respond to this request with another ANSI code containing the coordinates of the cursor.
+-    #[expect(
+-        clippy::needless_pass_by_ref_mut,
+-        reason = "
+-            When I set this to `&self` then we get an actual compiler error that the `send()` method
+-            on the channel is not safe because it's not `Send`. I don't understand this.
+-        "
+-    )]
+-    async fn handle_cursor_position_request(
+-        &mut self,
+-        bytes: &[u8],
+-    ) -> Result<(), crate::errors::ShadowTerminalError> {
+-        if Self::find_subsequence(bytes, CURSOR_POSITION_REQUEST.as_bytes()).is_none() {
+-            return Ok(());
+-        }
+-
+-        let mut payload: crate::pty::BytesFromSTDIN = [0; 128];
+-        let cursor_position = self.terminal.cursor_pos();
+-        let response_string = format!("\x1b[{};{}R", cursor_position.y, cursor_position.x);
+-        let response_bytes = response_string.as_bytes();
+-
+-        for chunk in response_bytes.chunks(128) {
+-            crate::pty::PTY::add_bytes_to_buffer(&mut payload, chunk).with_whatever_context(
+-                |error| format!("Couldn't add response to payload buffer: {error:?}"),
+-            )?;
+-
+-            if let Some(sender) = self.channels.internal_input_tx.as_ref() {
+-                tracing::debug!(
+-                    "Responding to cursor position request with: {}",
+-                    response_string.replace('\x1b', "^")
+-                );
+-                let result = sender.send(payload).await;
+-                if let Err(error) = result {
+-                    snafu::whatever!("Couldn't send internal input: {error:?}");
+-                }
+-            }
+-        }
+-
+         Ok(())
+     }
+ 
+--- a/shadow-terminal/src/steppable_terminal.rs
++++ b/shadow-terminal/src/steppable_terminal.rs
+@@ -141,8 +141,7 @@
+         match input {
+             Input::Characters(characters) => {
+                 for char in characters.chars() {
+-                    let mut buffer: crate::pty::BytesFromSTDIN = [0; 128];
+-                    char.encode_utf8(&mut buffer);
++                    let buffer = char.to_string().into_bytes();
+ 
+                     self.pty_input_tx
+                         .try_send(buffer)
+@@ -156,8 +155,7 @@
+ 
+             Input::Event(event) => {
+                 for chunk in event.as_bytes().chunks(128) {
+-                    let mut buffer: crate::pty::BytesFromSTDIN = [0; 128];
+-                    crate::pty::PTY::add_bytes_to_buffer(&mut buffer, chunk)?;
++                    let buffer = chunk.to_vec();
+ 
+                     self.pty_input_tx
+                         .try_send(buffer)

@@ -258,6 +258,25 @@ local function journey(tools, opts)
   }
 end
 
+local STORY_KINDS = { "edit", "read", "exec", "web", "mcp", "other", "task" }
+local function story(tools, opts)
+  opts = opts or {}
+  local j = journey(tools, opts)
+  local events = { { kind = "embark" } }
+  for i = 1, tools do
+    local kind = STORY_KINDS[(i - 1) % #STORY_KINDS + 1]
+    events[#events + 1] = { kind = "tool", payload = { kind = kind, ext = "lua" } }
+    events[#events + 1] = { kind = "success", payload = { kind = kind } }
+  end
+  for _, e in ipairs(opts.tail or {}) do events[#events + 1] = e end
+  local recent = {}
+  for seq = math.max(1, #events - 63), #events do
+    recent[#recent + 1] = { seq = seq, kind = events[seq].kind, tick = seq * 3, payload = events[seq].payload or {} }
+  end
+  j.schema_version, j.seq, j.tick, j.recent = 2, #events, #events * 3, recent
+  return j
+end
+
 local function mkstate(mode, j, opts)
   opts = opts or {}
   return {
@@ -277,7 +296,7 @@ local function mkstate(mode, j, opts)
     journey = j,
     mood = opts.mood,
     mod = { speed = 1.0, density = 1.0, hue = 0.0, bright = 1.0, burst = opts.burst or 0.0 },
-    params = { density = 1.0 },
+    params = { density = 1.0, scene = opts.scene or "settlement" },
   }
 end
 
@@ -319,4 +338,4 @@ local function run(path, scen, W, H, frames, capture)
   return maxcov, maxraw
 end
 
-return { mkfx = mkfx, sandbox = sandbox, run = run, journey = journey, mkstate = mkstate, sbg = sbg }
+return { mkfx = mkfx, sandbox = sandbox, run = run, journey = journey, story = story, mkstate = mkstate, sbg = sbg }

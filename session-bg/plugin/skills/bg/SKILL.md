@@ -24,6 +24,13 @@ file it comes from. `sbg doctor` additionally reports the fx script
 directory, how many scripts are in it, and the contents of `error.json`
 when a script is currently broken.
 
+Current hosts also write `runtime.json`: actual versus requested effect,
+heartbeat, fallback reason and next retry. Check this before assuming the
+selected script is running. Old hosts may not report runtime status; a fresh,
+advancing Fortress checkpoint proves activity more reliably than file presence.
+The host retries failures with bounded backoff, suspended by pause/disable.
+Rust host changes require a new session launch; Lua edits hot-reload in place.
+
 ## Switch the effect
 
 ```
@@ -74,50 +81,17 @@ anything already there.
 
 ### Living worlds
 
-These scripts draw the session's own history, so a long session looks nothing
-like a short one. Growth is monotonic and comes from `state.journey`:
+`world.lua` is the Fortress bundle: the session's own history drawn as a
+settlement, so a long session looks nothing like a short one. Growth is
+monotonic and comes from `state.journey`; `state.mood.motif` is ignored. The
+earlier generative motifs (forest, skyline, reef, circuit, sakura, kana, shrine,
+hangar, dojo, hud, studyroom, sparkfield, dust) were removed.
 
-| Script | World | What grows |
-|---|---|---|
-| `forest` | L-system woodland | a tree per N tools (N adapts to width), branch depth from `lines_added`, leaves tinted per file extension, scars per error |
-| `skyline` | city | a tower per ~10 tools, heights from `lines_added`, a lit window per recent tool, crane while a tool runs |
-| `reef` | braille coral | a cluster per ~12 tools, a fish per subagent, plankton by `context_pct`, bleaching on error |
-| `circuit` | etched board | a node per tool coloured by `tool_kind`, traces between consecutive events, pulses while thinking |
-| `office` / `fortress` | top-down settlement | workers, workshops, caravans, chapters, artifacts and bounded legends |
-| `sakura` | cherry tree at night | branches per ~6 tools, blossom haze per prompt, a petal per edited file drifting into a corner pile |
-| `kana` | halfwidth-katakana rain | a column per ~15 tools kept to the pane edges, trail length from `context_pct`, a standing sigil per 40 tools spelling your prompt words |
-| `shrine` | torii and stone path | a path step per 5 tools, a lantern per 25, tree line revealed by `context_pct`, fireflies per prompt |
-| `hangar` | mecha maintenance bays | a bay with a docked mech per 30 tools, lamps coloured by `tool_kinds`, drones per subagent, PWR gauge from `context_pct` |
-| `dojo` | shonen training arc | speed lines on the pane edges per 4 tools, tally marks per 5 prompts, LV ticks by `context_pct`, a chibi who trains, sits, or thinks |
-| `hud` | RPG status window | rows unlock per milestone (prompts, tools, files, party, mana, wounds, rests), LV and XP from tools, skills from prompt words |
-| `studyroom` | lo-fi study room | a book per edited file on filling shelves, a sticky note per prompt, a plant from the diff, a cat after 20 tools, rain while a tool runs |
-| `sparkfield` | magical constellation | stars with the pane, a link per 6 tools, sigil rings per peak subagents, a comet per tool call |
-| `dust` | dust-sprite workshop | a mote per 25 tools and per subagent carrying `*` from the task pile to the shelves, cobwebs that clear as prompts accumulate |
-| `world` | all fourteen | uses `state.mood.motif`, else `sbg.pick` on the repo name |
-
-For Fortress, context sets the season. Across the other motifs `context_pct` is the time of day (dawn to dusk on the sky
-rows), `mode` drives motion (`thinking` sways, `tool` bursts, `waiting` idles,
-`error` flashes, `compacting` sweeps), and `state.mood.palette` is used when
-present, otherwise a hue derived from the repo name. Other scenes are rebuilt
-from the counters when they change — replays are identical and memory is
-bounded — and the oldest parts fade or scroll off once the pane is full.
-
-`world.lua` is a generated bundle: every motif is the body of its standalone
-`plugins/fx/<motif>.lua` in a closure, because the sandbox has no `require`.
-Edit the standalone file, run `python3 scripts/world/bundle.py`, and check
-coverage with `lua scripts/world/drive.lua` (frame preview:
-`lua scripts/world/show.lua NAME [tools] [mode] [W] [H] [ctx_pct]`); never
-hand-edit the copies in it.
-
-The anime motifs (`sakura kana shrine hangar dojo hud studyroom sparkfield dust`) share a visual
-language: one-cell glyphs only (ASCII, box drawing, blocks, braille, halfwidth
-katakana U+FF66-FF9F), never fullwidth kana or kanji, which are double-width
-and would corrupt the grid; a row-0 label with the scene title and a
-halfwidth-katakana mode word; ASCII kaomoji `(._.)` `(-_-)` `(>_<)` only as
-rare reactions; `thinking` is an aura or gathering, `tool` an action cut in
-+x, `waiting` a freeze frame, `error` a brief local crimson accent then a
-scar, `compacting` a contraction that regrows, `idle` a slow drift with a
-sleepy cue after a minute.
+`fortress.lua` and `world.lua` are generated from `plugins/fx/fortress/*.lua`
+by `python3 scripts/world/bundle.py`; check coverage with
+`lua scripts/world/drive.lua` (frame preview:
+`lua scripts/world/show.lua world [tools] [mode] [W] [H] [ctx_pct]`); never
+hand-edit the generated copies.
 
 ### Authoring a new animation live
 
@@ -136,7 +110,7 @@ sleepy cue after a minute.
 Full API — `init`/`step`/`render`, the `sbg` helper table (rng, noise,
 colour ramps, glyph sets), the sandbox limits, and `fx:put`/`clear`/`count`
 — is in `references/lua-api.md`. The control-channel file formats
-(`session.json`, `status.json`, `override.json`, `error.json`) are in
+(`session.json`, `status.json`, `override.json`, `error.json`, `runtime.json`) are in
 `references/state-schema.md`.
 
 ### Tasteful defaults
@@ -151,16 +125,50 @@ colour ramps, glyph sets), the sandbox limits, and `fx:put`/`clear`/`count`
 - Be deterministic given `ctx.seed` (use only `sbg.rng`, never wall-clock
   randomness) so the same pane looks the same across restarts.
 
-### Fortress office
+### Fortress
 
-`office` is now an original Fortress simulation; `fortress` selects the same
-scene explicitly. Use `sbg fx use fortress`. Workers build edge districts,
+`world.lua` is the Fortress simulation and the default for every pane;
+`sbg fx use fortress` selects the same effect explicitly. Its default scene is
+the Studio: a cutaway game-dev tower on the right edge. The HUD shows the
+session name, `⌂ repo ⎇ branch`, a `◉ mode` lamp, `model ▰▰▱▱` effort pips,
+`ctx ▰▰▰▱ 62%`, tool tallies with a braille sparkline, the tier meter and a
+working-day clock. The crew works at lit stations only while a real tool beat
+is open, chases a `¤` bug after a failure, runs an errand to the YOU door while
+a permission waits and takes coffee breaks when the session is quiet; floors
+grow through five tiers with tools and prompts. The contract is
+`notes/studio/prd.md`.
+
+`scene=settlement` keeps the edge-district view. Workers build edge districts,
 caravans visit, decisions appear at the gate, and compaction seals a gallery.
+The header follows the current session name and updates on rename. Construction
+progresses from a blueprint to fittings over fifteen tool events per room;
+the HUD shows the next room, completed rooms and settlement rank. Progress
+describes activity, never code quality. Builders move while tools run.
+
+In the settlement, the HUD row under the title follows the session: the mode with the running
+tool (`| Bash`, `thinking...`, `waiting ?`, `error !`, `compacting ~~`,
+`idle zz` after a minute) on the left and a `ctx [====----] 42%` meter on the
+right; the bottom-left line lists tools and `+added/-removed`. Milestones
+replace the mode label for four seconds (`* renamed`, `* 50 tools`,
+`* context 50%`, `* chapter 3`, `* compacted`, `* helper joins`, `! error 2`)
+and a rename flashes the title amber. `/rename` or
+`sbg set session_name=...` shows within about a second.
+Waiting and error labels take priority over milestone toasts. Meters and counters
+shorten to complete values when an edge strip is narrow.
 
 ```
 sbg set fortress="Amber Hall" difficulty=calm
+sbg set session_name="Parser workshop"  # optional display override
+sbg set session_name=                   # restore automatic session name
 sbg set paused=true         # freeze the Fortress view and consumption
 sbg set paused=false        # catch up from the event ring; report any gap
+sbg set presentation=compact # edge-only settlement and smaller HUD
+sbg set presentation=auto    # adapt detail and room packing to the pane
+sbg set reduced_motion=true # still scenery, no flashes; earned progress continues
+sbg set reduced_motion=false # restore animated colony life
+sbg set scene=studio        # default: game-dev studio tower on the right edge
+sbg set scene=settlement    # landscape and edge-district view
+sbg set glyphs=ascii        # ASCII-only Studio for fonts that misrender symbols
 sbg legends 12              # recent safe announcements
 sbg state                  # includes year, season, population, wealth and stress
 ```
@@ -172,8 +180,30 @@ snippets are no longer written; only filtered, bounded subject words are used.
 Missing events produce an explicit chronicle gap. A denied permission is a
 neutral decision. No paid director calls are required.
 
-Source modules live in `plugins/fx/fortress/{sim,render,adapter}.lua`.
-`office.lua`, `fortress.lua` and `world.lua` are generated: run
+Fortress derives its layout from the actual pane grid, with readable room sizes,
+more room columns in wide panes, and miniature rooms in narrow or short panes.
+There is no reference resolution. The settlement fills empty space with a brighter
+landscape: trees, flowers, rocks, mushrooms, a flowing stream, bridges, rabbits
+and butterflies. Foreground text and its one-cell halo always take priority.
+Explicit `presentation=compact` keeps the middle 64% clear; very small panes
+prioritize title, mode and progress over decoration. Reduced motion is separate
+from pause: ecology time and event consumption continue. New host parameters
+require the current `sbg-fx` process; a Lua hot reload alone cannot add them to an
+older binary. The adaptive layout itself applies immediately on hot reload.
+
+The launcher's local watcher checks the exact Codex thread name or Claude custom
+title once per second, including while idle. Hooks also refresh names. A session
+already running before this upgrade needs the new launcher for continuous
+polling. Names fall back to the working directory, wrap across two edge rows,
+and do not change world identity or history. Long names are clipped and
+unsupported glyphs use `?`; full sanitized names appear in `sbg state --json`.
+
+The host exposes no hidden-window, focus or occlusion signal; use
+`sbg set paused=true` or `sbg set enabled=false` instead of relying on
+window visibility.
+
+Source modules live in `plugins/fx/fortress/{glyphs,sim,life,plaque,landscape,studioview,studio,render,adapter}.lua`.
+`fortress.lua` and `world.lua` are generated: run
 `python3 scripts/world/bundle.py` after changes. Validate via
 `python3 scripts/check.py`. Glyphs and visual rules:
 [fortress-glyphs.md](references/fortress-glyphs.md).

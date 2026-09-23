@@ -85,12 +85,12 @@ class FortressCLI(unittest.TestCase):
         return subprocess.run([sys.executable,str(ROOT/'bin/sbg'),*args],env={**os.environ,'SBG_STATE':tmp},text=True,capture_output=True)
     def test_controls_and_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
-            r=self.run_cli(['set','fortress=Amber Hall','paused=true','difficulty=calm'],tmp)
+            r=self.run_cli(['set','fortress=Amber Hall','paused=true','difficulty=calm','presentation=compact','reduced_motion=true'],tmp)
             self.assertEqual(r.returncode,0,r.stderr)
             p=json.loads((Path(tmp)/'override.json').read_text())['params']
-            self.assertEqual(p,{'fortress':'Amber Hall','paused':True,'difficulty':'calm'})
+            self.assertEqual(p,{'fortress':'Amber Hall','paused':True,'difficulty':'calm','presentation':'compact','reduced_motion':True})
             before=(Path(tmp)/'override.json').read_bytes()
-            for value in ('difficulty=hard','paused=yes','fortress=bad\x1bname','fortress='+('x'*25)):
+            for value in ('difficulty=hard','paused=yes','presentation=huge','reduced_motion=yes','fortress=bad\x1bname','fortress='+('x'*25)):
                 self.assertEqual(self.run_cli(['set',value],tmp).returncode,2)
                 self.assertEqual((Path(tmp)/'override.json').read_bytes(),before)
     def test_legends_empty_limit_and_safe_output(self):

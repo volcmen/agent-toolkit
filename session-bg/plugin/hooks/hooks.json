@@ -9,7 +9,7 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" start",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" start",
-            "timeout": 1
+            "timeout": 2
           }
         ]
       }
@@ -21,7 +21,7 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" thinking",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" thinking",
-            "timeout": 1
+            "timeout": 2
           }
         ]
       }
@@ -33,7 +33,7 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" tool",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" tool",
-            "timeout": 1
+            "timeout": 2
           }
         ]
       }
@@ -45,7 +45,7 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" thinking",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" thinking",
-            "timeout": 1
+            "timeout": 2
           }
         ]
       }
@@ -57,7 +57,7 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" error",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" error",
-            "timeout": 1
+            "timeout": 2
           }
         ]
       }
@@ -69,7 +69,7 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" error",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" error",
-            "timeout": 1
+            "timeout": 2
           }
         ]
       }
@@ -81,7 +81,7 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" waiting",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" waiting",
-            "timeout": 1
+            "timeout": 2
           }
         ]
       }
@@ -94,7 +94,7 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" waiting",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" waiting",
-            "timeout": 1
+            "timeout": 2
           }
         ]
       }
@@ -106,7 +106,7 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" subagent-start",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" subagent-start",
-            "timeout": 1
+            "timeout": 2
           }
         ]
       }
@@ -118,7 +118,7 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" subagent-stop",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" subagent-stop",
-            "timeout": 1
+            "timeout": 2
           }
         ]
       }
@@ -130,7 +130,7 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" compacting",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" compacting",
-            "timeout": 1
+            "timeout": 2
           }
         ]
       }
@@ -142,7 +142,7 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" thinking",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" thinking",
-            "timeout": 1
+            "timeout": 2
           }
         ]
       }
@@ -154,7 +154,7 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" idle",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" idle",
-            "timeout": 1
+            "timeout": 2
           }
         ]
       }
@@ -166,7 +166,7 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" idle",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" idle",
-            "timeout": 1
+            "timeout": 2
           }
         ]
       }

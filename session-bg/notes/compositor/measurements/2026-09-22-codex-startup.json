@@ -1,0 +1,20 @@
+{
+  "app": "codex",
+  "input_copies": 1,
+  "shaded_spaces": 309,
+  "prompt_submitted": false,
+  "metrics": {
+    "backend": "own",
+    "elapsed_seconds": 23.943174625,
+    "cpu_seconds": 0.243872,
+    "max_rss_bytes": 5259264,
+    "input_bytes": 105,
+    "native_bytes": 176951,
+    "background_bytes": 145625,
+    "frames": 247,
+    "changed_cells": 48655,
+    "skipped_frames": 33
+  },
+  "version": "0.155.1",
+  "fixture": "Headless Alacritty observer; unsent startup/typing/paste probe, not physical terminal parity"
+}

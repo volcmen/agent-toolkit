@@ -13,6 +13,7 @@ import struct
 import termios
 import select
 import shutil
+import shlex
 import subprocess
 import sys
 import time
@@ -28,9 +29,8 @@ def run(effect: str, seconds: float = 6.0) -> tuple[bool, str]:
 
 
 def run_isolated(effect: str, seconds: float, scratch: Path) -> tuple[bool, str]:
-    if shutil.which("tattoy") is None:
-        return False, "tattoy not on PATH"
-    env = dict(os.environ, XDG_CACHE_HOME=str(scratch), SBG_STATE=str(scratch / "pane"))
+    # This test owns a fresh PTY; it must also run from an sbg-wrapped shell.
+    env = dict(os.environ, XDG_CACHE_HOME=str(scratch), SBG_STATE=str(scratch / "pane"), TATTOY_NEST="allow")
     env.pop("SBG_SCRIPT", None)
     log_path = scratch / "sbg" / "tattoy.log"
     dry = subprocess.run(
@@ -39,7 +39,7 @@ def run_isolated(effect: str, seconds: float, scratch: Path) -> tuple[bool, str]
     )
     if dry.returncode:
         return False, dry.stderr.strip()
-    argv = [shutil.which("tattoy"), "--main-config", dry.stdout.splitlines()[1].split()[2], "--disable-indicator", "--command", str(ROOT / "scripts" / "smoke-child.sh")]
+    argv = shlex.split(dry.stdout.splitlines()[1])
     env = dict(env, TERM="xterm-kitty", COLORTERM="truecolor", SBG_EFFECT=effect, SBG_SEED="1", SBG_FPS="12", LINES="30", COLUMNS="100")
     pid, fd = pty.fork()
     if pid == 0:
@@ -81,6 +81,8 @@ def run_isolated(effect: str, seconds: float, scratch: Path) -> tuple[bool, str]
         problems.append("no plugin frame rendered")
     if b"\x1b[" not in output:
         problems.append("tattoy produced no terminal output")
+        if output.strip():
+            problems.append(output.decode("utf-8", errors="replace").strip()[-500:])
     return not problems, "; ".join(problems) or f"ok ({len(output)} bytes of terminal output)"
 
 

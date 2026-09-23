@@ -34,9 +34,11 @@ function render(fx, state) end  -- paint the frame
 | `tool` | string\|nil | raw tool name from the last `PreToolUse` |
 | `tool_kind` | string\|nil | `exec` `edit` `read` `web` `task` `mcp` `other` |
 | `agent` | string | `claude` `codex` `unknown` |
+| `session_name` | string | sanitized live display title; also available as `journey.session_name` for older hosts; never a world identity |
 | `context_pct` | float | 0..100, Claude only (0 for Codex) |
 | `cost` | float | running cost in USD, Claude only |
 | `model` | string\|nil | model name, Claude only |
+| `effort` | string | reasoning effort `low` `medium` `high` `xhigh` `max`, Claude only; `""` when absent or unknown |
 | `prompt` | string\|nil | null/empty in v2 (raw prompts are never persisted) |
 | `age` | float | seconds since the current mode started |
 | `changed` | bool | true on the frame the merged state actually changed |
@@ -46,8 +48,14 @@ function render(fx, state) end  -- paint the frame
 | `mod.bright` | float | brightness multiplier the host applies after `render` |
 | `mod.burst` | float | 0..1, decays after a tool call; use for one-shot spawns/flashes |
 | `params.density` `.speed` `.hue` `.opacity` `.palette` | number\|string\|nil | user knobs from `sbg set` |
+| `params.presentation` | string | `auto` (default) or `compact`; viewport layout only |
+| `params.reduced_motion` | bool | stationary scenery and no flashes; event consumption and local time continue |
+| `params.paused` | bool | freeze event consumption, local time and presentation clock |
+| `params.scene` | string | `studio` (default) or `settlement`; the removed `office` and invalid values fall back to `studio` |
+| `params.glyphs` | string | `unicode` (default) or `ascii`; the Studio maps every symbol to ASCII when `ascii` |
 | `lines_added` `lines_removed` | number | diff size accumulated this session |
 | `duration` | number | seconds of wall-clock session time |
+| `branch` | string | git branch from the statusline, `""` when unknown |
 | `journey` | table | session counters, see below (may be `{}`) |
 | `mood` | table | derived look, see below (may be `{}`) |
 
@@ -77,7 +85,7 @@ them as `local j = state.journey or {}` and `tonumber(j.tools) or 0`.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `motif` | string | requested world: `forest` `skyline` `reef` `circuit` `office` `sakura` `kana` `shrine` `hangar` `dojo` `hud` `studyroom` `sparkfield` `dust` |
+| `motif` | string | legacy request; `world.lua` is Fortress only and ignores it |
 | `palette` | array | five `"#rrggbb"` strings; parse with `sbg.hex(tonumber(s:sub(2, 7), 16))` |
 | `tempo` | number | suggested motion multiplier |
 | `title` | string | a name for the session |
@@ -129,7 +137,7 @@ sbg.glyphs.braille      -- all 256 braille characters, indexed 1..256
 sbg.glyphs.ascii         -- ".":"-" "=" "+" "*" "#" "%" "@"
 sbg.glyphs.dots           -- "·" "•" "∙" "●"
 sbg.glyphs.box             -- box-drawing characters
-sbg.glyphs.sprites          -- ☺ ☻ ♟ ♙ ⚙ ☕ ✎ ⌨ ▣ ▤ ▥ ▦ ▧ ▨ ▩ ♥ ★ ✦ ✧ ⚡ ☁ ☂ ☀ ☾
+sbg.glyphs.sprites          -- ☺ ☻ ♟ ♙ ⚙ ☕ ✎ ⌨ ▣ ▤ ▥ ▦ ▧ ▨ ▩ ♥ ★ * ✧ ⚡ ☁ ☂ ☀ ☾
 sbg.glyphs.tree              -- │ ┃ ╱ ╲ ╭ ╮ ╯ ╰ Y y v ^ ♠ ♣ * ° •
 
 sbg.braille(mask8)     -- 8-bit dot mask -> one braille character
@@ -155,7 +163,15 @@ A fresh `_ENV` exposes only `math`, `string`, `table`, `select`, `ipairs`,
 `template.lua`), not in files or the environment. Memory is capped at 8 MiB
 and a frame that runs past roughly 3M instructions is aborted; a script that
 consistently blows the time budget gets its pane's fps halved, and one that
-blows it badly falls back to the builtin effect.
+has three consecutive frames over three times its frame budget falls back to
+the builtin effect. A single scheduling/I/O stall does not cause fallback.
+Three failed whole step/render pairs also trigger recovery; one successful half
+cannot erase the other half's error. The host retries the selected script with
+5/10/20/40/60-second backoff, restored checkpoints, and no dependence on new
+hook events. Pause/disable suspends retry; an explicit builtin cancels it.
+`runtime.json` reports requested versus active effect, heartbeat, reason and
+next retry. This policy requires a newly launched host; Lua hot reload does
+not replace an already-running Rust binary.
 
 ## House rules for a good script
 
@@ -176,6 +192,31 @@ blows it badly falls back to the builtin effect.
 - Guard everything the session may not have yet: `local j = state.journey or {}`,
   `tonumber(j.tools) or 0`, `type(j.repo) == "string"`. A pane can be 1x1.
 
+## The Fortress HUD
+
+`plugins/fx/fortress/plaque.lua` is presentation-only state bundled into
+`fortress.lua`/`world.lua`. Row 3 of each edge strip shows the mode with the
+running tool on the left (`| Bash`, `thinking...`, `waiting ?`, `error !`,
+`compacting ~~`, `idle zz` after a minute) and a `ctx [====----] 42%` meter on
+the right (hidden when `context_pct` is 0). The bottom-left HUD line lists
+tools and `+added/-removed` and brightens for two seconds after a change. A
+milestone replaces the mode label for four seconds: `* renamed` (the title also
+flashes amber), `* 50 tools`, `* +250 lines`, `* context 50%`, `* chapter 3`,
+`* compacted`, `* helper joins`, `! error 2`. None of this touches
+simulation history or checkpoints.
+
+With `scene=studio`, `Studioview.hud` owns the edges instead. Row 0 carries
+the session name on the left and the `◉ label` lamp on the right (`Editing`,
+`Thinking ⋯`, `Your move`, a blinking `Approve?` while a `wait_open` is
+unresolved, `Bug ¤`, `Filing`, `Break`). Rows 1–2 show `⌂ repo ⎇ branch`,
+`model ▰▰▱▱` effort pips and `ctx ▰▰▰▱ 62%`. The foot shows the nonzero
+tallies `✦ ◆ ◇ ■ ○ ¤`, a braille sparkline of tools per 15 s from
+`journey.recent`, the tier meter, `Day N · hh:mm` (09:00 + pct × 7.2 min, Day =
+compactions + 1) and a short ticker for the latest event. An element whose
+field is absent is hidden, never shown as zero, and a numeric field that does
+not fit its slot is hidden rather than clipped. The HUD is drawn at priority 0,
+so the budget never sheds it.
+
 ## Fortress checkpoint lifecycle
 
 Optional `checkpoint()` returns a bounded plain table for fixed, host-owned
@@ -185,5 +226,15 @@ No arbitrary read/write API is exposed. Optional `foreground_halo()` returns 0 o
 1; Fortress uses 1 and semantic colours (no global hue/error tint).
 
 `params.fortress`, `params.paused`, `params.difficulty` carry validated user
-controls. For the complete v2 journey schema, migration and replay semantics,
+controls. `params.presentation=auto` packs rooms/HUD and ambient scenery into
+the current grid; explicit `compact` retains an edge-only settlement and a
+clear centre. Both respect foreground occupancy and its one-cell halo;
+`params.reduced_motion` freezes scenery and removes pulses without pausing event
+consumption. Both are separate from `paused`. Headers and footers shrink to the
+grid; context meters drop the bar before dropping a complete percentage, and
+waiting/error modes are never displaced by toasts. New parameters require the
+current host binary, while layout updates hot-reload in older running hosts.
+For the complete v2 journey schema, migration and replay semantics,
 see [state-schema.md](state-schema.md#fortress-v2-event-stream-and-checkpoints).
+The host exposes no hidden-window, focus or occlusion signal; use
+`sbg set paused=true` or `sbg set enabled=false` to stop the effect instead.

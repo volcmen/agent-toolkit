@@ -1,0 +1,37 @@
+{
+  "method": "steady-state ps CPU-time delta, backend plus effect; native child excluded",
+  "results": [
+    {
+      "backend": "own",
+      "workload": "updates",
+      "viewport": "200x60",
+      "requested_fps": 12,
+      "reported_fps": 12.0,
+      "sample_seconds": 30.019,
+      "cpu_seconds": 0.37,
+      "last_render_cpu_ms": 1.3199159999999999,
+      "last_render_wall_ms": 1.4280840000000001,
+      "cpu_percent_one_core": 1.233,
+      "rss_median_mib": 6.72,
+      "rss_peak_mib": 6.78,
+      "terminal_bytes": 8058,
+      "terminal_bytes_per_second": 268,
+      "processes_measured": 1,
+      "own_lifetime_metrics": {
+        "backend": "own",
+        "elapsed_seconds": 33.194133625,
+        "cpu_seconds": 0.423221,
+        "max_rss_bytes": 7127040,
+        "input_bytes": 0,
+        "native_bytes": 2167,
+        "background_bytes": 12171,
+        "frames": 96,
+        "changed_cells": 1987,
+        "skipped_frames": 17
+      }
+    }
+  ],
+  "observed": "2026-09-22",
+  "platform": "macOS arm64, loaded host",
+  "stage": "damage-aware renderer and CPU guard; native-only 12 fps sample"
+}

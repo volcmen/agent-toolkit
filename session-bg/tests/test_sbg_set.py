@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -83,6 +85,45 @@ class SbgSetStateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(self.override_path.read_text(encoding="utf-8"), before)
 
+    def test_scene_round_trip(self):
+        result = self.run_sbg("set", "scene=settlement")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.read_override()["params"]["scene"], "settlement")
+
+    def test_bogus_scene_rejected_and_file_untouched(self):
+        self.run_sbg("set", "effect=matrix")
+        before = self.override_path.read_text(encoding="utf-8")
+        result = self.run_sbg("set", "scene=garden")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.override_path.read_text(encoding="utf-8"), before)
+
+    def test_removed_office_scene_rejected_and_file_untouched(self):
+        self.run_sbg("set", "scene=studio")
+        before = self.override_path.read_text(encoding="utf-8")
+        result = self.run_sbg("set", "scene=office")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("scene=studio", result.stderr)
+        self.assertEqual(self.override_path.read_text(encoding="utf-8"), before)
+
+    def test_studio_scene_round_trip(self):
+        result = self.run_sbg("set", "scene=studio")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.read_override()["params"]["scene"], "studio")
+
+    def test_glyphs_round_trip(self):
+        for value in random.sample(["unicode", "ascii"], 2):
+            result = self.run_sbg("set", f"glyphs={value}")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(self.read_override()["params"]["glyphs"], value)
+
+    def test_bogus_glyphs_rejected_and_file_untouched(self):
+        self.run_sbg("set", "effect=matrix")
+        before = self.override_path.read_text(encoding="utf-8")
+        bogus = random.choice(["emoji", "UNICODE", "", "ascii2", "nerd"])
+        result = self.run_sbg("set", f"glyphs={bogus}")
+        self.assertEqual(result.returncode, 2, f"glyphs={bogus!r}")
+        self.assertEqual(self.override_path.read_text(encoding="utf-8"), before)
+
     def test_frozen_maybe_rejected_and_file_untouched(self):
         self.run_sbg("set", "effect=matrix")
         before = self.override_path.read_text(encoding="utf-8")
@@ -127,6 +168,21 @@ class SbgSetStateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("SBG_PANE=", result.stdout)
         self.assertIn(f"SBG_STATE={self.state_dir}", result.stdout)
+
+    def test_runtime_reports_actual_effect_separately_from_selection(self):
+        self.run_sbg("set", "script=/tmp/requested-fortress.lua")
+        runtime = {"status": "recovering", "active": {"kind": "builtin", "name": "stars"},
+                   "requested": {"kind": "script", "path": "/tmp/requested-fortress.lua"},
+                   "reason": "repeated script failures", "ts": time.time(), "retry_at": time.time() + 5}
+        (self.state_dir / "runtime.json").write_text(json.dumps(runtime))
+        result = self.run_sbg("state", "--json")
+        self.assertEqual(json.loads(result.stdout)["runtime"], runtime)
+        result = self.run_sbg("doctor")
+        self.assertIn("runtime: recovering active={'kind': 'builtin', 'name': 'stars'}", result.stdout)
+        self.assertIn("repeated script failures", result.stdout)
+        runtime["ts"] = 1
+        (self.state_dir / "runtime.json").write_text(json.dumps(runtime))
+        self.assertIn("runtime: stale;", self.run_sbg("doctor").stdout)
 
 
 if __name__ == "__main__":

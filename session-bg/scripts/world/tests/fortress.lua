@@ -1,5 +1,6 @@
 local Sim=dofile('plugins/fx/fortress/sim.lua')
 local View=dofile('plugins/fx/fortress/render.lua')
+View.landscape=dofile('plugins/fx/fortress/landscape.lua')
 local Harness=dofile('scripts/world/harness.lua')
 local tests=0
 local function check(ok,msg) assert(ok,msg); tests=tests+1 end
@@ -43,6 +44,36 @@ for _,x in ipairs({{24.9,'spring'},{25,'summer'},{50,'autumn'},{75,'winter'},{10
 s:push(event(9,'subagent_start',{count=99},s.clock)); check(#s.dwarves==12 and s.crew==88,'migrant cap + crew')
 s:push(event(10,'subagent_stop',{count=0},s.clock)); check(#s.dwarves==1 and s.crew==0,'resident retirement')
 local labour=Sim.new(19,'labour')
+local building=Sim.new(18,'building')
+check(building:construction(4)==0 and building:progression().rooms==3,'starter rooms and planned site')
+for i=1,7 do building:push(event(i,'tool',{kind='edit'})) end
+check(building:construction(4)==7/15 and building:progression().work==7,'construction earned by labors')
+building:tick(10000)
+check(building:construction(4)==7/15,'idle time does not build')
+for i=8,45 do building:push(event(i,'tool',{kind='read'},building.clock+i)) end
+check(building:progression().rank==2 and building:progression().name=='Outpost','rank at six complete rooms')
+check(building:progression().rooms==6 and building:construction(7)==0,'new site starts after completion')
+local completed=0
+for _,e in ipairs(building.legends) do if e.kind=='room_built' then completed=completed+1 end end
+check(completed==3,'one announcement per completed room')
+local continued=assert(Sim.restore(building:snapshot(),'building'))
+local checkpoint_hash=continued:hash_state()
+local compact=View.layout(continued,80,24)
+check(compact.rooms[#compact.rooms].index==#continued.rooms,'active site survives small viewport')
+local f1,f2=Harness.mkfx(80,24),Harness.mkfx(80,24)
+View.render(f1,continued,compact,{session_name='First session',mode='idle',params={paused=true}},0)
+View.render(f2,continued,compact,{session_name='New session',mode='idle',params={paused=true}},0)
+check(Sim.canonical(f1.cells)~=Sim.canonical(f2.cells),'paused title updates')
+check(continued:hash_state()==checkpoint_hash,'rename does not rewrite history')
+local moving,paused=Harness.mkfx(80,24),Harness.mkfx(80,24)
+View.render(moving,continued,compact,{mode='tool',params={}},1.5)
+View.render(paused,continued,compact,{mode='tool',params={paused=true}},1.5)
+check(Sim.canonical(moving.cells)==Sim.canonical(paused.cells),'pause freezes builders without snapping to origin')
+local title=''; for x=0,13 do title=title..(f2.cells[x] and f2.cells[x].ch or ' ') end
+check(title:match('New session')~=nil,'session title rendered')
+for i=46,675 do continued:push(event(i,'tool',{kind='edit'},continued.clock+4)) end
+check(continued:progression().capped and continued:progression().rooms==48 and continued:progression().rank==5,'final rank and building cap')
+check(#continued.rooms==48,'no invisible extra buildings at cap')
 for i,kind in ipairs({'edit','read','exec'}) do
   labour:push(event(i,'tool',{kind=kind}))
   check(labour.jobs[#labour.jobs].kind==kind,'job kind '..kind)
@@ -100,7 +131,10 @@ for i=1,500 do
   local fx=Harness.mkfx(w,h)
   View.render(fx,soak,layout,{mode='tool',params={density=3}},3.25)
   check(fx:unique()/(w*h)<=0.25,'coverage cap')
-  for key in pairs(fx.cells) do local x=key%w; check(x<layout.strip or x>=w-layout.strip,'protected centre') end
+  for key in pairs(fx.cells) do
+    local x,y=key%w,key//w
+    check(x<layout.strip or x>=w-layout.strip or (y>=layout.top and y<layout.bottom),'landscape stays out of central HUD bands')
+  end
 end
 local original=Sim.canonical(View.layout(soak,200,60)); View.layout(soak,120,35)
 check(original==Sim.canonical(View.layout(soak,200,60)),'resize layout restores')

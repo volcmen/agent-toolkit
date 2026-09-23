@@ -5,9 +5,11 @@ Code, Codex, or anything else) running inside zellij on kitty. Each pane gets
 its own effect and seed; the animation only ever paints cells the application
 left empty, so the UI stays readable and input passes straight through.
 
-Built on [Tattoy](https://tattoy.sh) (text-based terminal compositor). This
-project adds a CPU-only effects plugin, per-pane configs, a launcher, and a
-zellij layout.
+[Tattoy](https://tattoy.sh) remains the default compositor. An experimental
+independent Rust backend, `sbg-term`, runs the same effects in process with a
+native PTY relay and bounded ANSI background diffs. See the
+[native backend notes](notes/compositor/spike.md) and
+[compatibility checklist](notes/compositor/parity.md).
 
 ```
 zellij pane ──▶ sbg auto -- claude
@@ -20,12 +22,13 @@ zellij pane ──▶ sbg auto -- claude
 
 ```sh
 brew install tattoy-org/tap/tattoy          # v0.1.8+
-cd plugins && cargo build --release          # builds plugins/target/release/sbg-fx
+python3 scripts/build-tattoy.py             # tested, pinned compatibility build for sbg
+cd plugins && cargo build --release --workspace --locked  # sbg-fx and sbg-term
 ln -s "$PWD/../bin/sbg" ~/.local/bin/sbg     # or add bin/ to PATH
 sbg palette                                  # palette.toml from ~/.config/kitty/current-theme.conf
 ```
 
-`scripts/install.sh` builds the plugin if needed and runs `sbg install`, which
+`scripts/install.sh` builds the compatible backend and current plugin, then runs `sbg install`, which
 links `~/.local/bin/sbg` and the PATH shims `~/.local/share/sbg/shims/{claude,codex}`
 so plain `claude` and `codex` open inside sbg automatically (see below).
 
@@ -43,9 +46,38 @@ sbg --list                       # matrix plasma waves stars
 zellij -l zellij/claude-quad.kdl # four claude panes, one effect each
 ```
 
+Try the independent Rust backend in a new session:
+
+```sh
+sbg --backend own -- codex
+sbg --backend own -- claude
+SBG_BACKEND=own codex           # also works through the installed PATH shim
+sbg doctor                     # active backend, CPU, peak RSS, renderer p95
+```
+
+`--backend tattoy` selects the compatibility backend again. Neither choice
+replaces an already-running process. `SBG_TERM` overrides the native executable.
+The native path needs no Tattoy installation or palette capture and passes
+arguments directly without a generated shell command. Use `sbg set` for effect
+controls; Tattoy's `Alt+…` shortcuts belong to the child on the native path.
+
+The default Studio keeps moving on its lower floors, so terminal output
+covering the top of the pane does not leave the scene still. Pause and reduced
+motion also control it.
+
+The native backend is opt-in while terminal parity work continues. Unchanged-size
+notifications preserve animation. After an actual resize it suspends painting
+until the app clears and repositions the affected screen buffer;
+reflow can leave old decoration until that redraw. Graphics and legacy charset
+protocols pass through, but suspend the underlay. Physical kitty/zellij soak and
+cross-emulator parity checks remain release gates. See
+[measurements and commands](notes/compositor/performance.md) and
+[resize/lifecycle coverage](notes/compositor/lifecycle.md).
+
 Effects: `matrix` (katakana rain), `plasma` (braille field), `waves` (block
 surface + foam), `stars` (twinkle + shooting stars). Defaults: 12 fps, layer
--5, opacity 0.6, glyphs at 35–55 % brightness of the Tokyo Night palette.
+-5, opacity 0.6. Built-in effects use 35–55% palette brightness; Fortress uses
+brighter semantic colours so its scenery stays visible after composition.
 
 Tattoy keys: `Alt+t` toggle effects, `Alt+s` scrollback mode (`Esc` exits),
 `Alt+M` minimap. Shader cycling is moved to `Alt+Shift+(` / `)` so zellij's
@@ -81,12 +113,38 @@ and pops it on exit, whenever it detects kitty, zellij, WezTerm, Ghostty, or
 foot. Force with `SBG_KITTY_KEYS=1`, disable with `SBG_KITTY_KEYS=0`.
 Tattoy's own `Alt+…` chords still work because its parser understands CSI u.
 
+The managed compatibility build also preserves batched typing and bracketed
+paste byte for byte, including Unicode and zero bytes. It recognizes shortcuts
+only outside pasted text and streams input through a bounded queue. A standalone
+Escape is released after a 40 ms ambiguity window. `scripts/input-smoke.py`
+checks these boundaries in a real PTY, including a 50 KiB paste.
+
 ## Troubleshooting
 
 `sbg doctor` prints the tattoy/plugin/palette/shim state, PATH order, `which
 claude`, and the tail of `~/.cache/sbg/tattoy.log` (default log level `warn`).
 When tattoy exits within 5 s or with a non-zero status, `sbg` prints the exit
 status, the exact command, and the new log lines to stderr before returning.
+
+### Codex panel backgrounds
+
+Stock Tattoy 0.1.8 discards terminal color-query replies, so Codex cannot discover
+the default background and falls back to unshaded prompt/message panels. Its
+plugin occupancy stream also skips colored spaces. The compatibility build
+forwards native terminal replies, uses Tattoy's configured palette, and protects
+explicitly colored blank cells from scenery.
+
+`python3 scripts/build-tattoy.py` downloads checksum-pinned source, applies
+`patches/tattoy-0.1.8-compat.patch`, builds with the locked dependency graph, and
+runs compositor/input tests plus real PTY color, paste, key and resize checks before installation.
+It installs under `~/.local/share/sbg/tattoy/`; Homebrew stays intact. `sbg` prefers
+this binary, and `sbg doctor` prints its path. `SBG_TATTOY=/path/to/tattoy` explicitly
+selects another backend. `python3 scripts/build-tattoy.py --check` verifies the
+installed patch recipe and executable checksum.
+
+Start a new sbg session (or resume Codex in one) to load the new backend and effect
+host. Existing sessions keep their running binaries. Lua world files can hot-reload,
+but `sbg install` preserves existing scripts; updating those remains deliberate.
 
 ## Live state: hooks, context usage, `sbg set`
 
@@ -96,8 +154,8 @@ updates additionally share a lock to preserve concurrent subagent events:
 
 | File | Writer | Content |
 |---|---|---|
-| `session.json` | `plugin/scripts/sbg_state.py` (Claude Code + Codex hooks) | `mode` (`start idle thinking tool waiting error compacting end`), `tool`, `tool_kind`, `subagents`, `prompt`, `seq` |
-| `status.json` | claude-core `statusline.py` (Claude only) | `context_pct`, `tokens`, `context_size`, `cost_usd`, `model`, `branch` |
+| `session.json` | Hooks and the launcher's name watcher, using the same writer lock | `session_name`, `mode` (`start idle thinking tool waiting error compacting end`), `tool`, `tool_kind`, `subagents`, `prompt`, `seq` |
+| `status.json` | claude-core `statusline.py` (Claude only) | `context_pct`, `tokens`, `context_size`, `cost_usd`, `model`, `effort`, `branch` |
 | `override.json` | `sbg set` / the `/bg` skill | `effect`, `script`, `mode` pin, `frozen`, `enabled`, `params.{density,speed,hue,opacity,palette}` |
 
 Default reaction (ceilings: speed 0.25–3, brightness ≤ 1.35, sparsity ≤ 40 %):
@@ -160,26 +218,68 @@ scratch state and only swaps in on success. A script that fails to load or
 throws keeps the last good version running — the failure is recorded in
 `<SBG_STATE>/error.json` and shown by `sbg doctor` and `sbg state`.
 
+An isolated long frame does not abandon the world. Three consecutive frames
+over three times the frame budget trigger a builtin fallback; sustained moderate
+cost first halves the frame rate. Failed scripts retry after 5, 10, 20, 40 and
+then at most every 60 seconds, restoring their saved checkpoint. Retries wait
+while the background is disabled or paused, and selecting a builtin cancels
+recovery. `sbg state` / `sbg doctor` show the actual runtime effect, requested
+effect, heartbeat, fallback reason and retry time from `runtime.json`.
+
+These host changes take effect in newly launched `sbg` sessions. Lua scenery
+hot-reloads in existing sessions; Tattoy 0.1.8 does not restart its plugin
+process on configuration changes, so an existing host keeps its old recovery
+policy until that session is relaunched.
+
+For an existing pre-recovery host, `scripts/legacy-recovery.py` is an opt-in
+migration helper. Give it the existing `sbg-fx` PID, exact pane directory and
+selected script with `--parent`, `--pane` and `--script`. It retries only after
+an exact legacy fallback log and a stale checkpoint, by touching the existing
+override's mtime. It never rewrites settings or events, honors pause/disable,
+backs off between attempts, and exits with that host or when `runtime.json`
+appears. Newly launched hosts need no helper.
+
 The `/bg` skill (`plugin/skills/bg/`) covers day-to-day control and
 authoring guidance for both Claude Code and Codex.
 
 ## Fortress: a settlement built by your session
 
-The `office` world is now a quiet, Dwarf-Fortress-inspired ASCII settlement.
+Fortress is a living, Dwarf-Fortress-inspired ASCII settlement.
 The founder and subagents become workers, tools become specialist jobs,
 web/MCP calls bring caravans, and compaction opens a deeper gallery. Skilled
 workers can create named artifacts. A bounded chronicle remembers the story.
 
+The default pane scene is the Studio: a cutaway game-dev tower on the right
+edge that shows the live session. The HUD names the session, its repository
+and branch, the current mode, reasoning effort and context; the crew works at
+lit stations for real tool beats, chases bugs after failures and takes coffee
+breaks when the session is quiet. Floors grow through five tiers as tools and
+prompts accumulate. The [Studio PRD](notes/studio/prd.md) describes its
+signals, layout and crew. The earlier idle office was removed; `scene=office`
+is rejected and old checkpoints that still carry an office record restore the
+world and ignore it.
+
 ```sh
 sbg fx use fortress
+sbg set scene=studio        # default: game-dev studio tower that grows with session points
+sbg set scene=settlement    # landscape and session-earned edge districts
+sbg set glyphs=ascii        # ASCII fallback for the studio; unicode restores glyph art
 sbg set fortress="Amber Hall" difficulty=calm
 sbg legends 12
 sbg set paused=true          # paused=false resumes
+sbg set presentation=compact # auto restores the adaptive detailed view
+sbg set reduced_motion=true  # false restores travel and animation
 ```
 
-The centre stays clear, and foreground text has a one-cell safety margin.
-ASCII glyphs avoid emoji alignment problems. Normal coverage is 7–15% in the
-committed examples, with a hard 25% ceiling. Permission denials are neutral;
+The settlement landscape fills the pane's empty space with trees, flowers, rocks,
+mushrooms, a flowing stream, bridges and roaming wildlife. Foreground text has
+a one-cell safety margin: scenery disappears wherever the application writes.
+Layout follows the current pane grid: narrow or short panes get miniature rooms
+and a compact HUD, while wider panes gain room columns. Rooms keep readable
+proportions; there is no required resolution or fixed maximum district width.
+Titles wrap when space allows, and meters keep complete percentages and counts.
+ASCII glyphs avoid emoji alignment problems. Normal coverage targets 22% before
+foreground masking, with a hard 25% ceiling. Permission denials are neutral;
 errors recover without deaths or penalties. Only filtered subject words reach
 the world; hooks no longer persist raw prompt snippets.
 
@@ -196,57 +296,85 @@ world bundles with `python3 scripts/world/bundle.py`. Existing installed effect
 files are preserved by `sbg install`; use the source path with `--script` when
 reviewing a checkout, or deliberately update an unmodified shipped copy.
 
-## Living worlds: art that grows with the session
+### A living colony
+
+Residents keep daily routines during quiet moments: walking through doors and
+along corridors to read, craft, tend the garden, gather and rest. Nearby
+residents can chat. Gardens evolve with Conway's Game of Life rules, while cats
+pace the banks of moving water. Dawn, daylight, dusk and night change the
+settlement's light; rain comes and goes, and windows and campfires glow at night.
+Gardens sit beside the buildings, rooms have visible furnishings, and rabbits,
+butterflies and moving foliage keep the surrounding landscape active from the
+first session. Scenery packs into the available space without stretched sprites.
+The bottom edge shows the current day, weather and the founder's activity.
+
+One ambient day lasts two minutes. A fixed 12×6 garden takes one generation per
+second, with deterministic germination every 48 generations. This local life
+continues without new tool calls, survives script reloads, and freezes with
+`sbg set paused=true`. It earns no buildings or XP and changes no agent counts.
+Session activity still determines construction and the settlement's history.
+
+`presentation=compact` keeps the middle 64% clear, removes the surrounding
+landscape, floor texture and weather particles, and uses a smaller HUD.
+`reduced_motion=true` keeps residents and scenery still and removes
+spinners, pulses and flashes. Earned construction, current mode, session names
+and counters continue updating; the local ecology keeps its time. `paused=true`
+is separate: it also pauses event consumption and local time. These controls
+require the current `sbg-fx` binary; existing processes need a new launch for new
+host parameters, while Lua layout changes hot-reload immediately.
+
+## The world: Fortress by default
 
 `sbg auto` (and the `claude`/`codex` shims) launch `~/.config/sbg/fx/world.lua`
-when it exists (`SBG_WORLD=0` returns to the builtin effects). A world is a
-generative scene rebuilt deterministically from the session's cumulative
-`journey.json` (written by the hooks: prompts, tools by kind, files by
-extension, errors, subagents, recent events) plus `status.json`
-(`context_pct`, `lines_added/removed`), so a three-hour session develops beyond a five-minute one:
+when it exists (`SBG_WORLD=0` returns to the builtin effects). `world.lua` is
+the Fortress bundle: one deterministic settlement rebuilt from the session's
+cumulative `journey.json` (prompts, tools by kind, files by extension, errors,
+subagents, recent events) plus `status.json` (`context_pct`,
+`lines_added/removed`). The earlier generative motifs were removed; Fortress is
+the only world, so every pane shows the same game.
 
-| Motif | Grows by |
-|---|---|
-| `office` / `fortress` | deterministic edge settlement: workers, workshops, caravans, seasons, artifacts and legends |
-| `forest` | one L-system tree per N tools, leaves coloured by file language, sky by context %, lightning on errors |
-| `skyline` | buildings rise with lines added, windows light per tool, crane while a tool runs, night falls with context |
-| `reef` | braille coral per tool, fish = subagents, bleaching on errors |
-| `circuit` | nodes per tool, traces between recent events, pulses while thinking |
-| `sakura` | cherry tree branches per tools, blossoms per prompt, a petal per edited file piling up in a corner |
-| `kana` | halfwidth-katakana rain on the pane edges, columns per tools, trails by context %, sigils spelling prompt words |
-| `shrine` | torii, a stone path step per tool batch, lanterns, tree line by context %, fireflies per prompt |
-| `hangar` | mecha bays per tools, lamps by tool kind, drones per subagent, a PWR gauge from context % |
-| `dojo` | shonen speed lines on the edges, tally marks per prompt, LV ticks, a chibi that trains, sits, or thinks |
-| `hud` | RPG status window whose rows unlock with the session: LV/XP, party, mana, wounds, skills |
-| `studyroom` | lo-fi study room: books per edited file, sticky notes per prompt, a plant from the diff, rain while a tool runs |
-| `sparkfield` | constellation: a link per tool batch, sigil rings per peak subagents, comets on tool calls |
-| `dust` | dust-sprite workshop: motes per tools and subagents ferrying `*` from the task pile to the shelves |
-
-`world.lua` bundles all fourteen and picks one from `mood.json` (`motif`) or a
-hash of the repository name; `sbg fx use office` pins one. Every motif keeps
-under ~25 % coverage and fades the oldest parts when the pane fills.
-
-The anime motifs (`sakura kana shrine hangar dojo hud studyroom sparkfield dust`) use only one-cell
-glyphs — ASCII, box drawing, blocks, braille and halfwidth katakana — because
-fullwidth kana and kanji are double-width and would break the grid. Mode words
-appear as halfwidth katakana next to the scene title, kaomoji show up only as
-rare reactions, and the anime tropes map to session states: a power-up aura
-while thinking, an action cut when a tool runs, a freeze frame while waiting, a
-local crimson flash and a lasting scar on error, a contraction that regrows on
-compaction, and a slow drift with a sleepy cue after a minute idle.
-`scripts/world/bundle.py` regenerates `world.lua`; `lua scripts/world/drive.lua`
-checks every motif's coverage and `lua scripts/world/show.lua NAME` prints a
-frame.
-
-**Art director (optional, spends tokens).** `sbg set director=true` lets the
-`UserPromptSubmit` hook spawn `plugin/scripts/sbg_director.py` detached, at
-most every 2 minutes. It asks `claude -p --model haiku` (fallback `codex exec`)
-for strict JSON — motif, 5-colour palette, tempo, a scene title, a mood word —
-from the repo, languages, and prompt words, and writes `mood.json`; the world
-adopts it on the next frame. Nothing blocks the session; failures write
-nothing. Without the director the same choices are derived deterministically.
+The HUD at the pane edges follows the session live: the title (following
+`/rename` within about a second and flashing amber for three seconds), the
+settlement rank, year and season, the current mode with the running tool
+(`| Bash`, `thinking...`, `waiting ?`, `error !`, `compacting ~~`, `idle zz`
+after a minute), a `ctx [====----] 42%` meter that turns amber past 60 % and
+red past 90 %, and a bottom line of tools and `+added/-removed` that brightens
+when a value changes. Milestones replace the mode label for four seconds:
+`* renamed`, `* 50 tools`, `* +250 lines`, `* context 50%`, `* chapter 3`,
+`* compacted`, `* helper joins`, `! error 2`. `mood.json` no longer selects a
+motif. `scripts/world/bundle.py` regenerates `world.lua`;
+`lua scripts/world/drive.lua` checks coverage and
+`lua scripts/world/show.lua world` prints a frame.
 
 ## How the plugin works
+
+### Fortress progression and session titles
+
+`sbg fx use fortress` shows a settlement that grows with session activity.
+Three starter rooms are ready at embark. Each fifteen tool events earns another
+room: its blueprint gains foundations, walls and fittings as the work advances.
+Builders carry materials while tools run; a meter shows the next room and the
+settlement advances through Camp, Outpost, Village, Citadel and Capital.
+These are activity milestones, not an assessment of code quality.
+
+The top-left title follows the actual session name, including renames while
+idle, within about one second. Codex uses its explicit local thread name;
+Claude uses the matching transcript's custom title (with its session index as
+a fallback). Missing metadata falls back to the working directory name. The
+launcher owns the watcher and stops it on exit. Existing sessions need the new
+launcher for continuous polling; updated hooks also refresh the name on events.
+
+```sh
+sbg set session_name="Parser workshop"  # optional display override
+sbg set session_name=                   # follow the agent's name again
+sbg set fortress="Amber Hall"           # separate settlement name
+```
+
+The session title wraps into two edge rows, clips long names, strips terminal
+controls and substitutes unsupported glyphs with `?`. Renaming changes the
+display only: rooms, counters, legends and pause state remain intact. Full
+sanitized names are available through `sbg state --json`. No prompt text is
+used to invent a title, and no model calls are made.
 
 `sbg-fx` speaks Tattoy's JSON plugin protocol on stdio. Tattoy sends
 `pty_update` messages (all non-blank cells) whenever the application draws;

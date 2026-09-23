@@ -1,0 +1,19 @@
+{
+  "app": "codex",
+  "input_copies": 1,
+  "shaded_spaces": 306,
+  "visible_animation_cells": 128,
+  "prompt_submitted": false,
+  "metrics": {
+    "backend": "own",
+    "elapsed_seconds": 26.225614875,
+    "cpu_seconds": 0.562054,
+    "max_rss_bytes": 5619712,
+    "input_bytes": 105,
+    "native_bytes": 223151,
+    "background_bytes": 408276,
+    "frames": 340,
+    "changed_cells": 107022,
+    "skipped_frames": 45
+  }
+}

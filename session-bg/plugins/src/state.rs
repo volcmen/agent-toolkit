@@ -4,6 +4,8 @@ use std::time::SystemTime;
 
 use serde_json::Value;
 
+pub const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+
 pub const MODES: &[&str] = &[
     "start",
     "idle",
@@ -17,6 +19,7 @@ pub const MODES: &[&str] = &[
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Session {
+    pub session_name: String,
     pub mode: String,
     pub ts: f64,
     pub tool: String,
@@ -35,6 +38,8 @@ pub struct Status {
     pub lines_added: u64,
     pub lines_removed: u64,
     pub duration_ms: f64,
+    pub branch: String,
+    pub effort: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -52,6 +57,10 @@ pub struct Override {
     pub fortress: Option<String>,
     pub difficulty: Option<String>,
     pub paused: bool,
+    pub presentation: Option<String>,
+    pub reduced_motion: bool,
+    pub scene: Option<String>,
+    pub glyphs: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -80,6 +89,10 @@ impl Default for Override {
             fortress: None,
             difficulty: None,
             paused: false,
+            presentation: None,
+            reduced_motion: false,
+            scene: None,
+            glyphs: None,
         }
     }
 }
@@ -105,6 +118,10 @@ pub struct Params {
     pub fortress: String,
     pub difficulty: String,
     pub paused: bool,
+    pub presentation: String,
+    pub reduced_motion: bool,
+    pub scene: String,
+    pub glyphs: String,
 }
 
 impl Default for Params {
@@ -118,12 +135,17 @@ impl Default for Params {
             fortress: String::new(),
             difficulty: "classic".to_owned(),
             paused: false,
+            presentation: "auto".to_owned(),
+            reduced_motion: false,
+            scene: "studio".to_owned(),
+            glyphs: "unicode".to_owned(),
         }
     }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ScriptState {
+    pub session_name: String,
     pub mode: String,
     pub tool: String,
     pub tool_kind: String,
@@ -141,6 +163,8 @@ pub struct ScriptState {
     pub lines_added: u64,
     pub lines_removed: u64,
     pub duration: f32,
+    pub branch: String,
+    pub effort: String,
 }
 
 impl Default for Modulation {
@@ -171,6 +195,7 @@ fn s(value: &Value, key: &str) -> Option<String> {
 
 fn parse_session(value: &Value) -> Session {
     Session {
+        session_name: s(value, "session_name").unwrap_or_default(),
         mode: s(value, "mode").unwrap_or_else(|| "idle".to_owned()),
         ts: f(value, "ts").unwrap_or(0.0),
         tool: s(value, "tool").unwrap_or_default(),
@@ -190,6 +215,10 @@ fn parse_status(value: &Value) -> Status {
         lines_added: f(value, "lines_added").unwrap_or(0.0).max(0.0) as u64,
         lines_removed: f(value, "lines_removed").unwrap_or(0.0).max(0.0) as u64,
         duration_ms: f(value, "duration_ms").unwrap_or(0.0).max(0.0),
+        branch: s(value, "branch").unwrap_or_default(),
+        effort: s(value, "effort")
+            .filter(|e| EFFORTS.contains(&e.as_str()))
+            .unwrap_or_default(),
     }
 }
 
@@ -214,6 +243,14 @@ fn parse_override(value: &Value) -> Override {
         palette: s(&params, "palette"),
         fortress: s(&params, "fortress"),
         difficulty: s(&params, "difficulty"),
+        presentation: s(&params, "presentation")
+            .filter(|s| matches!(s.as_str(), "auto" | "compact")),
+        scene: s(&params, "scene").filter(|s| matches!(s.as_str(), "studio" | "settlement")),
+        glyphs: s(&params, "glyphs").filter(|s| matches!(s.as_str(), "unicode" | "ascii")),
+        reduced_motion: params
+            .get("reduced_motion")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         paused: params
             .get("paused")
             .and_then(Value::as_bool)
@@ -397,6 +434,11 @@ pub fn modulation(snapshot: &Snapshot, now: f64, clock: f32) -> Modulation {
     } else {
         m.speed = m.speed.clamp(0.25, 3.0);
     }
+    if o.reduced_motion || o.paused {
+        m.bright = 1.0;
+        m.burst = 0.0;
+        m.tint_k = 0.0;
+    }
     m.density = m.density.clamp(0.1, 3.0);
     m.bright = m.bright.clamp(0.3, 1.35);
     m.burst = m.burst.clamp(0.0, 1.0);
@@ -411,6 +453,7 @@ pub fn script_state(snapshot: &Snapshot, modulation: &Modulation, now: f64) -> S
     let o = &snapshot.override_;
     let defaults = Params::default();
     ScriptState {
+        session_name: session.map(|s| s.session_name.clone()).unwrap_or_default(),
         mode,
         tool: session.map(|s| s.tool.clone()).unwrap_or_default(),
         tool_kind: session.map(|s| s.tool_kind.clone()).unwrap_or_default(),
@@ -431,12 +474,18 @@ pub fn script_state(snapshot: &Snapshot, modulation: &Modulation, now: f64) -> S
             fortress: o.fortress.clone().unwrap_or_default(),
             difficulty: o.difficulty.clone().unwrap_or(defaults.difficulty),
             paused: o.paused,
+            presentation: o.presentation.clone().unwrap_or(defaults.presentation),
+            reduced_motion: o.reduced_motion,
+            scene: o.scene.clone().unwrap_or(defaults.scene),
+            glyphs: o.glyphs.clone().unwrap_or(defaults.glyphs),
         },
         journey: snapshot.journey.clone(),
         mood: snapshot.mood.clone(),
         lines_added: status.map_or(0, |s| s.lines_added),
         lines_removed: status.map_or(0, |s| s.lines_removed),
         duration: status.map_or(0.0, |s| (s.duration_ms / 1000.0) as f32),
+        branch: status.map(|s| s.branch.clone()).unwrap_or_default(),
+        effort: status.map(|s| s.effort.clone()).unwrap_or_default(),
     }
 }
 
@@ -509,6 +558,118 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn quiet_presentation_is_live_and_does_not_pause_progress() {
+        for mode in ["waiting", "tool", "error", "thinking"] {
+            let s = snap(
+                Some(&format!(r#"{{"mode":"{mode}","ts":1000}}"#)),
+                Some(r#"{"context_pct":98}"#),
+                Some(r#"{"params":{"presentation":"compact","reduced_motion":true}}"#),
+            );
+            for clock in [0.0, 0.5, 3.0, 4.5] {
+                let m = modulation(&s, 1000.2, clock);
+                assert_eq!((m.bright, m.burst, m.tint_k), (1.0, 0.0, 0.0));
+                assert!(m.speed > 0.0);
+                let state = script_state(&s, &m, 1000.2);
+                assert!(state.params.reduced_motion);
+                assert!(!state.params.paused);
+                assert_eq!(state.params.presentation, "compact");
+            }
+        }
+        let bad = snap(
+            None,
+            None,
+            Some(r#"{"params":{"presentation":"huge","reduced_motion":"true"}}"#),
+        );
+        let state = script_state(&bad, &Modulation::default(), 0.0);
+        assert_eq!(state.params.presentation, "auto");
+        assert!(!state.params.reduced_motion);
+    }
+
+    #[test]
+    fn scene_param_parses_and_defaults() {
+        let office = snap(None, None, Some(r#"{"params":{"scene":"office"}}"#));
+        assert_eq!(
+            script_state(&office, &Modulation::default(), 0.0)
+                .params
+                .scene,
+            "studio"
+        );
+        let settlement = snap(None, None, Some(r#"{"params":{"scene":"settlement"}}"#));
+        assert_eq!(
+            script_state(&settlement, &Modulation::default(), 0.0)
+                .params
+                .scene,
+            "settlement"
+        );
+        let missing = snap(None, None, None);
+        assert_eq!(
+            script_state(&missing, &Modulation::default(), 0.0)
+                .params
+                .scene,
+            "studio"
+        );
+        let studio = snap(None, None, Some(r#"{"params":{"scene":"studio"}}"#));
+        assert_eq!(
+            script_state(&studio, &Modulation::default(), 0.0)
+                .params
+                .scene,
+            "studio"
+        );
+        let invalid = snap(None, None, Some(r#"{"params":{"scene":"garden"}}"#));
+        assert_eq!(
+            script_state(&invalid, &Modulation::default(), 0.0)
+                .params
+                .scene,
+            "studio"
+        );
+    }
+
+    #[test]
+    fn status_branch_reaches_scripts_and_defaults_empty() {
+        let with = snap(None, Some(r#"{"context_pct":12,"branch":"feat/x"}"#), None);
+        let m = modulation(&with, 0.0, 0.0);
+        assert_eq!(script_state(&with, &m, 0.0).branch, "feat/x");
+        let without = snap(None, Some(r#"{"context_pct":12,"branch":null}"#), None);
+        assert_eq!(script_state(&without, &m, 0.0).branch, "");
+        assert_eq!(script_state(&snap(None, None, None), &m, 0.0).branch, "");
+    }
+
+    #[test]
+    fn status_effort_reaches_scripts_only_when_known() {
+        let m = Modulation::default();
+        for level in EFFORTS {
+            let known = snap(None, Some(&format!(r#"{{"effort":"{level}"}}"#)), None);
+            assert_eq!(script_state(&known, &m, 0.0).effort, *level);
+        }
+        for raw in [r#""turbo""#, r#""HIGH""#, "3", "null", r#""""#] {
+            let unknown = snap(None, Some(&format!(r#"{{"effort":{raw}}}"#)), None);
+            assert_eq!(script_state(&unknown, &m, 0.0).effort, "", "effort {raw}");
+        }
+        assert_eq!(script_state(&snap(None, None, None), &m, 0.0).effort, "");
+    }
+
+    #[test]
+    fn glyphs_param_parses_and_defaults_to_unicode() {
+        let m = Modulation::default();
+        let glyphs = |raw: &str| {
+            let s = snap(
+                None,
+                None,
+                Some(&format!(r#"{{"params":{{"glyphs":{raw}}}}}"#)),
+            );
+            script_state(&s, &m, 0.0).params.glyphs
+        };
+        assert_eq!(glyphs(r#""ascii""#), "ascii");
+        assert_eq!(glyphs(r#""unicode""#), "unicode");
+        assert_eq!(glyphs(r#""emoji""#), "unicode");
+        assert_eq!(glyphs("1"), "unicode");
+        assert_eq!(
+            script_state(&snap(None, None, None), &m, 0.0).params.glyphs,
+            "unicode"
+        );
     }
 
     #[test]

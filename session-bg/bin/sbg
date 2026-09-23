@@ -36,6 +36,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "plugin" / "scripts"))
+from sbg_name import NameWatcher, clean_name
 TEMPLATE = ROOT / "configs" / "tattoy.toml.tmpl"
 EFFECTS = ("matrix", "plasma", "waves", "stars")
 MODES = ("start", "idle", "thinking", "tool", "waiting", "error", "compacting")
@@ -45,11 +47,26 @@ PARAM_RANGES = {
     "hue": (-1.0, 1.0),
     "opacity": (0.05, 1.0),
 }
-STATE_FILES = ("session", "status", "override", "error")
+STATE_FILES = ("session", "status", "override", "error", "runtime", "backend")
 SHIMS = ("claude", "codex")
 FAST_EXIT_SECONDS = 5.0
 CUBE_LEVELS = (0, 95, 135, 175, 215, 255)
 PANE_STALE_SECONDS = 24 * 60 * 60
+
+
+def tattoy_binary() -> str | None:
+    """Prefer the session-bg compatibility build, without replacing Homebrew."""
+    override = os.environ.get("SBG_TATTOY")
+    if override:
+        binary = shutil.which(override)
+        if binary is None:
+            sys.exit(f"sbg: SBG_TATTOY is not executable: {override}")
+        return binary
+    base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    managed = base / "sbg" / "tattoy" / "bin" / "tattoy"
+    if managed.is_file() and os.access(managed, os.X_OK):
+        return str(managed)
+    return shutil.which("tattoy")
 
 
 def tattoy_config_dir() -> Path:
@@ -182,12 +199,30 @@ def validate_set_args(args: list[str]) -> tuple[dict, dict]:
                 raise ValueError(f"invalid mode {value!r}; choose from {', '.join(MODES)} or empty")
         elif key in ("frozen", "enabled", "director"):
             direct[key] = parse_bool_value(value)
+        elif key == "session_name":
+            if len(value) > 160 or clean_name(value) != value:
+                raise ValueError("session_name must be at most 160 characters without terminal controls")
+            direct[key] = value
         elif key == "fortress":
             if not re.fullmatch(r"[A-Za-z][A-Za-z -]{1,23}", value):
                 raise ValueError("fortress must contain 2–24 ASCII letters, spaces or hyphens")
             params[key] = value
-        elif key == "paused":
+        elif key in ("paused", "reduced_motion"):
             params[key] = parse_bool_value(value)
+        elif key == "presentation":
+            if value not in ("auto", "compact"):
+                raise ValueError("presentation must be auto or compact")
+            params[key] = value
+        elif key == "scene":
+            if value == "office":
+                raise ValueError("scene=office was replaced by scene=studio")
+            if value not in ("studio", "settlement"):
+                raise ValueError("scene must be studio or settlement")
+            params[key] = value
+        elif key == "glyphs":
+            if value not in ("unicode", "ascii"):
+                raise ValueError("glyphs must be unicode or ascii")
+            params[key] = value
         elif key == "difficulty":
             if value not in ("calm", "classic", "chaos"):
                 raise ValueError("difficulty must be calm, classic or chaos")
@@ -552,7 +587,15 @@ def log_tail(lines: int = 20) -> str:
 
 
 def doctor() -> int:
-    tattoy = shutil.which("tattoy")
+    selected = os.environ.get("SBG_BACKEND", "tattoy")
+    native = None
+    try:
+        native = own_binary()
+    except SystemExit:
+        pass
+    print(f"backend selected for new sessions: {selected}")
+    print(f"own backend: {native or 'MISSING (cargo build --release --workspace in plugins/)'}")
+    tattoy = tattoy_binary()
     print(f"tattoy: {tattoy or 'MISSING (brew install tattoy-org/tap/tattoy)'}")
     try:
         print(f"plugin: {plugin_binary()}")
@@ -584,6 +627,30 @@ def doctor() -> int:
         script = override.get("script")
         message = error.get("message")
         print(f"state: mode={mode} context_pct={context_pct} effect={effect} script={script} error={message}")
+        runtime = values.get("runtime")
+        if isinstance(runtime, dict):
+            print(f"runtime backend: {runtime.get('backend', 'tattoy (legacy heartbeat)')}")
+            ts = runtime.get("ts")
+            age = max(0, time.time() - ts) if isinstance(ts, (int, float)) else None
+            freshness = f"heartbeat {age:.1f}s ago" if age is not None else "heartbeat unknown"
+            if age is None or age > 5:
+                print(f"runtime: stale; last reported {runtime.get('status')} active={runtime.get('active')} ({freshness})")
+            else:
+                print(f"runtime: {runtime.get('status')} active={runtime.get('active')} requested={runtime.get('requested')} ({freshness})")
+            if runtime.get("reason"):
+                print(f"runtime recovery: {runtime['reason']}; retry_at={runtime.get('retry_at')}")
+        else:
+            print("runtime: unknown (this host has not reported its active effect)")
+        backend_health = values.get("backend")
+        if isinstance(backend_health, dict) and isinstance(runtime, dict) and runtime.get("backend") == "own" and runtime.get("pid") == backend_health.get("pid"):
+            age = max(0, time.time() - backend_health.get("ts", 0))
+            cpu = backend_health.get("cpu_percent_one_core")
+            cpu_text = f"{cpu:.2f}% of one core" if isinstance(cpu, (int, float)) else "warming up"
+            peak = backend_health.get("max_rss_bytes", 0) / 1048576
+            print(f"native backend: {backend_health.get('observer')}; CPU {cpu_text}; peak RSS {peak:.1f} MiB; heartbeat {age:.1f}s ago")
+            print(f"native renderer: p95 {backend_health.get('render_p95_ms')} ms; frames={backend_health.get('frames')} skipped={backend_health.get('skipped_frames')} safe={backend_health.get('painting_safe')}")
+            if backend_health.get("painting_suspended_reason"):
+                print(f"native painting suspended: {backend_health['painting_suspended_reason']}")
         error_path = state_dir / "error.json"
         if error_path.is_file():
             print(f"error.json: {error_path.read_text(encoding='utf-8').strip()}")
@@ -593,7 +660,8 @@ def doctor() -> int:
     print(f"log: {cache_dir() / 'tattoy.log'}")
     if tail:
         print(tail)
-    return 0 if tattoy and linked else 1
+    available = native if selected == "own" else tattoy if selected == "tattoy" else None
+    return 0 if available and linked else 1
 
 
 KITTY_KEYS_PUSH = b"\x1b[>1u"
@@ -632,7 +700,8 @@ def run_tattoy(tattoy: str, argv: list[str], env: dict[str, str]) -> int:
     if keys:
         tty_write(KITTY_KEYS_PUSH)
     try:
-        code = subprocess.run(argv, env=env, check=False).returncode
+        with NameWatcher(env["SBG_STATE"]):
+            code = subprocess.run(argv, env=env, check=False).returncode
     except KeyboardInterrupt:
         code = 130
     finally:
@@ -650,6 +719,24 @@ def run_tattoy(tattoy: str, argv: list[str], env: dict[str, str]) -> int:
             print(fresh, file=sys.stderr)
         print(f"sbg: see `sbg doctor` and {log}", file=sys.stderr)
     return code
+
+
+def own_binary() -> str:
+    override = os.environ.get("SBG_TERM")
+    path = Path(override).expanduser() if override else ROOT / "plugins" / "target" / "release" / "sbg-term"
+    if not path.is_file() or not os.access(path, os.X_OK):
+        sys.exit(f"sbg: own backend not executable: {path}; run `cargo build --release --workspace` in plugins/")
+    return str(path)
+
+
+def run_own(argv: list[str], env: dict[str, str]) -> int:
+    # The child negotiates keyboard/paste modes directly with the outer terminal.
+    # Do not apply the Tattoy-specific keyboard protocol workaround here.
+    try:
+        with NameWatcher(env["SBG_STATE"]):
+            return subprocess.run(argv, env=env, check=False).returncode
+    except KeyboardInterrupt:
+        return 130
 
 
 def main() -> int:
@@ -670,7 +757,8 @@ def main() -> int:
     parser.add_argument("--density", type=float, default=float(os.environ.get("SBG_DENSITY", "1.0")))
     parser.add_argument("--log-level", default=os.environ.get("SBG_LOG_LEVEL", "warn"))
     parser.add_argument("--list", action="store_true", help="list effects and exit")
-    parser.add_argument("--dry-run", action="store_true", help="print the tattoy invocation and exit")
+    parser.add_argument("--dry-run", action="store_true", help="print the backend invocation and exit")
+    parser.add_argument("--backend", choices=("tattoy", "own"), default=os.environ.get("SBG_BACKEND", "tattoy"), help="terminal backend (own is experimental)")
     parser.add_argument("--theme-file", type=Path, help="kitty theme file for `sbg palette`")
     parser.add_argument("--script", type=Path, help="launch with SBG_SCRIPT set to this Lua fx script")
     argv = sys.argv[1:]
@@ -713,12 +801,18 @@ def main() -> int:
         parser.error("--opacity must be between 0.05 and 1.0")
 
     effect = choose_effect(args.theme)
-    plugin = plugin_binary()
-    config = render_config(effect, plugin, args.fps, args.opacity, args.log_level)
-    ensure_palette(None)
-    tattoy = shutil.which("tattoy")
-    if tattoy is None:
-        sys.exit("sbg: tattoy not on PATH; install with `brew install tattoy-org/tap/tattoy`")
+    if args.backend not in ("tattoy", "own"):
+        parser.error("SBG_BACKEND must be tattoy or own")
+    if args.backend == "own":
+        argv = [own_binary(), "--", *command]
+    else:
+        plugin = plugin_binary()
+        config = render_config(effect, plugin, args.fps, args.opacity, args.log_level)
+        ensure_palette(None)
+        tattoy = tattoy_binary()
+        if tattoy is None:
+            sys.exit("sbg: tattoy not on PATH; install with `brew install tattoy-org/tap/tattoy`")
+        argv = [tattoy, "--main-config", str(config), "--disable-indicator", "--command", command_line(command)]
 
     pane = pane_identity()
     state_dir = pane_dir()
@@ -734,6 +828,8 @@ def main() -> int:
         SBG_SEED=str(seed_for(pane)),
         SBG_FPS=str(args.fps),
         SBG_DENSITY=str(args.density),
+        SBG_OPACITY=str(args.opacity),
+        SBG_BACKEND=args.backend,
         SBG_ACTIVE="1",
         SBG_PANE=pane,
         SBG_STATE=str(state_dir),
@@ -741,16 +837,15 @@ def main() -> int:
     script = default_script(args.theme, args.script)
     if script is not None:
         env["SBG_SCRIPT"] = str(script)
-    argv = [tattoy, "--main-config", str(config), "--disable-indicator", "--command", command_line(command)]
     if args.dry_run:
         script_part = f" SBG_SCRIPT={env['SBG_SCRIPT']}" if script is not None else ""
         print(
             f"SBG_EFFECT={effect} SBG_SEED={env['SBG_SEED']} SBG_FPS={args.fps} "
-            f"SBG_DENSITY={args.density} SBG_ACTIVE=1 SBG_PANE={pane} SBG_STATE={state_dir}{script_part}"
+            f"SBG_DENSITY={args.density} SBG_BACKEND={args.backend} SBG_OPACITY={args.opacity} SBG_ACTIVE=1 SBG_PANE={pane} SBG_STATE={state_dir}{script_part}"
         )
         print(shlex.join(argv))
         return 0
-    return run_tattoy(tattoy, argv, env)
+    return run_own(argv, env) if args.backend == "own" else run_tattoy(tattoy, argv, env)
 
 
 if __name__ == "__main__":

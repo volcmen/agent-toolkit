@@ -1,7 +1,7 @@
 local HERE = (arg[0]:match("(.*/)") or "./")
 local Hn = dofile(HERE .. "harness.lua")
 local DIR = HERE .. "../../plugins/fx/"
-local name = arg[1] or "office"
+local name = arg[1] or "fortress"
 local tools = tonumber(arg[2]) or 120
 local mode = arg[3] or "thinking"
 local W, H = tonumber(arg[4]) or 120, tonumber(arg[5]) or 36

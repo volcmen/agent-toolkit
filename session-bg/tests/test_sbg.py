@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -147,6 +148,26 @@ class CliTests(unittest.TestCase):
     def test_list(self):
         result = self.run_sbg("--list")
         self.assertEqual(result.stdout.split(), list(sbg.EFFECTS))
+
+    def test_own_backend_keeps_exact_arguments_and_needs_no_tattoy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self.run_sbg("--backend", "own", "--dry-run", "stars", "--", "codex", "words with spaces", "a'b", "$(not-a-command)",
+                                  env={"SBG_TERM": str(SBG), "SBG_TATTOY": "/missing", "XDG_CACHE_HOME": tmp})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("SBG_BACKEND=own", result.stdout)
+            self.assertEqual(shlex.split(result.stdout.splitlines()[-1]),
+                             [str(SBG), "--", "codex", "words with spaces", "a'b", "$(not-a-command)"])
+            self.assertFalse(list(Path(tmp).rglob("tattoy-*.toml")))
+
+    def test_invalid_backend_environment_is_an_error(self):
+        result = self.run_sbg("--dry-run", "--", "codex", env={"SBG_BACKEND": "typo"})
+        self.assertEqual(result.returncode, 2)
+
+    def test_explicit_backend_overrides_environment(self):
+        result = self.run_sbg("--backend", "own", "--dry-run", "--", "codex",
+                              env={"SBG_BACKEND": "tattoy", "SBG_TERM": str(SBG)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SBG_BACKEND=own", result.stdout)
 
 
 class KittyKeysTests(unittest.TestCase):

@@ -66,6 +66,14 @@ impl Reporter {
             let _ = std::fs::remove_file(dir.join("error.json"));
         }
     }
+
+    pub fn runtime(&self, value: &JsonValue) {
+        let Some(dir) = &self.dir else { return };
+        let tmp = dir.join(format!(".runtime.{}.tmp", std::process::id()));
+        if std::fs::write(&tmp, value.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, dir.join("runtime.json"));
+        }
+    }
 }
 
 struct Instance {
@@ -267,6 +275,7 @@ impl Instance {
     fn state_table(&self, state: &ScriptState) -> mlua::Result<Table> {
         let table = self.lua.create_table()?;
         table.set("mode", state.mode.as_str())?;
+        table.set("session_name", state.session_name.as_str())?;
         table.set("tool", state.tool.as_str())?;
         table.set("tool_kind", state.tool_kind.as_str())?;
         table.set("agent", state.agent.as_str())?;
@@ -292,10 +301,16 @@ impl Instance {
         params.set("fortress", state.params.fortress.as_str())?;
         params.set("difficulty", state.params.difficulty.as_str())?;
         params.set("paused", state.params.paused)?;
+        params.set("presentation", state.params.presentation.as_str())?;
+        params.set("reduced_motion", state.params.reduced_motion)?;
+        params.set("scene", state.params.scene.as_str())?;
+        params.set("glyphs", state.params.glyphs.as_str())?;
         table.set("params", params)?;
         table.set("lines_added", state.lines_added as i64)?;
         table.set("lines_removed", state.lines_removed as i64)?;
         table.set("duration", state.duration)?;
+        table.set("branch", state.branch.as_str())?;
+        table.set("effort", state.effort.as_str())?;
         let (journey, mood) = self.generic_tables(state)?;
         table.set("journey", journey)?;
         table.set("mood", mood)?;
@@ -375,6 +390,7 @@ pub struct ScriptEffect {
     height: u16,
     state: ScriptState,
     failures: u32,
+    step_failed: bool,
     outstanding: Option<&'static str>,
     dead: bool,
     stamp: Stamp,
@@ -406,6 +422,7 @@ impl ScriptEffect {
             height: 0,
             state: ScriptState::default(),
             failures: 0,
+            step_failed: false,
             outstanding: None,
             dead: false,
             stamp: stamp_of(path),
@@ -416,6 +433,9 @@ impl ScriptEffect {
 
     pub fn with_reporter(mut self, reporter: Reporter) -> Self {
         self.reporter = reporter;
+        // A newly loaded instance may be replacing a failed one. Clear its
+        // persisted error only after this instance completes a whole frame.
+        self.outstanding = Some("recovery");
         self
     }
 
@@ -541,9 +561,14 @@ impl ScriptEffect {
             None => return,
         };
         if let Err(message) = result {
-            self.fail("init", &message);
+            // Retrying step/render cannot repair an invalid initial state.
+            // Restore the last proved source, or let the host back off.
+            self.outstanding = Some("init");
+            self.reporter.error("init", &message);
+            self.recover();
         } else {
-            self.succeed();
+            // A successful init does not prove that step/render works. Keep
+            // the last fully rendered source available for runtime rollback.
             self.restore_checkpoint();
         }
     }
@@ -623,6 +648,7 @@ impl Effect for ScriptEffect {
     }
 
     fn step(&mut self, dt: f32, _rng: &mut Rng) {
+        self.step_failed = false;
         self.maybe_reload();
         let result = match &self.instance {
             Some(instance) => instance.step(dt, &self.state),
@@ -630,10 +656,12 @@ impl Effect for ScriptEffect {
         };
         match result {
             Ok(()) => {
-                self.succeed();
                 self.save_checkpoint();
             }
-            Err(message) => self.fail("step", &message),
+            Err(message) => {
+                self.step_failed = true;
+                self.fail("step", &message);
+            }
         }
     }
 
@@ -653,8 +681,9 @@ impl Effect for ScriptEffect {
             None => return,
         };
         match result {
-            Ok(()) => self.succeed(),
-            Err(message) => self.fail("render", &message),
+            Ok(()) if !self.step_failed => self.succeed(),
+            Err(message) if !self.step_failed => self.fail("render", &message),
+            _ => (), // Count a failed step/render pair once, and retain its error.
         }
     }
 }
@@ -900,6 +929,79 @@ end
     }
 
     #[test]
+    fn a_successful_half_frame_does_not_hide_repeated_failures() {
+        for (tag, source) in [
+            ("bad-step", "function step() error('step fault') end\nfunction render() end"),
+            ("bad-render", "function step() end\nfunction render() error('render fault') end"),
+            ("both-bad", "function step() error('step fault') end\nfunction render() error('render fault') end"),
+        ] {
+            let scratch = Scratch::new(tag);
+            let path = scratch.write("effect.lua", source);
+            let mut effect = ScriptEffect::load(&path, 1, 1.0, 12.0).unwrap()
+                .with_reporter(Reporter::new(Some(scratch.0.clone())));
+            let mut rng = Rng::new(1);
+            effect.resize(20, 10, &mut rng);
+            for i in 0..3 {
+                effect.step(0.08, &mut rng);
+                effect.render(&mut Vec::new());
+                assert!(scratch.0.join("error.json").exists(), "{tag}: error cleared");
+                assert_eq!(effect.failed(), i == 2, "{tag}: failure must count whole frames");
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_init_is_not_hidden_by_a_successful_render() {
+        let scratch = Scratch::new("bad-init");
+        let path = scratch.write(
+            "effect.lua",
+            "function init() error('init fault') end\nfunction render() end",
+        );
+        let mut effect = ScriptEffect::load(&path, 1, 1.0, 12.0)
+            .unwrap()
+            .with_reporter(Reporter::new(Some(scratch.0.clone())));
+        effect.resize(20, 10, &mut Rng::new(1));
+        effect.render(&mut Vec::new());
+        assert!(effect.failed());
+        let error: JsonValue =
+            serde_json::from_str(&std::fs::read_to_string(scratch.0.join("error.json")).unwrap())
+                .unwrap();
+        assert_eq!(error["phase"], "init");
+    }
+
+    #[test]
+    fn runtime_failure_after_valid_reload_restores_the_last_rendered_source() {
+        let scratch = Scratch::new("runtime-rollback");
+        let path = scratch.write(
+            "effect.lua",
+            "function render(fx) fx:put(1,1,'@',1,1,1) end",
+        );
+        let mut effect = ScriptEffect::load(&path, 1, 1.0, 12.0).unwrap();
+        let mut rng = Rng::new(1);
+        effect.resize(20, 10, &mut rng);
+        effect.render(&mut Vec::new());
+        std::fs::write(
+            &path,
+            "function step() end\nfunction render() error('bad reload') end",
+        )
+        .unwrap();
+        effect.step(0.08, &mut rng);
+        std::thread::sleep(DEBOUNCE + Duration::from_millis(30));
+        for _ in 0..3 {
+            effect.step(0.08, &mut rng);
+            effect.render(&mut Vec::new());
+        }
+        assert!(
+            !effect.failed(),
+            "last good source should survive a runtime-broken reload"
+        );
+        let mut out = Vec::new();
+        effect.step(0.08, &mut rng);
+        effect.render(&mut out);
+        assert_eq!(out[0].ch, '@');
+    }
+
+    #[test]
     fn a_full_grid_script_is_fast() {
         let scratch = Scratch::new("bench");
         let path = scratch.write(
@@ -993,6 +1095,37 @@ end
         title.sort_by_key(|(x, _)| *x);
         let text: String = title.into_iter().map(|(_, c)| c).collect();
         assert_eq!(text, "calm");
+    }
+
+    #[test]
+    fn effort_and_glyphs_reach_lua() {
+        let scratch = Scratch::new("effort");
+        let state_dir = scratch.0.join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(state_dir.join("status.json"), r#"{"effort":"xhigh"}"#).unwrap();
+        std::fs::write(
+            state_dir.join("override.json"),
+            r#"{"params":{"glyphs":"ascii"}}"#,
+        )
+        .unwrap();
+        let script_state = build_script_state(&state_dir);
+        let path = scratch.write(
+            "effort.lua",
+            r#"
+function render(fx, state)
+  sbg.text(fx, 0, 0, state.effort .. ":" .. state.params.glyphs, 1, 1, 1)
+end
+"#,
+        );
+        let mut effect = ScriptEffect::load(&path, 1, 1.0, 12.0).expect("loads");
+        let mut rng = Rng::new(1);
+        effect.resize(20, 2, &mut rng);
+        effect.set_state(&script_state);
+        let mut out = Vec::new();
+        effect.render(&mut out);
+        out.sort_by_key(|g| g.x);
+        let text: String = out.iter().map(|g| g.ch).collect();
+        assert_eq!(text, "xhigh:ascii");
     }
 
     #[test]
@@ -1115,6 +1248,10 @@ end
             journey: Some(serde_json::json!({
                 "repo":"test","tools":500,"subagents":11,"compactions":2
             })),
+            params: crate::state::Params {
+                scene: "settlement".into(),
+                ..crate::state::Params::default()
+            },
             ..ScriptState::default()
         };
         effect.set_state(&state);
@@ -1126,21 +1263,51 @@ end
         assert!(glyphs.len() <= 3000);
         assert!(glyphs
             .iter()
-            .all(|g| g.ch.is_ascii() && (g.x < 36 || g.x >= 164)));
+            .all(|g| g.ch.is_ascii() && g.x < 200 && g.y < 60));
+        assert!(glyphs.iter().any(|g| g.x >= 36 && g.x < 164));
         assert_eq!(effect.foreground_halo(), 1);
         let checkpoint = std::fs::read_to_string(scratch.0.join("fortress.json")).unwrap();
-        let data: JsonValue = serde_json::from_str(&checkpoint).unwrap();
+        let mut data: JsonValue = serde_json::from_str(&checkpoint).unwrap();
         assert_eq!(data["status"]["population"], 12);
-        let hash = |e: &ScriptEffect| {
+        // Exercise the full supported incident capacity in the same renderer as
+        // the twelve residents. This is an isolated, valid checkpoint fixture.
+        let next_id = data["world_state"]["next_id"].as_u64().unwrap();
+        let clock = data["world_state"]["clock"].as_u64().unwrap();
+        data["world_state"]["incidents"] = serde_json::json!((0..8)
+            .map(|i| serde_json::json!({
+                "id": next_id + i + 1,
+                "kind": (["ambush", "caravan", "mandate"][i as usize % 3]),
+                "severity": 2, "opened": clock, "expires": clock + 400, "open": 0
+            }))
+            .collect::<Vec<_>>());
+        data["world_state"]["next_id"] = (next_id + 8).into();
+        data["office"] =
+            serde_json::json!({"elapsed": 99.0, "actors": {}, "facts": {"legacy": true}});
+        std::fs::write(scratch.0.join("fortress.json"), data.to_string()).unwrap();
+        let mut effect = ScriptEffect::load(&path, 1, 1.0, 12.0)
+            .unwrap()
+            .with_reporter(Reporter::new(Some(scratch.0.clone())));
+        effect.resize(200, 60, &mut rng);
+        effect.set_state(&state);
+        effect.step(0.0, &mut rng);
+        let exported = |e: &ScriptEffect| {
             let instance = e.instance.as_ref().unwrap();
             let value = instance
                 .function("checkpoint")
                 .unwrap()
                 .call::<Value>(())
                 .unwrap();
-            lua_to_json(value, 0, &mut 20000).unwrap()["world_state"].clone()
+            lua_to_json(value, 0, &mut 20000).unwrap()
         };
+        let hash = |e: &ScriptEffect| exported(e)["world_state"].clone();
         let before = hash(&effect);
+        assert_eq!(before["dwarves"].as_array().unwrap().len(), 12);
+        assert_eq!(before["incidents"].as_array().unwrap().len(), 8);
+        let legends = exported(&effect)["legends"].clone();
+        assert!(
+            exported(&effect).get("office").is_none(),
+            "legacy office record survived restore"
+        );
         effect.resize(80, 24, &mut rng);
         effect.step(0.0, &mut rng);
         effect.resize(200, 60, &mut rng);
@@ -1153,10 +1320,15 @@ end
         resumed.set_state(&state);
         resumed.step(0.0, &mut rng);
         assert_eq!(before, hash(&resumed), "restore changed history");
+        assert_eq!(
+            legends,
+            exported(&resumed)["legends"],
+            "restore changed legends"
+        );
         let mut samples = Vec::new();
         state.changed = false;
         effect.set_state(&state);
-        for _ in 0..240 {
+        for _ in 0..1000 {
             glyphs.clear();
             let t = Instant::now();
             effect.render(&mut glyphs);
@@ -1164,11 +1336,93 @@ end
         }
         assert_eq!(before, hash(&effect), "render changed history");
         samples.sort_unstable();
-        let p95 = samples[228];
-        println!("fortress release render p95 {p95:?}");
+        let p95 = samples[950];
+        println!("fortress 12-resident / 8-incident render p95 {p95:?}");
         assert!(
             p95 < Duration::from_millis(if cfg!(debug_assertions) { 50 } else { 3 }),
             "fortress p95 {p95:?}"
+        );
+        assert!(!scratch.0.join("error.json").exists(), "sandbox error");
+    }
+
+    #[test]
+    fn studio_busy_frame_budget() {
+        let scratch = Scratch::new("studio");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("fx/fortress.lua");
+        let mut effect = ScriptEffect::load(&path, 1, 1.0, 12.0)
+            .unwrap()
+            .with_reporter(Reporter::new(Some(scratch.0.clone())));
+        let mut rng = Rng::new(1);
+        effect.resize(200, 60, &mut rng);
+        let kinds = ["edit", "read", "exec", "web", "mcp", "task", "other"];
+        let tail = [
+            ("subagent_start", serde_json::json!({"count": 3})),
+            ("tool_failed", serde_json::json!({})),
+            ("success", serde_json::json!({"kind": "edit"})),
+            ("success", serde_json::json!({"kind": "read"})),
+            ("success", serde_json::json!({"kind": "exec"})),
+            ("success", serde_json::json!({"kind": "web"})),
+            ("tool", serde_json::json!({"kind": "edit"})),
+            ("tool", serde_json::json!({"kind": "exec"})),
+        ];
+        let recent: Vec<JsonValue> = (0..64)
+            .map(|i| {
+                let (kind, payload) = if i < 56 {
+                    ("tool", serde_json::json!({"kind": kinds[i % kinds.len()]}))
+                } else {
+                    tail[i - 56].clone()
+                };
+                serde_json::json!({"seq": 700 + i, "kind": kind, "tick": 2000 + 3 * i, "payload": payload})
+            })
+            .collect();
+        let state = ScriptState {
+            changed: true,
+            session_name: "Studio budget".into(),
+            mode: "tool".into(),
+            tool: "Bash".into(),
+            tool_kind: "exec".into(),
+            agent: "claude".into(),
+            context_pct: 62.0,
+            model: "opus".into(),
+            effort: "high".into(),
+            branch: "feat/studio".into(),
+            journey: Some(serde_json::json!({
+                "schema_version": 2, "seq": 763, "tick": 2189, "recent": recent,
+                "repo": "test", "tools": 700, "prompts": 20, "errors": 1, "compactions": 1,
+                "subagents": 3,
+                "tool_kinds": {"edit": 200, "read": 150, "exec": 200, "web": 50, "mcp": 30, "task": 30, "other": 40}
+            })),
+            ..ScriptState::default()
+        };
+        effect.set_state(&state);
+        effect.step(0.25, &mut rng);
+        let checkpoint: JsonValue = serde_json::from_str(
+            &std::fs::read_to_string(scratch.0.join("fortress.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(checkpoint["status"]["scene"], "studio");
+        assert_eq!(checkpoint["status"]["studio"]["tier"], 5);
+        let mut glyphs = Vec::new();
+        let mut samples = Vec::new();
+        let mut crew = 0;
+        for _ in 0..1000 {
+            effect.step(0.25, &mut rng);
+            glyphs.clear();
+            let t = Instant::now();
+            effect.render(&mut glyphs);
+            samples.push(t.elapsed());
+            assert!(!glyphs.is_empty() && glyphs.len() <= 3000);
+            assert!(glyphs.iter().all(|g| g.x < 200 && g.y < 60));
+            crew = crew.max(glyphs.iter().filter(|g| g.ch == '☻' || g.ch == '♙').count());
+        }
+        assert!(!effect.failed());
+        assert!(crew >= 10, "busy studio drew {crew} crew");
+        samples.sort_unstable();
+        let p95 = samples[950];
+        println!("studio busy render p95 {p95:?}");
+        assert!(
+            p95 < Duration::from_millis(if cfg!(debug_assertions) { 50 } else { 3 }),
+            "studio p95 {p95:?}"
         );
         assert!(!scratch.0.join("error.json").exists(), "sandbox error");
     }

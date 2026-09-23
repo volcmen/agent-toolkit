@@ -1,0 +1,50 @@
+{
+  "method": "steady-state ps CPU-time delta, backend plus effect; native child excluded",
+  "results": [
+    {
+      "backend": "tattoy",
+      "workload": "quiet",
+      "viewport": "200x60",
+      "requested_fps": 6,
+      "reported_fps": 6.0,
+      "sample_seconds": 30.145,
+      "cpu_seconds": 0.93,
+      "cpu_percent_one_core": 3.085,
+      "rss_median_mib": 46.78,
+      "rss_peak_mib": 46.83,
+      "terminal_bytes": 9596,
+      "terminal_bytes_per_second": 318,
+      "processes_measured": 2
+    },
+    {
+      "backend": "own",
+      "workload": "quiet",
+      "viewport": "200x60",
+      "requested_fps": 6,
+      "reported_fps": 6.0,
+      "sample_seconds": 30.009,
+      "cpu_seconds": 0.42,
+      "cpu_percent_one_core": 1.4,
+      "rss_median_mib": 6.67,
+      "rss_peak_mib": 7.66,
+      "terminal_bytes": 5456,
+      "terminal_bytes_per_second": 182,
+      "processes_measured": 1,
+      "own_lifetime_metrics": {
+        "backend": "own",
+        "elapsed_seconds": 33.026585083,
+        "cpu_seconds": 0.494191,
+        "max_rss_bytes": 8028160,
+        "input_bytes": 0,
+        "native_bytes": 22,
+        "background_bytes": 11523,
+        "frames": 32,
+        "changed_cells": 1837,
+        "skipped_frames": 1
+      }
+    }
+  ],
+  "stage": "initial native prototype before damage-aware clearing and CPU guard refinement",
+  "observed": "2026-09-22",
+  "platform": "macOS arm64"
+}

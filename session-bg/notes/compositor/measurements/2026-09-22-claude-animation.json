@@ -1,0 +1,19 @@
+{
+  "app": "claude",
+  "input_copies": 1,
+  "shaded_spaces": 0,
+  "visible_animation_cells": 52,
+  "prompt_submitted": false,
+  "metrics": {
+    "backend": "own",
+    "elapsed_seconds": 17.771887792,
+    "cpu_seconds": 0.335088,
+    "max_rss_bytes": 6062080,
+    "input_bytes": 49,
+    "native_bytes": 4378,
+    "background_bytes": 30356,
+    "frames": 55,
+    "changed_cells": 4519,
+    "skipped_frames": 7
+  }
+}

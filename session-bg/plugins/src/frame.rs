@@ -64,6 +64,9 @@ pub fn safe_glyph(ch: char) -> char {
         | '▧' | '▨' | '▩' | '♥' | '★' | '✦' | '✧' | '☁' | '☂' | '☀' | '☾' | '♠' | '♣' | '°' => {
             ch
         }
+        '⌂' | '⎇' | '▰' | '▱' | '◉' | '◆' | '◇' | '■' | '○' | '¤' | '✓' | '✗' | '⋯' | '◘' | '☼' => {
+            ch
+        }
         _ => '?',
     }
 }
@@ -203,4 +206,46 @@ pub fn hsl(h: f32, s: f32, l: f32) -> [f32; 3] {
 
 pub fn braille(mask: u32) -> char {
     char::from_u32(0x2800 + (mask & 0xff)).unwrap_or('⠀')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unicode_width::UnicodeWidthChar;
+
+    #[test]
+    fn accepted_glyphs_are_single_cell() {
+        let wide: Vec<char> = (0..=0x10ffff)
+            .filter_map(char::from_u32)
+            .filter(|&ch| safe_glyph(ch) == ch && ch.width() != Some(1))
+            .collect();
+        assert!(
+            wide.is_empty(),
+            "accepted glyphs that are not one cell: {wide:?}"
+        );
+    }
+
+    #[test]
+    fn studio_vocabulary_passes_the_host_gate() {
+        let source = include_str!("../fx/fortress/glyphs.lua");
+        let rejected: Vec<char> = source
+            .chars()
+            .filter(|&ch| !ch.is_ascii() && safe_glyph(ch) != ch)
+            .collect();
+        assert!(
+            rejected.is_empty(),
+            "Studio glyphs the host would replace: {rejected:?}"
+        );
+    }
+    #[test]
+    fn studio_symbols_pass_and_neighbours_do_not() {
+        for ch in [
+            '⌂', '⎇', '▰', '▱', '◉', '◆', '◇', '■', '○', '¤', '✓', '✗', '⋯', '◘', '☼',
+        ] {
+            assert_eq!(safe_glyph(ch), ch);
+        }
+        for ch in ['▪', '▫', '▶', '◀', '✔', '◈', '□', '☕', '⚡'] {
+            assert_eq!(safe_glyph(ch), '?');
+        }
+    }
 }

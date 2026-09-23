@@ -11,6 +11,8 @@ import uuid
 import re
 import shlex
 import time
+from pathlib import Path
+from sbg_name import Names, apply_name, clean_name
 
 HINTS = (
     "start", "thinking", "tool", "error", "waiting",
@@ -25,9 +27,10 @@ TOOL_KIND = {
     "web.run": "web", "web__run": "web",
 }
 TOOL_KIND_BUCKETS = ("exec", "edit", "read", "web", "task", "mcp", "other")
-STATE_FILES = ("session.json", "status.json", "override.json", "error.json", "journey.json", "fortress.json", "legends.json")
+STATE_FILES = ("session.json", "status.json", "override.json", "error.json", "runtime.json", "journey.json", "fortress.json", "legends.json")
 RECENT_LIMIT = 64
 DIRECTOR_LOCK_SECONDS = 120
+WRITER_LOCK_WAIT_SECONDS = 1.25
 STOPWORDS = frozenset((
     "this", "that", "with", "from", "have", "what", "when", "where", "which",
     "would", "could", "should", "about", "there", "their", "these", "those",
@@ -71,6 +74,9 @@ def read_previous(state_dir):
 
 
 def detect_agent(payload):
+    transcript = str(payload.get("transcript_path", ""))
+    if os.environ.get("CODEX_THREAD_ID") or "/.codex/" in transcript or "/rollout-" in transcript:
+        return "codex"
     if os.environ.get("CLAUDECODE"):
         return "claude"
     if any(name.startswith("CODEX_") for name in os.environ):
@@ -362,7 +368,6 @@ def update_journey(hint, payload, previous_session, state_dir, agent, cwd, subag
     elif hint == "idle":
         emit("idle")
     journey["counter_digest"] = counter_digest(journey)
-    write_json_atomic(state_dir, "journey.json", journey)
     return journey
 
 
@@ -426,7 +431,7 @@ def maybe_spawn_director(hint, payload, state_dir):
     spawn_director(state_dir)
 
 
-def main_locked():
+def main_locked(payload):
     if len(sys.argv) < 2 or sys.argv[1] not in HINTS:
         return
     hint = sys.argv[1]
@@ -434,7 +439,7 @@ def main_locked():
     if hint == "end":
         cleanup(state_dir)
         return
-    payload = read_payload()
+    payload["session_id"] = payload.get("session_id") or os.environ.get("CODEX_THREAD_ID") or os.environ.get("CODEX_SESSION_ID")
     previous = read_previous(state_dir)
     tool = payload.get("tool_name")
     seq = previous.get("seq", 0)
@@ -459,10 +464,23 @@ def main_locked():
         "prompt": compute_prompt(payload, previous),
         "seq": seq + 1 if isinstance(seq, int) else 1,
     }
+    same_session = data["session_id"] == previous.get("session_id") and payload.get("source") != "clear"
+    if same_session:
+        for key in ("transcript_path", "detected_name", "session_name"):
+            if key in previous:
+                data[key] = previous[key]
+    if isinstance(payload.get("transcript_path"), str):
+        data["transcript_path"] = payload["transcript_path"]
+    if isinstance(payload.get("session_name"), str):
+        data["detected_name"] = clean_name(payload["session_name"])
     journey = update_journey(hint, payload, previous, state_dir, agent, cwd, subagents)
     data["subagents"] = journey["subagents"]
     if hint == "error" and journey["recent"][-1]["kind"] == "wait_resolved" and journey["recent"][-1]["payload"].get("outcome") == "declined":
         data["mode"] = "thinking"
+    # Add presentation metadata before writing, avoiding a second read/write
+    # cycle for both files while other hooks are waiting for this lock.
+    apply_name(Path(state_dir), Names(), data, journey)
+    write_json_atomic(state_dir, "journey.json", journey)
     write_json_atomic(state_dir, "session.json", data)
     maybe_spawn_director(hint, payload, state_dir)
 
@@ -474,10 +492,23 @@ def main():
     state_dir = os.environ["SBG_STATE"]
     if len(sys.argv) < 2 or sys.argv[1] not in HINTS:
         return
+    # Reading stdin can block; never hold the shared writer lock while doing it.
+    payload = read_payload() if sys.argv[1] != "end" else {}
     os.makedirs(state_dir, exist_ok=True)
     with open(os.path.join(state_dir, ".writer.lock"), "a", encoding="utf-8") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        main_locked()
+        deadline = time.monotonic() + WRITER_LOCK_WAIT_SECONDS
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    # Cosmetic state is best effort. Leave it intact instead of
+                    # hitting the host's two-second timeout during contention.
+                    return
+                time.sleep(min(0.01, remaining))
+        main_locked(payload)
 
 
 try:

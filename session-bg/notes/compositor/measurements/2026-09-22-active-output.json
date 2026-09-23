@@ -1,0 +1,54 @@
+{
+  "method": "steady-state ps CPU-time delta, backend plus effect; native child excluded",
+  "results": [
+    {
+      "backend": "tattoy",
+      "workload": "updates",
+      "viewport": "200x60",
+      "requested_fps": 6,
+      "reported_fps": 6.0,
+      "sample_seconds": 30.629,
+      "cpu_seconds": 1.28,
+      "last_render_cpu_ms": 4.142667,
+      "last_render_wall_ms": 626.242667,
+      "cpu_percent_one_core": 4.179,
+      "rss_median_mib": 40.88,
+      "rss_peak_mib": 49.78,
+      "terminal_bytes": 7108,
+      "terminal_bytes_per_second": 232,
+      "processes_measured": 2
+    },
+    {
+      "backend": "own",
+      "workload": "updates",
+      "viewport": "200x60",
+      "requested_fps": 6,
+      "reported_fps": 6.0,
+      "sample_seconds": 30.014,
+      "cpu_seconds": 0.31,
+      "last_render_cpu_ms": 1.810333,
+      "last_render_wall_ms": 2.16025,
+      "cpu_percent_one_core": 1.033,
+      "rss_median_mib": 6.79,
+      "rss_peak_mib": 6.88,
+      "terminal_bytes": 11429,
+      "terminal_bytes_per_second": 381,
+      "processes_measured": 1,
+      "own_lifetime_metrics": {
+        "backend": "own",
+        "elapsed_seconds": 33.286517042,
+        "cpu_seconds": 0.34311800000000003,
+        "max_rss_bytes": 7208960,
+        "input_bytes": 0,
+        "native_bytes": 2167,
+        "background_bytes": 11233,
+        "frames": 82,
+        "changed_cells": 1875,
+        "skipped_frames": 13
+      }
+    }
+  ],
+  "stage": "damage-aware renderer and thread-CPU guard",
+  "observed": "2026-09-22",
+  "platform": "macOS arm64, loaded host"
+}
