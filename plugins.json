@@ -135,7 +135,7 @@
       "name": "session-bg",
       "displayName": "Session BG",
       "source": "./session-bg/plugin",
-      "version": "1.2.2",
+      "version": "1.0.0",
       "description": "Drives per-pane animated terminal backgrounds from live Claude Code / Codex session state.",
       "category": "Developer Tools",
       "keywords": [
