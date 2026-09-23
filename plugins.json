@@ -129,7 +129,7 @@
           "Implement this slice with Qwen and report its measured cost."
         ]
       },
-      "claude_delivery": "claude-core"
+      "claude_delivery": "none"
     },
     {
       "name": "session-bg",

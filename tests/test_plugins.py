@@ -79,6 +79,15 @@ class CatalogValidation(unittest.TestCase):
             self.assertTrue(pl.delivered_by_claude_core(loaded["plugins"][0]))
             self.assertFalse(pl.claude_marketplace_needed(loaded))
 
+    def test_accepts_a_codex_only_plugin_skipped_for_claude(self) -> None:
+        payload = catalog()
+        payload["plugins"][0]["claude_delivery"] = "none"
+        with TemporaryDirectory() as tmp:
+            loaded = self.load(payload, Path(tmp))
+            self.assertFalse(pl.delivered_by_claude_core(loaded["plugins"][0]))
+            self.assertFalse(pl.delivered_by_claude_marketplace(loaded["plugins"][0]))
+            self.assertFalse(pl.claude_marketplace_needed(loaded))
+
     def test_rejects_an_unknown_claude_delivery(self) -> None:
         payload = catalog()
         payload["plugins"][0]["claude_delivery"] = "symlink-farm"
@@ -411,7 +420,7 @@ class MarketplaceReconnection(unittest.TestCase):
     CODEX_OTHER_ROOT = "/tmp/codex-curated"
     CLAUDE_OTHER_ROOT = "/tmp/claude-official"
 
-    def exercise_install(self, *, force: bool):
+    def exercise_install(self, *, force: bool, payload: dict | None = None):
         state = {
             "codex_root": self.OLD_ROOT,
             "claude_root": self.OLD_ROOT,
@@ -471,7 +480,7 @@ class MarketplaceReconnection(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             with (
                 mock.patch.object(pl, "MEMORY_CONFIG", Path(tmp) / "missing.json"),
-                mock.patch.object(pl, "load_catalog", return_value=catalog()),
+                mock.patch.object(pl, "load_catalog", return_value=payload or catalog()),
                 mock.patch.object(pl.shutil, "which", return_value="/usr/bin/tool"),
                 mock.patch.object(pl, "run", side_effect=run),
                 mock.patch.object(pl, "cmd_status", return_value=0),
@@ -479,6 +488,16 @@ class MarketplaceReconnection(unittest.TestCase):
                 self.assertEqual(pl.cmd_install(args), 0)
 
         return state, codex_commands, claude_commands
+
+    def test_install_sends_a_skipped_plugin_to_codex_only(self) -> None:
+        payload = catalog()
+        skipped = dict(payload["plugins"][0], name="codexonly", source="./project/plugins/codexonly")
+        skipped["claude_delivery"] = "none"
+        payload["plugins"].append(skipped)
+        _, codex_commands, claude_commands = self.exercise_install(force=False, payload=payload)
+        self.assertIn(["codex", "plugin", "add", "codexonly@ai-workspace", "--json"], codex_commands)
+        self.assertIn(["claude", "plugin", "install", "demo@ai-workspace", "--scope", "user"], claude_commands)
+        self.assertFalse(any("codexonly@ai-workspace" in command for command in claude_commands), claude_commands)
 
     def test_force_install_orders_codex_reconnection_before_plugin_refresh(self) -> None:
         state, commands, _ = self.exercise_install(force=True)
@@ -623,11 +642,12 @@ class WorkspaceProductPostcondition(unittest.TestCase):
                 directory.mkdir(parents=True)
             payload = catalog()
             if delivery is not None:
-                payload["plugins"][0]["claude_delivery"] = "claude-core"
+                skipped = delivery.startswith("skipped")
+                payload["plugins"][0]["claude_delivery"] = "none" if skipped else "claude-core"
                 (source / "skills" / "demo").mkdir(parents=True)
                 links = home / ".claude" / "skills"
                 links.mkdir(parents=True)
-                if delivery == "linked":
+                if delivery in ("linked", "skipped-linked"):
                     (links / "demo").symlink_to(source / "skills" / "demo")
                 elif delivery == "stale":
                     (root / "elsewhere").mkdir()
@@ -857,6 +877,23 @@ class WorkspaceProductPostcondition(unittest.TestCase):
                 rc, output, *_ = self.exercise(delivery=delivery, claude_root="")
                 self.assertEqual(rc, 1, output)
                 self.assertIn("UNLINKED", output)
+
+    def test_skipped_delivery_keeps_the_plugin_out_of_claude(self) -> None:
+        rc, output, *_ = self.exercise(delivery="skipped", claude_root="", claude_installed=False)
+        self.assertEqual(rc, 0, output)
+        self.assertIn("marketplace not needed", output)
+        self.assertRegex(output, r"demo\s+1\.0\.0\s+ok\s+skipped")
+
+    def test_skipped_delivery_reports_a_leftover_claude_link(self) -> None:
+        rc, output, *_ = self.exercise(delivery="skipped-linked", claude_root="", claude_installed=False)
+        self.assertEqual(rc, 1, output)
+        self.assertRegex(output, r"demo\s+1\.0\.0\s+ok\s+LINKED")
+
+    def test_install_never_sends_a_skipped_plugin_to_claude(self) -> None:
+        rc, output, *_ = self.exercise(install=True, delivery="skipped", claude_root="", claude_installed=False)
+        self.assertEqual(rc, 0, output)
+        self.assertIn("delivered by claude-core or skipped — no marketplace needed", output)
+        self.assertRegex(output, r"demo\s+1\.0\.0\s+ok\s+skipped")
 
     def test_install_skips_claude_for_claude_core_delivered_plugins(self) -> None:
         rc, output, *_ = self.exercise(install=True, delivery="linked", claude_root="")

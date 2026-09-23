@@ -56,6 +56,7 @@ def ensure_modern_python() -> None:
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "plugins.json"
 CLAUDE_CORE_DELIVERY = "claude-core"
+CLAUDE_SKIPPED = "none"
 CLAUDE_MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
 CODEX_MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 CODEX_CONFIG = Path.home() / ".codex" / "config.toml"
@@ -101,8 +102,10 @@ def load_catalog() -> dict[str, Any]:
         if not entry.get("description"):
             raise Problem(f"{name}: description is required (users read it when installing)")
         delivery = entry.get("claude_delivery")
-        if delivery is not None and delivery != CLAUDE_CORE_DELIVERY:
-            raise Problem(f"{name}: claude_delivery must be \"{CLAUDE_CORE_DELIVERY}\" when present")
+        if delivery not in (None, CLAUDE_CORE_DELIVERY, CLAUDE_SKIPPED):
+            raise Problem(
+                f"{name}: claude_delivery must be \"{CLAUDE_CORE_DELIVERY}\" or \"{CLAUDE_SKIPPED}\" when present"
+            )
     return catalog
 
 
@@ -111,8 +114,21 @@ def delivered_by_claude_core(entry: dict[str, Any]) -> bool:
     return entry.get("claude_delivery") == CLAUDE_CORE_DELIVERY
 
 
+def delivered_by_claude_marketplace(entry: dict[str, Any]) -> bool:
+    return entry.get("claude_delivery") is None
+
+
 def claude_marketplace_needed(catalog: dict[str, Any]) -> bool:
-    return any(not delivered_by_claude_core(entry) for entry in catalog["plugins"])
+    return any(delivered_by_claude_marketplace(entry) for entry in catalog["plugins"])
+
+
+def claude_skipped_state(source: Path) -> str:
+    skills = source / "skills"
+    for child in sorted(skills.iterdir()) if skills.is_dir() else ():
+        link = Path.home() / ".claude" / "skills" / child.name
+        if link.is_symlink() and Path(os.readlink(link)) == child:
+            return "LINKED"
+    return "skipped"
 
 
 def claude_core_state(source: Path) -> str:
@@ -626,7 +642,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     if shutil.which("claude") is None:
         print("claude not on PATH — skipping Claude Code")
     elif not claude_marketplace_needed(catalog):
-        print("claude: every plugin is delivered by claude-core — no marketplace needed")
+        print("claude: every plugin is delivered by claude-core or skipped — no marketplace needed")
     else:
         claude_roots = claude_marketplace_roots()
         if (
@@ -649,7 +665,7 @@ def cmd_install(args: argparse.Namespace) -> int:
             # visible to Claude Code after the marketplace is re-read.
             run(["claude", "plugin", "marketplace", "update", name], allow_failure=True)
         for entry in catalog["plugins"]:
-            if delivered_by_claude_core(entry):
+            if not delivered_by_claude_marketplace(entry):
                 continue
             pid = plugin_id(catalog, entry)
             # Versions are pinned for local development, so neither `install` (a no-op when
@@ -695,7 +711,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
         pid = plugin_id(catalog, entry)
         if shutil.which("codex"):
             run(["codex", "plugin", "remove", pid], allow_failure=True)
-        if shutil.which("claude") and not delivered_by_claude_core(entry):
+        if shutil.which("claude") and delivered_by_claude_marketplace(entry):
             run(["claude", "plugin", "uninstall", pid, "--scope", args.scope], allow_failure=True)
     if shutil.which("codex"):
         run(["codex", "plugin", "marketplace", "remove", name], allow_failure=True)
@@ -916,7 +932,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     if claude_needed:
         print(f"claude: marketplace {marketplace_label(claude_available, claude_marketplace_ok)}")
     else:
-        print("claude: marketplace not needed (claude-core delivers every plugin)")
+        print("claude: marketplace not needed (claude-core delivers or skips every plugin)")
     print(f"\n{'plugin':<20} {'repo':<10} {'codex':<12} claude")
     unhealthy = not (
         codex_available
@@ -935,6 +951,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         )
         if delivered_by_claude_core(entry):
             claude_state = claude_core_state(plugin_dir(entry))
+        elif entry.get("claude_delivery") == CLAUDE_SKIPPED:
+            claude_state = claude_skipped_state(plugin_dir(entry))
         else:
             claude_state = plugin_live_state(
                 available=claude_available,
@@ -942,7 +960,7 @@ def cmd_status(args: argparse.Namespace) -> int:
                 state=claude_states.get(pid),
                 source=plugin_dir(entry),
             )
-        unhealthy = unhealthy or codex_state != "ok" or claude_state not in ("ok", "claude-core")
+        unhealthy = unhealthy or codex_state != "ok" or claude_state not in ("ok", "claude-core", "skipped")
         print(
             f"{entry['name']:<20} {repo_version:<10} {codex_state:<12} {claude_state}"
         )
