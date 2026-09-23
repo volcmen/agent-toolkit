@@ -113,8 +113,8 @@ impl Child {
             libc::forkpty(
                 &mut master,
                 std::ptr::null_mut(),
-                &mut child_termios,
-                &mut child_size,
+                &raw mut child_termios,
+                &raw mut child_size,
             )
         };
         if pid < 0 {
