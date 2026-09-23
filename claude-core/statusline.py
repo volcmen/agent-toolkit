@@ -200,6 +200,7 @@ def publish_session_bg(data, pct, tin, size, cost, branch) -> None:
             "lines_added": int(get(data, "cost", "total_lines_added", default=0) or 0),
             "lines_removed": int(get(data, "cost", "total_lines_removed", default=0) or 0),
             "model": get(data, "model", "display_name"),
+            "effort": get(data, "effort", "level"),
             "branch": branch,
         }
         target = os.path.join(state_dir, "status.json")
