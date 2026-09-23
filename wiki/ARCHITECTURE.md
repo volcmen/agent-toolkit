@@ -13,7 +13,12 @@ unconditional source of instructions.
 3. It emits a token-bounded L0 capsule containing the current hot-cache item,
    aggregate task/capture counts, and routes to deeper notes. Detailed task
    bodies and older hot-cache history are not ambient context in the default
-   `focused` profile.
+   `focused` profile. The hook's working directory selects the session's
+   project: the nearest directory below home whose name matches a vault
+   `projects/` folder. That project's `hot.md` replaces `wiki/hot.md`;
+   otherwise `wiki/hot.md` sections owned by another project, through a
+   `Project:` line or links into exactly one project, are left out. Matching
+   is by folder name, so any directory named like a project selects it.
 4. The excerpt is marked as untrusted reference data and control characters or
    nested context delimiters are neutralized.
 5. Agents use the `obsidian-memory` skill on demand for targeted reads or
@@ -30,18 +35,25 @@ unconditional source of instructions.
    supersession metadata. Episodes become reusable heuristics only through an
    evaluation-gated promotion loop.
 8. `Stop` emits valid hook JSON. It commits only configured vault paths when
-   the user explicitly enabled `auto_commit`; the default is off.
+   the user explicitly enabled `auto_commit`; the default is off. The commit
+   runs in a detached `stop-commit` process; the hook waits at most
+   `stop_wait_seconds` (default 0, at most 20, below the 30-second hook
+   timeout) and reports that run's failure. A run still going when the hook
+   returns records its result next to the configuration file, and the next
+   `Stop` reports an unreported failure once.
 
 Memory commits share a process-owned advisory lock in the repository's common
 Git directory, including when agents use different configuration files. The OS
 releases ownership when a process exits; the lock file remains in place. Git
-commands share a 20-second transaction budget below the 30-second Stop timeout.
-Read commands disable optional index refreshes, and transient `index.lock`
-contention receives bounded retries. A busy repository defers the commit with
-an explicit message; an explicit commit command exits unsuccessfully so callers
-cannot mistake deferral for persistence. On timeout or POSIX cancellation, the
-hook first terminates its owned Git process group gracefully so Git can clean
-up its own locks. The hook never deletes another Git writer's `index.lock`.
+commands share a 20-second transaction budget that starts once the lock is
+held; the background commit waits up to 120 seconds for the lock. Read
+commands disable optional index refreshes, and transient `index.lock`
+contention receives bounded retries. A repository still busy after the wait
+defers the commit with an explicit message; an explicit commit command does
+not wait and exits unsuccessfully so callers cannot mistake deferral for
+persistence. On timeout or POSIX cancellation, the commit process first
+terminates its owned Git process group gracefully so Git can clean up its own
+locks. It never deletes another Git writer's `index.lock`.
 
 ## Manual evaluation and audit
 

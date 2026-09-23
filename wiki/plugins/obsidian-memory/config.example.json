@@ -7,6 +7,7 @@
   "max_global_tasks": 10,
   "max_project_summaries": 12,
   "auto_commit": false,
+  "stop_wait_seconds": 0,
   "commit_paths": [
     "wiki",
     "projects",

@@ -58,9 +58,10 @@ python3 plugins/obsidian-memory/scripts/obsidian_memory.py commit \
 ```
 
 Parallel memory writers coordinate through a repository-local advisory lock.
-If another writer remains busy after bounded retries, the Stop hook reports
-that persistence was deferred; a later Stop or explicit `commit` can retry.
-The explicit command returns nonzero when deferred. Notes remain on disk.
+The Stop hook commits in a background process that waits for the lock; if the
+repository stays busy or the commit fails, the next Stop reports it once, and
+any later Stop or explicit `commit` retries. The explicit command does not
+wait and returns nonzero when deferred. Notes remain on disk.
 
 If `index.lock` remains after an interrupted Git operation, first check whether
 any Git process still owns it. Never remove an active lock or decide it is stale

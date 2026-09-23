@@ -48,6 +48,7 @@ class ObsidianMemoryTests(unittest.TestCase):
             "max_context_chars": 3000,
             "max_hot_chars": 1800,
             "auto_commit": False,
+            "stop_wait_seconds": 20,
             **overrides,
         }
         path.write_text(json.dumps(payload), encoding="utf-8")
@@ -4578,27 +4579,235 @@ Prior: old unrelated outcome.
             self.assertTrue(ok, detail)
             self.assertEqual(self.git_stdout(vault, "show", "HEAD:wiki/hot.md"), "new memory\n")
 
-    def test_deferred_stop_is_valid_json_and_explicit_commit_fails(self) -> None:
+    def wait_for_stop_status(self, config_path: Path) -> dict:
+        status_path = MODULE.stop_status_path(config_path)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            status = MODULE.read_stop_status(status_path)
+            if status is not None:
+                return status
+            time.sleep(0.05)
+        self.fail("background memory commit never recorded a result")
+
+    def test_locked_stop_returns_at_once_and_commits_in_the_background(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             vault = self.make_vault(root)
             self.init_git_vault(vault)
             (vault / "wiki" / "hot.md").write_text("new memory\n", encoding="utf-8")
-            config_path = self.write_config(root, vault, auto_commit=True, commit_paths=["wiki"])
+            config_path = self.write_config(
+                root, vault, auto_commit=True, commit_paths=["wiki"], stop_wait_seconds=0.2
+            )
             env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
             with MODULE.memory_commit_lock(vault):
+                started = time.monotonic()
                 stopped = subprocess.run(
                     [sys.executable, str(SCRIPT), "stop"], input="{}", env=env,
                     text=True, capture_output=True, check=False, timeout=5,
                 )
+                elapsed = time.monotonic() - started
                 explicit = subprocess.run(
                     [sys.executable, str(SCRIPT), "commit"], env=env,
                     text=True, capture_output=True, check=False, timeout=5,
                 )
+                self.assertIsNone(MODULE.read_stop_status(MODULE.stop_status_path(config_path)))
             self.assertEqual(stopped.returncode, 0)
-            self.assertIn("auto-commit deferred", json.loads(stopped.stdout)["systemMessage"])
+            self.assertEqual(json.loads(stopped.stdout), {})
+            self.assertLess(elapsed, 4)
             self.assertEqual(explicit.returncode, 1)
             self.assertIn("deferred:", explicit.stderr)
+            status = self.wait_for_stop_status(config_path)
+            self.assertTrue(status["ok"], status)
+            self.assertEqual(self.git_stdout(vault, "show", "HEAD:wiki/hot.md"), "new memory\n")
+
+    def run_stop_hook_with_unfinished_worker(self, config_path: Path) -> dict:
+        unfinished = mock.Mock()
+        unfinished.wait.side_effect = subprocess.TimeoutExpired("stop-commit", 0)
+        with (
+            mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}),
+            mock.patch.object(MODULE, "spawn_stop_commit", return_value=unfinished),
+            mock.patch.object(MODULE.sys, "stdin", io.StringIO("{}")),
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+        ):
+            self.assertEqual(MODULE.stop_hook(), 0)
+        return json.loads(stdout.getvalue())
+
+    def test_an_unfinished_run_reports_an_earlier_background_failure_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            config_path = self.write_config(root, vault, auto_commit=True, stop_wait_seconds=0)
+            status_path = MODULE.stop_status_path(config_path)
+            MODULE.write_stop_status(
+                status_path,
+                {"run_id": "earlier", "ok": False, "detail": "git commit failed", "reported": False},
+            )
+            first = self.run_stop_hook_with_unfinished_worker(config_path)
+            second = self.run_stop_hook_with_unfinished_worker(config_path)
+            self.assertEqual(
+                first["systemMessage"],
+                "Earlier background Obsidian memory auto-commit failed: git commit failed",
+            )
+            self.assertEqual(second, {})
+            self.assertTrue(MODULE.read_stop_status(status_path)["reported"])
+
+    def test_a_background_commit_starts_its_git_budget_once_it_holds_the_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            self.init_git_vault(vault)
+            (vault / "wiki" / "hot.md").write_text("new memory\n", encoding="utf-8")
+            config_path = self.write_config(root, vault, commit_paths=["wiki"])
+            held, release = threading.Event(), threading.Event()
+            released_at: list[float] = []
+
+            def hold_lock() -> None:
+                with MODULE.memory_commit_lock(vault):
+                    held.set()
+                    release.wait(10)
+                    released_at.append(time.monotonic())
+
+            holder = threading.Thread(target=hold_lock)
+            holder.start()
+            self.assertTrue(held.wait(10))
+            deadlines: list[float] = []
+            original = MODULE.run_git
+
+            def recorded_git(*args):
+                if not deadlines:
+                    threading.Timer(0.3, release.set).start()
+                deadlines.append(MODULE.COMMIT_DEADLINE.get())
+                return original(*args)
+
+            with (
+                mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}),
+                mock.patch.object(MODULE, "run_git", side_effect=recorded_git),
+            ):
+                config, _ = MODULE.load_config()
+                ok, detail = MODULE.safe_commit_paths(config, config_path, lock_wait=10)
+            holder.join()
+            self.assertTrue(ok, detail)
+            self.assertGreaterEqual(
+                min(deadlines[1:]), released_at[0] + MODULE.COMMIT_TIMEOUT_SECONDS
+            )
+            self.assertEqual(self.git_stdout(vault, "show", "HEAD:wiki/hot.md"), "new memory\n")
+
+    def test_stop_wait_seconds_must_be_a_bounded_number(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            for value in (-1, 21, True, "fast", None):
+                with self.subTest(value=value):
+                    config_path = self.write_config(root, vault, stop_wait_seconds=value)
+                    with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                        with self.assertRaisesRegex(MODULE.ConfigurationError, "stop_wait_seconds"):
+                            MODULE.load_config()
+
+    def write_project_hot_vault(self, root: Path) -> Path:
+        vault = self.make_vault(root)
+        (vault / "projects" / "factorio-bot" / "journal").mkdir(parents=True)
+        (vault / "wiki" / "hot.md").write_text(
+            "---\ntype: hot\n---\n# Hot context\n\n"
+            "## ARIA checkpoint\n- campaign step 3, see [[projects/factorio-bot/journal/today]]\n\n"
+            "## Alpha release\nProject: alpha\n- alpha freeze\n\n"
+            "## Shared\n- cross-project note\n",
+            encoding="utf-8",
+        )
+        return vault
+
+    def capsule_for(self, root: Path, vault: Path, cwd: Path | None) -> str:
+        config_path = self.write_config(root, vault)
+        with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+            config, _ = MODULE.load_config()
+            return MODULE.bounded_context(config, str(cwd) if cwd else None)
+
+    def test_project_owned_hot_sections_stay_out_of_other_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.write_project_hot_vault(root)
+            elsewhere = self.capsule_for(root, vault, root / "work" / "service")
+            self.assertIn("cross-project note", elsewhere)
+            for hidden in ("campaign step 3", "alpha freeze"):
+                self.assertNotIn(hidden, elsewhere)
+            factorio = self.capsule_for(root, vault, root / "Claude" / "Factorio Bot" / "mod")
+            self.assertIn("campaign step 3", factorio)
+            self.assertNotIn("alpha freeze", factorio)
+            alpha = self.capsule_for(root, vault, root / "code" / "Alpha")
+            self.assertIn("alpha freeze", alpha)
+            self.assertNotIn("campaign step 3", alpha)
+
+    def test_project_ownership_follows_the_current_entry_and_real_project_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            for folder in ("factorio-bot", "Media Manager", "ai"):
+                (vault / "projects" / folder).mkdir()
+            (vault / "wiki" / "hot.md").write_text(
+                "# Hot context\n\n"
+                "## Last updated\n2026-09-22: campaign step 3 [[projects/factorio-bot/journal/x]]. "
+                "Prior: [[projects/ai/log]]\n\n"
+                "## Alias\n- alias note [[projects/factorio-bot|ARIA]]\n\n"
+                "## Relative\n- relative note [log](../projects/factorio-bot/journal/x.md)\n\n"
+                "## Encoded\n- encoded note [plan](projects/Media%20Manager/plan.md)\n\n"
+                "## Catalog\n- catalog note [[projects/_index]]\n\n"
+                "## Retired\n- retired note [[projects/retired/README]]\n\n"
+                "## Unknown marker\nProject: retired\n- unknown marker note\n",
+                encoding="utf-8",
+            )
+            config_path = self.write_config(root, vault, context_profile="full")
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+                elsewhere = MODULE.bounded_context(config, str(root / "work"))
+                factorio = MODULE.bounded_context(config, str(root / "factorio-bot"))
+            for hidden in ("campaign step 3", "alias note", "relative note", "encoded note"):
+                self.assertNotIn(hidden, elsewhere)
+            for shown in ("catalog note", "retired note", "unknown marker note"):
+                self.assertIn(shown, elsewhere)
+            for shown in ("campaign step 3", "alias note", "relative note"):
+                self.assertIn(shown, factorio)
+            self.assertNotIn("encoded note", factorio)
+
+    def test_the_home_directory_never_selects_a_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            home = root / "alpha"
+            with mock.patch.object(MODULE.Path, "home", return_value=home):
+                self.assertIsNone(MODULE.session_project(vault, str(home)))
+                self.assertIsNone(MODULE.session_project(vault, str(home / "work")))
+                self.assertEqual(MODULE.session_project(vault, str(home / "code" / "Alpha")), "alpha")
+
+    def test_a_project_hot_file_replaces_the_global_capsule_for_that_project(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.write_project_hot_vault(root)
+            (vault / "projects" / "factorio-bot" / "hot.md").write_text(
+                "---\ntype: hot\n---\n## Resume\n- tutorial 17 open\n", encoding="utf-8"
+            )
+            config_path = self.write_config(root, vault)
+            env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            hook = json.dumps({"cwd": str(root / "Claude" / "Factorio Bot")})
+            started = subprocess.run(
+                [sys.executable, str(SCRIPT), "session-start"], input=hook, env=env,
+                text=True, capture_output=True, check=True, timeout=10,
+            )
+            self.assertIn("## Active capsule (projects/factorio-bot/hot.md)", started.stdout)
+            self.assertIn("tutorial 17 open", started.stdout)
+            self.assertNotIn("cross-project note", started.stdout)
+            elsewhere = self.capsule_for(root, vault, root / "work")
+            self.assertNotIn("tutorial 17 open", elsewhere)
+
+    def test_a_capsule_with_only_other_projects_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            (vault / "wiki" / "hot.md").write_text(
+                "# Hot context\n\n## Alpha release\nProject: alpha\n- alpha freeze\n",
+                encoding="utf-8",
+            )
+            context = self.capsule_for(root, vault, root / "work")
+            self.assertIn("│ (empty)", context)
+            self.assertNotIn("Hot context", context)
 
     @unittest.skipIf(os.name == "nt", "POSIX Git signal cleanup")
     def test_timed_out_git_cleans_owned_locks_before_returning(self) -> None:
@@ -4629,6 +4838,34 @@ Prior: old unrelated outcome.
             hook.unlink()
             ok, detail = MODULE.safe_commit_paths(config, config_path)
             self.assertTrue(ok, detail)
+
+    @unittest.skipIf(os.name == "nt", "POSIX Git signal cleanup")
+    def test_a_git_group_that_exits_during_timeout_cleanup_still_reports_the_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            self.init_git_vault(vault)
+            (vault / "wiki" / "hot.md").write_text("new memory\n", encoding="utf-8")
+            hook = vault / ".git" / "hooks" / "pre-commit"
+            hook.write_text("#!/bin/sh\nexec sleep 10\n", encoding="utf-8")
+            hook.chmod(0o755)
+            config_path = self.write_config(root, vault, commit_paths=["wiki"])
+            signal_group = os.killpg
+
+            def group_exits_first(group: int, number: int) -> None:
+                signal_group(group, number)
+                raise PermissionError(1, "Operation not permitted")
+
+            with (
+                mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}),
+                mock.patch.object(MODULE, "COMMIT_TIMEOUT_SECONDS", 0.5),
+                mock.patch.object(MODULE.os, "killpg", side_effect=group_exits_first),
+            ):
+                config, _ = MODULE.load_config()
+                ok, detail = MODULE.safe_commit_paths(config, config_path)
+            self.assertFalse(ok)
+            self.assertIn("timed out", detail)
+            self.assertFalse((vault / ".git" / "index.lock").exists())
 
     def test_commit_timeout_budget_is_shared_across_git_commands(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
