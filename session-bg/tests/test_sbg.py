@@ -9,9 +9,18 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SBG = ROOT / "bin" / "sbg"
+
+
+def setUpModule():
+    stub_bin = Path(unittest.enterModuleContext(tempfile.TemporaryDirectory()))
+    tattoy = stub_bin / "tattoy"
+    tattoy.write_text("#!/bin/sh\nexit 0\n")
+    tattoy.chmod(0o755)
+    unittest.enterModuleContext(mock.patch.dict(os.environ, {"PATH": f"{stub_bin}{os.pathsep}{os.environ['PATH']}"}))
 
 
 def load_sbg():
