@@ -49,11 +49,10 @@ when a concrete doubt about a test's discrimination remains, in an isolated
 checkout; an import/setup failure is not a successful mutation test.
 No mandatory mutation of every changed test or property-test rewrite.
 
-Use one independent `gate` review for unfamiliar or high-risk changes when no
+Use one independent `reviewer` run for unfamiliar or high-risk changes when no
 equivalent independent review covers them. Supply SHAs, scope, requirements,
 and evidence paths; the reviewer loads this skill and returns findings only.
-An existing `mr-review-fixer` review can satisfy this step. Do not chain both
-reviewers over unchanged code. The caller owns fixes and final readiness.
+Never repeat it over unchanged code. The caller owns fixes and final readiness.
 
 If diagnosing a known pattern, consult only the relevant rows in
 `failure-modes.md`. The older

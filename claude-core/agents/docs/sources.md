@@ -1,6 +1,7 @@
 # Official sources
 
-Standalone design verified locally with Claude Code 2.1.231 on 2026-08-13.
+Subagent contract re-verified against the subagent documentation with Claude
+Code 2.1.280 on 2026-09-23.
 
 - [Claude Code: create custom subagents](https://code.claude.com/docs/en/sub-agents)
   — the current source for user-agent locations, precedence, frontmatter,
@@ -16,15 +17,6 @@ Standalone design verified locally with Claude Code 2.1.231 on 2026-08-13.
   — `ListAgents`/`SendMessage` between local sessions, inbound controls
   (`crossSessionInbound`, `isolatePeerMachines`), consent boundaries, and
   plain-text-only delivery (verified 2026-08-09).
-- [Codex: AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
-  — global and project instruction discovery and precedence.
-- [Codex: config basics](https://learn.chatgpt.com/docs/config-file/config-basic)
-  — named `--profile` files, configuration locations, and precedence.
-- [Codex: subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents)
-  — standalone custom-agent TOMLs, required fields, orchestration behavior, and
-  GPT-5.6 model-routing guidance.
-- [Codex: configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
-  — global model, reasoning, `developer_instructions`, and `[agents]` settings.
 - [Anthropic: prompting best practices](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices)
   — clear roles, direct instructions, relevant context, and examples.
 - [Google: short sentences](https://developers.google.com/tech-writing/one/short-sentences)
@@ -45,7 +37,21 @@ higher precedence than user scope.
 Agent Markdown starts with YAML frontmatter. `name` and `description` are
 required; supported optional fields include `tools`, `disallowedTools`, `model`,
 `permissionMode`, `maxTurns`, `skills`, `mcpServers`, `hooks`, `memory`,
-`background`, `effort`, `isolation`, `color`, and `initialPrompt`.
+`background`, `effort`, `isolation`, `omitClaudeMd`, `color`, and
+`initialPrompt`.
+
+A subagent's model resolves from the per-call `model` argument, then its
+frontmatter `model`, then `CLAUDE_CODE_SUBAGENT_MODEL`, then the main
+conversation's model; pinning frontmatter is what stops a forgotten argument
+from inheriting the main model. A `tools` allowlist also excludes MCP and
+`Skill` tools unless they are listed. Subagents load the CLAUDE.md hierarchy
+unless `omitClaudeMd` is set. At `maxTurns` the output returns marked partial
+and the caller can resume the subagent.
+
+The Agent tool's per-call `model` accepts only the `sonnet`, `opus`, `haiku`,
+and `fable` aliases. Observed on 2026-09-23, a subagent given `opus` ran on
+`claude-opus-5` while the main thread's `opus[1m]` ran on `claude-opus-5-5`;
+frontmatter accepts full model IDs, so `reviewer` pins `claude-opus-5-5`.
 
 Claude Code watches existing `~/.claude/agents/` and `.claude/agents/`
 directories and uses added or edited definitions within seconds. Restart only
@@ -54,8 +60,8 @@ when the session started with `--disable-slash-commands`.
 
 ## Destination-formatting sources
 
-Alan Wake consults the applicable official source before finalizing content for
-these destinations:
+Consult the applicable official source before finalizing content for these
+destinations:
 
 - [Slack: formatting message text](https://docs.slack.dev/messaging/formatting-message-text/)
   and [Block Kit](https://docs.slack.dev/block-kit/)

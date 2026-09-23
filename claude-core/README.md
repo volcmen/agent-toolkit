@@ -2,7 +2,7 @@
 
 The version-controlled source of David's personal Claude Code configuration:
 the compact always-on core, rules, engineering and review skills, hooks,
-browser reference, controller, and specialist agents. One lifecycle CLI owns
+browser reference, and three specialist agents. One lifecycle CLI owns
 validation, rendering, installation, verification, and removal under `~/.claude`.
 
 ## Install model
@@ -78,9 +78,9 @@ python3 claude-core/scripts/manage.py status
 python3 claude-core/scripts/manage.py uninstall
 ```
 
-`render` updates generated provider files. `check` validates the inventory,
-executable modes, reference edges, agent catalog, native model and tool
-contracts, and Codex TOML, then runs the whole `tests/` directory. It does not
+`render` updates the generated agent files. `check` validates the inventory,
+executable modes, reference edges, agent catalog, and model and tool
+contracts, then runs the whole `tests/` directory. It does not
 install anything. The workspace gate includes the same check:
 
 ```bash
@@ -97,41 +97,40 @@ python3 -m unittest discover -s tests
 
 ## Agent sources and architecture
 
-`agents/agents.json` owns names, descriptions, provider models, reasoning, and
-tool boundaries. Its prompt paths are relative to `agents/`. Shared instruction
-bodies live in `agents/prompts/`; `scripts/render.py` deterministically produces
-Claude Markdown in `agents/rendered/` and Codex TOML in `agents/codex/agents/`.
-Edit the catalog or prompts rather than generated files. The existing generator
-header retains its historical path to preserve the rendered bytes.
+`agents/agents.json` owns names, descriptions, models, reasoning effort, turn
+limits, and tool boundaries. Its prompt paths are relative to `agents/`.
+Instruction bodies live in `agents/prompts/`; `scripts/render.py`
+deterministically produces Claude Markdown in `agents/rendered/`. Edit the
+catalog or prompts rather than generated files.
 
-The shared layer owns behavior; each provider adapter owns execution syntax and
-model selection. `agents/codex/controller.config.toml` and
-`agents/policy/codex-global.md` retain the dormant Codex controller profile and
-policy. The Codex controller is the primary thread, not a spawnable worker.
-
-| Claude role | Agent and contract |
+| Role | Agent and contract |
 | --- | --- |
-| Controller | Fable `controller`, medium effort; primary thread only |
-| Repository explorer | Sonnet `Explore`; compact report; overrides the built-in Explore agent |
-| Writing specialist | Sonnet `alan-wake`, medium effort, plan permission mode, eight turns; Read/Grep/Glob only |
-| MR quality gate and fixer | Sonnet `mr-review-fixer`, high effort, project memory; quality-gate report |
-| Independent reviewer | Sonnet `gate`, medium effort, 20 turns, Bash/Read/Grep/Glob; optional independent preflight review |
+| Read | Sonnet `Explore`, medium effort; Read/Grep/Glob/LSP; compact report; overrides the built-in Explore agent |
+| Write | Sonnet `worker`, high effort, 100 turns, Read/Grep/Glob/LSP/Edit/Write/Bash; changed files and observed checks |
+| Review | Opus 5.5 `reviewer`, high effort, 20 turns, Bash/Read/Grep/Glob; evidenced findings and coverage gaps |
 
-The controller prompt owns delegation, model selection, specialist routing,
-prose routing, and peer sessions. `CLAUDE.md` owns invariants; the `engineering`
-skill owns procedure. `mr-review-fixer` points at the preflight failure-modes
-ledger and engineering references instead of restating them.
+There is no main-thread agent: the default session, Opus 5.5 from
+`settings.json`, leads, integrates, and verifies. `CLAUDE.md` states the model
+rule; the `engineering` skill's Delegation section routes agents and models,
+and its delivery reference owns MR review feedback and peer-session handoffs.
 
-Routine workplace messages and small descriptions stay in the primary thread.
-Alan Wake handles explicit requests, substantial rewrites, delicate wording,
-and long documents using the shared engineering writing reference. The parent
-supplies verified facts, checks the returned draft, and fixes mechanical
-formatting directly. Neither drafting nor review authorizes publication.
+Each agent pins its model in frontmatter, so a missing `model` argument never
+inherits the main thread's model. The per-call `opus` alias resolves to an
+older Opus, so `reviewer` pins the full `claude-opus-5-5` ID and is called
+without a `model` argument; built-in agents always get one. `worker` replaces
+`general-purpose` for bounded write slices: its tool allowlist drops MCP, web,
+skill, and agent tools, which cuts its starting context and keeps external
+writes in the main thread. Review feedback runs in the main thread, which can
+ask for authorization: `reviewer` checks contested claims and `worker` applies
+fixes.
 
-Routing and writing evaluations live in `agents/evals/`. Official design
-references are in [agents/docs/sources.md](agents/docs/sources.md).
-`agents/docs/superpowers/` preserves historical plans and specifications; this
-README is the current installation contract.
+Workplace messages and descriptions stay in the primary thread, drafted from
+the shared engineering writing reference against verified facts. Neither
+drafting nor review authorizes publication.
+
+Routing evaluations live in `agents/evals/`. Official design references are in
+[agents/docs/sources.md](agents/docs/sources.md). This README is the current
+installation contract; superseded plans live in Git history.
 
 ## Configuration contracts
 
@@ -140,8 +139,8 @@ Within `CLAUDE.md`, `rules/code-style.md`, `rules/waiting.md`, and
 and a rule file or engineering reference elaborates it. Corporate-system detail
 lives in `skills/engineering/references/corporate-systems.md`, loaded by the core
 route when shared systems or publishing are involved. Tests enforce the
-always-on budget: core at most 3.5 KB; core, waiting, and the plugin-owned
-Obsidian rule at most 9.5 KB; with code style at most 16 KB. Sentinel phrases
+always-on budget: core at most 3,300 bytes; core, waiting, and the plugin-owned
+Obsidian rule at most 7,000 bytes; with code style at most 12,000 bytes. Sentinel phrases
 cannot repeat across corpus files. Gate and retro skills keep their own
 vocabulary; code style retains its code-file scope.
 
@@ -221,8 +220,8 @@ link exposes the guide without a new plugin or background dispatcher.
 an offline, read-only inventory of committed HEAD, merge base, target, excluded
 local edits, paths, and whitespace evidence; it never returns readiness.
 Known review and test results can be reused for unchanged inputs. The optional
-`gate` reviewer covers high-risk or unfamiliar changes; a completed independent
-`mr-review-fixer` pass can satisfy it. Mutation testing is reserved for a
+`reviewer` agent covers high-risk or unfamiliar changes, once per unchanged
+head. Mutation testing is reserved for a
 specific unresolved doubt about test discrimination. Results distinguish
 READY, CHANGES NEEDED, and INCOMPLETE, with short exception-focused output.
 
@@ -230,7 +229,7 @@ The old `preflight-triage.sh`, runner probes, and `mr-doctor.sh` remain opt-in
 diagnostics for their existing callers. Their caches and heuristic classifications
 are not reusable readiness evidence. The default path does not run them.
 
-Routine workplace drafts stay inline. `engineering/references/writing.md` is
-the shared contract for the primary thread and Alan Wake: concise prose, named
-links in the actual output format, and no automatic publishing. See
+Workplace drafts stay inline. `engineering/references/writing.md` is the
+shared contract for the primary thread: concise prose, named links in the
+actual output format, and no automatic publishing. See
 [the refresh record](docs/2026-09-06-agent-refresh.md) for evidence and limits.

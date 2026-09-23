@@ -56,14 +56,12 @@ project; never assemble a URL from an identifier and a remembered path. An
 anonymous 403 cannot distinguish a wrong private URL from missing access.
 Otherwise retain the exact ID; never invent a URL or stall a draft for it.
 
-## Routing and handoff
+## Routing
 
-Draft routine messages, small MR descriptions, and short rewrites directly.
-Use `alan-wake` on Sonnet for an explicit request to use that agent, substantial
-restructuring, delicate wording, or a long document where an editor helps.
-Use Opus only when the writing judgment warrants it. Brief with verified facts,
-URLs, audience, actual output surface, required template, and intended ask.
-Do not send the writer an entire coding transcript or ask it to re-investigate.
+Draft messages, MR descriptions, and rewrites directly. Use Opus only when the
+writing judgment warrants it: substantial restructuring, delicate wording, or a
+long document. Work from verified facts, URLs, audience, actual output surface,
+required template, and intended ask.
 
 Before returning or using any draft, verify facts and uncertainty, supplied
 links, required fields, brevity, and rendering syntax. Fix omissions or broken

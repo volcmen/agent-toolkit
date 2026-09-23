@@ -11,11 +11,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-try:
-    import tomllib
-except ModuleNotFoundError:
-    tomllib = None
-
 ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = ROOT.parent
 HOME = Path.home()
@@ -24,8 +19,6 @@ BACKUP_ROOT = Path.home() / ".config" / "claude-core" / "backups"
 CLAUDE_SOURCE = ROOT / "agents" / "rendered"
 CLAUDE_TARGET = CLAUDE_HOME / "agents"
 CLAUDE_SETTINGS = CLAUDE_HOME / "settings.json"
-CODEX_SOURCE = ROOT / "agents" / "codex" / "agents"
-CODEX_CONTROLLER_PROFILE = ROOT / "agents" / "codex" / "controller.config.toml"
 MANAGED_SETTINGS_FRAGMENT = ROOT / "settings" / "managed.json"
 OWNED_SETTINGS_KEYS = ("hooks", "statusLine", "attribution")
 
@@ -133,7 +126,7 @@ def ensure_modern_python() -> None:
         candidate = shutil.which(name)
         if candidate and str(Path(candidate).resolve()) != current:
             os.execv(candidate, [candidate, *sys.argv])
-    raise SystemExit("claude-core requires Python 3.11+ for TOML validation")
+    raise SystemExit("claude-core requires Python 3.11+")
 
 
 class BackupStore:
@@ -357,9 +350,9 @@ def agent_package_problems() -> list[str]:
         check=False,
     )
     if result.returncode:
-        problems.append("provider files have render drift; run `python3 scripts/render.py`")
+        problems.append("rendered agents drift from the catalog; run `python3 scripts/render.py`")
 
-    expected_claude = {"controller.md", "Explore.md", "alan-wake.md", "mr-review-fixer.md", "gate.md"}
+    expected_claude = {"Explore.md", "worker.md", "reviewer.md"}
     actual_claude = {path.name for path in claude_agent_sources()}
     if actual_claude != expected_claude:
         problems.append(
@@ -377,54 +370,16 @@ def agent_package_problems() -> list[str]:
     except (OSError, json.JSONDecodeError) as exc:
         return problems + [f"agents/agents.json: {exc}"]
     by_id = {agent["id"]: agent for agent in catalog.get("agents", [])}
-    if set(by_id) != {"controller", "alan-wake", "repo-explorer", "task-analyst", "mr-review-fixer", "gate"}:
-        problems.append(
-            "agents.json must define controller, alan-wake, repo-explorer, task-analyst, mr-review-fixer, and gate"
-        )
-    if by_id.get("controller", {}).get("codex"):
-        problems.append(
-            "controller must remain the Codex primary thread, not a spawnable custom agent"
-        )
-    if by_id.get("controller", {}).get("claude", {}).get("model") != "fable":
-        problems.append("Claude controller must use fable")
-    if by_id.get("alan-wake", {}).get("claude", {}).get("model") != "sonnet":
-        problems.append("Claude alan-wake must use sonnet")
-    for agent_id in ("repo-explorer", "mr-review-fixer", "gate"):
-        if by_id.get(agent_id, {}).get("claude", {}).get("model") != "sonnet":
-            problems.append(f"Claude {agent_id} must use sonnet")
-
-    for path in CODEX_SOURCE.glob("*.toml"):
-        try:
-            parsed = tomllib.loads(path.read_text(encoding="utf-8"))
-        except tomllib.TOMLDecodeError as exc:
-            problems.append(f"{path.relative_to(ROOT)}: invalid TOML: {exc}")
-            continue
-        for field in (
-            "name",
-            "description",
-            "developer_instructions",
-            "model",
-            "model_reasoning_effort",
-        ):
-            if not parsed.get(field):
-                problems.append(f"{path.relative_to(ROOT)}: missing {field}")
-        if not str(parsed.get("model", "")).startswith("gpt-"):
-            problems.append(f"{path.relative_to(ROOT)}: Codex model must be a GPT model")
-
-    try:
-        controller_profile = tomllib.loads(
-            CODEX_CONTROLLER_PROFILE.read_text(encoding="utf-8")
-        )
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        problems.append(f"{CODEX_CONTROLLER_PROFILE.relative_to(ROOT)}: invalid TOML: {exc}")
-    else:
-        if controller_profile.get("model") != "gpt-5.6-sol":
-            problems.append("Codex controller profile must use gpt-5.6-sol")
-        if controller_profile.get("model_reasoning_effort") != "max":
-            problems.append("Codex controller profile must use max reasoning")
-        instructions = str(controller_profile.get("developer_instructions", ""))
-        if "active shared-agents controller" not in instructions:
-            problems.append("Codex controller profile must explicitly activate the controller")
+    expected_models = {
+        "repo-explorer": "sonnet",
+        "worker": "sonnet",
+        "reviewer": "claude-opus-5-5",
+    }
+    if set(by_id) != set(expected_models):
+        problems.append(f"agents.json must define exactly {', '.join(expected_models)}")
+    for agent_id, model in expected_models.items():
+        if by_id.get(agent_id, {}).get("claude", {}).get("model") != model:
+            problems.append(f"Claude {agent_id} must use {model}")
     return problems
 
 
@@ -534,8 +489,6 @@ def live_problems() -> list[str]:
     if not isinstance(settings, dict):
         problems.append(f"{CLAUDE_SETTINGS}: must contain a JSON object")
         settings = {}
-    if "agent" in settings and settings["agent"] != "controller":
-        problems.append("Claude user settings select an agent other than controller")
     problems.extend(settings_drift())
     return problems
 

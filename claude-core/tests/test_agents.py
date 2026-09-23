@@ -22,9 +22,10 @@ if sys.version_info < (3, 11):
             os.execv(candidate, [candidate, str(Path(__file__).resolve())])
     raise SystemExit("tests require Python 3.11+")
 
-import tomllib
-
 ROOT = Path(__file__).resolve().parents[1] / "agents"
+ENGINEERING = ROOT.parent / "skills" / "engineering" / "SKILL.md"
+CORE = ROOT.parent / "CLAUDE.md"
+DELIVERY = ROOT.parent / "skills" / "engineering" / "references" / "delivery.md"
 sys.path.insert(0, str(ROOT.parent / "scripts"))
 
 import manage  # noqa: E402
@@ -35,18 +36,31 @@ class Rendering(unittest.TestCase):
     def test_live_provider_files_match_the_shared_sources(self) -> None:
         self.assertEqual(render.render(check=True), [])
 
-    def test_provider_models_are_native(self) -> None:
-        catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
-        controller = next(agent for agent in catalog if agent["id"] == "controller")
-        self.assertEqual(controller["claude"]["model"], "fable")
-        self.assertEqual(controller["claude"]["effort"], "medium")
-        rendered = (ROOT / "rendered" / "controller.md").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("\neffort: medium\n", rendered)
-        for agent in catalog:
-            if agent.get("codex"):
-                self.assertTrue(agent["codex"]["model"].startswith("gpt-"))
+    def test_agent_without_claude_settings_is_rejected(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt = root / "prompt.md"
+            prompt.write_text("Prompt\n", encoding="utf-8")
+            catalog = root / "agents.json"
+            catalog.write_text(
+                json.dumps(
+                    {
+                        "agents": [
+                            {
+                                "id": "orphan",
+                                "description": "Renders nowhere",
+                                "prompt": str(prompt),
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(render, "CATALOG", catalog):
+                with self.assertRaisesRegex(
+                    render.Problem, "orphan: claude settings are required"
+                ):
+                    render.load_catalog()
 
     def test_empty_claude_name_is_rejected(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -103,48 +117,20 @@ class Rendering(unittest.TestCase):
                 ):
                     render.load_catalog()
 
-    def test_codex_agents_use_the_required_schema(self) -> None:
-        for path in (ROOT / "codex" / "agents").glob("*.toml"):
-            agent = tomllib.loads(path.read_text(encoding="utf-8"))
-            for field in ("name", "description", "developer_instructions"):
-                self.assertTrue(agent[field], f"{path}: {field}")
-
-    def test_codex_agents_use_concrete_model_ids(self) -> None:
-        supported = {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"}
-        for path in (ROOT / "codex" / "agents").glob("*.toml"):
-            agent = tomllib.loads(path.read_text(encoding="utf-8"))
-            self.assertIn(agent["model"], supported, str(path))
-
-    def test_codex_controller_profile_is_explicit_and_native(self) -> None:
-        profile = tomllib.loads(
-            (ROOT / "codex" / "controller.config.toml").read_text(encoding="utf-8")
-        )
-        self.assertEqual(profile["model"], "gpt-5.6-sol")
-        self.assertEqual(profile["model_reasoning_effort"], "max")
-        self.assertIn("active shared-agents controller", profile["developer_instructions"])
-
-    def test_alan_wake_renders_plan_mode_with_mutators_denied(self) -> None:
-        text = (ROOT / "rendered" / "alan-wake.md").read_text(encoding="utf-8")
-        frontmatter = text.split("---")[1]
-        self.assertIn("\nmaxTurns: 8\n", frontmatter)
-        self.assertIn("\npermissionMode: plan\n", frontmatter)
-        self.assertIn("\ndisallowedTools: Write, Edit, NotebookEdit, Agent\n", frontmatter)
-        self.assertIn("\ntools: Read, Grep, Glob\n", frontmatter)
+    def test_no_rendered_agent_declares_a_permission_mode(self) -> None:
         for path in (ROOT / "rendered").glob("*.md"):
-            if path.name != "alan-wake.md":
-                self.assertNotIn("permissionMode:", path.read_text(encoding="utf-8"), str(path))
+            self.assertNotIn("permissionMode:", path.read_text(encoding="utf-8"), str(path))
 
-    def test_renderer_emits_optional_scalars_for_the_mr_fixer(self) -> None:
-        text = (ROOT / "rendered" / "mr-review-fixer.md").read_text(encoding="utf-8")
+    def test_renderer_emits_optional_scalars(self) -> None:
+        text = (ROOT / "rendered" / "worker.md").read_text(encoding="utf-8")
         frontmatter = text.split("---")[1]
         self.assertIn("\nmaxTurns: 100\n", frontmatter)
-        self.assertIn("\nmemory: project\n", frontmatter)
-        self.assertIn("\ntools: Read, Grep, Glob, Edit, Write, Bash\n", frontmatter)
-        for forbidden in ("skills:", "color:", "superpowers"):
+        self.assertIn("\ntools: Read, Grep, Glob, LSP, Edit, Write, Bash\n", frontmatter)
+        for forbidden in ("memory:", "skills:", "color:", "superpowers"):
             self.assertNotIn(forbidden, text)
 
     def test_rendered_agents_stay_within_size_budgets(self) -> None:
-        budgets = {"controller.md": 2600, "mr-review-fixer.md": 3100, "alan-wake.md": 1400, "gate.md": 1300, "Explore.md": 1600}
+        budgets = {"worker.md": 1800, "reviewer.md": 1400, "Explore.md": 1600}
         for name, limit in budgets.items():
             self.assertLessEqual((ROOT / "rendered" / name).stat().st_size, limit, name)
 
@@ -155,10 +141,15 @@ class Rendering(unittest.TestCase):
             for sentinel in sentinels:
                 self.assertNotIn(sentinel, text, f"{path.name}: {sentinel!r}")
 
-    def test_claude_agents_render_to_standalone_source_directory(self) -> None:
-        expected = {"controller.md", "Explore.md", "alan-wake.md", "mr-review-fixer.md", "gate.md"}
-        actual = {path.name for path in (ROOT / "rendered").glob("*.md")}
-        self.assertEqual(actual, expected)
+    def test_catalog_is_three_read_write_review_agents(self) -> None:
+        self.assertEqual(
+            {path.name for path in (ROOT / "rendered").glob("*.md")},
+            {"Explore.md", "worker.md", "reviewer.md"},
+        )
+        self.assertEqual(
+            {path.name for path in (ROOT / "prompts").glob("*.md")},
+            {"repo-explorer.md", "worker.md", "reviewer.md"},
+        )
 
     def test_explore_overrides_the_builtin_with_a_pinned_model(self) -> None:
         text = (ROOT / "rendered" / "Explore.md").read_text(encoding="utf-8")
@@ -169,180 +160,136 @@ class Rendering(unittest.TestCase):
         self.assertIn("disallowedTools: Write, Edit, NotebookEdit", text)
         for thoroughness in ("quick", "medium", "very thorough"):
             self.assertIn(thoroughness, text.lower())
+        self.assertNotIn("recent history", text)
+        self.assertNotIn("recent changes", text)
+        self.assertIn("git history and runtime behavior are out of reach", text)
+
+    def test_worker_is_a_scoped_sonnet_replacement_for_general_purpose(self) -> None:
+        catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
+        worker = next(agent for agent in catalog if agent["id"] == "worker")
+        self.assertIn("prefer it over general-purpose", worker["description"])
+        self.assertEqual(worker["claude"]["model"], "sonnet")
+        self.assertEqual(worker["claude"]["maxTurns"], 100)
+        self.assertEqual(
+            worker["claude"]["tools"],
+            ["Read", "Grep", "Glob", "LSP", "Edit", "Write", "Bash"],
+        )
+        for absent in ("memory", "skills", "permissionMode", "disallowedTools"):
+            self.assertNotIn(absent, worker["claude"])
+        prompt = (ROOT / "prompts" / "worker.md").read_text(encoding="utf-8")
+        self.assertIn("~/.claude/skills/engineering/references/minimalism.md", prompt)
+        self.assertIn("DONE, PARTIAL, or BLOCKED", prompt)
+        self.assertIn("exactly as\nobserved", prompt)
+        self.assertIn("No commits, pushes", prompt)
 
     def test_specialists_declare_their_tool_posture_explicitly(self) -> None:
         catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
-        by_id = {agent["id"]: agent["claude"] for agent in catalog if agent.get("claude")}
+        by_id = {agent["id"]: agent["claude"] for agent in catalog}
         self.assertNotIn("Bash", by_id["repo-explorer"]["tools"])
         self.assertEqual(set(by_id["repo-explorer"]["disallowedTools"]), {"Write", "Edit", "NotebookEdit"})
-        self.assertNotIn("task-analyst", by_id)
-        self.assertEqual(by_id["alan-wake"]["tools"], ["Read", "Grep", "Glob"])
-        self.assertEqual(by_id["alan-wake"]["disallowedTools"], ["Write", "Edit", "NotebookEdit", "Agent"])
-        self.assertEqual(by_id["alan-wake"]["permissionMode"], "plan")
-        self.assertEqual(by_id["mr-review-fixer"]["tools"], ["Read", "Grep", "Glob", "Edit", "Write", "Bash"])
-        self.assertEqual(by_id["mr-review-fixer"]["memory"], "project")
-        self.assertNotIn("skills", by_id["mr-review-fixer"])
-        self.assertEqual(by_id["gate"]["tools"], ["Bash", "Read", "Grep", "Glob"])
-        self.assertEqual(by_id["gate"]["maxTurns"], 20)
-        for absent in ("disallowedTools", "memory", "skills", "permissionMode"):
-            self.assertNotIn(absent, by_id["gate"])
+        self.assertEqual(by_id["reviewer"]["tools"], ["Bash", "Read", "Grep", "Glob"])
+        self.assertEqual(by_id["reviewer"]["maxTurns"], 20)
+        for agent in by_id.values():
+            for absent in ("memory", "skills", "permissionMode"):
+                self.assertNotIn(absent, agent)
+            for tool in ("Agent", "WebFetch", "WebSearch", "Skill"):
+                self.assertNotIn(tool, agent["tools"])
 
-    def test_preflight_stays_inline_with_an_optional_bounded_reviewer(self) -> None:
-        catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
-        gate = next(agent for agent in catalog if agent["id"] == "gate")
-        self.assertNotIn("codex", gate)
-        skill = (ROOT.parent / "skills" / "mr-preflight" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertNotIn("agent:", skill.split("---")[1])
-        self.assertNotIn("context:", skill.split("---")[1])
-        controller = (ROOT / "prompts" / "controller.md").read_text(encoding="utf-8")
-        self.assertNotIn("`gate`", controller)
-        self.assertNotIn("gate on Sonnet", controller)
-        rendered = (ROOT / "rendered" / "gate.md").read_text(encoding="utf-8")
-        self.assertIn("\nmodel: sonnet\n", rendered)
-        self.assertIn("\neffort: medium\n", rendered)
+    def test_reviewer_is_a_bounded_read_only_opus_5_5_reviewer(self) -> None:
+        rendered = (ROOT / "rendered" / "reviewer.md").read_text(encoding="utf-8")
+        self.assertIn("\nmodel: claude-opus-5-5\n", rendered)
+        self.assertIn("\neffort: high\n", rendered)
         self.assertIn("\nmaxTurns: 20\n", rendered)
         self.assertIn("\ntools: Bash, Read, Grep, Glob\n", rendered)
         self.assertIn("Never install a dependency, create an environment, or build", rendered)
+        self.assertIn("No source edits,\nGit mutations, external writes, or agents", rendered)
+        self.assertIn("treat each as a\nclaim and confirm or refute it with evidence", rendered)
+        skill = (ROOT.parent / "skills" / "mr-preflight" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertNotIn("agent:", skill.split("---")[1])
+        self.assertNotIn("context:", skill.split("---")[1])
+        self.assertIn("independent `reviewer` run", skill)
+        for retired in ("`gate`", "mr-review-fixer"):
+            self.assertNotIn(retired, skill)
 
 
 class ClaudeRoutingSurfaces(unittest.TestCase):
-    SURFACES = ("prompts/controller.md",)
-    DETAILED_SURFACES = ("prompts/controller.md",)
+    def surface(self, path: Path) -> str:
+        return " ".join(path.read_text(encoding="utf-8").split()).lower()
 
-    def surface(self, relative_path: str) -> str:
-        text = (ROOT / relative_path).read_text(encoding="utf-8")
-        return " ".join(text.split()).lower()
-
-    def test_controller_uses_bare_standalone_agent_names(self) -> None:
-        text = (ROOT / "prompts" / "controller.md").read_text(encoding="utf-8")
+    def test_delegation_names_bare_standalone_agents(self) -> None:
+        text = " ".join(ENGINEERING.read_text(encoding="utf-8").split())
         self.assertIn("`Explore` on Sonnet", text)
-        self.assertIn("`alan-wake` on Sonnet", text)
-        self.assertIn("`mr-review-fixer` on Sonnet", text)
-        self.assertNotIn("shared-agents:", text)
+        self.assertIn("`worker` on Sonnet", text)
+        self.assertIn("`reviewer` on Opus 5.5", text)
+        self.assertIn("`general-purpose` only when a slice needs web, MCP, or skills", text)
+        for retired in ("alan", "mr-review-fixer", "`gate`", "controller", "shared-agents:"):
+            self.assertNotIn(retired, text.lower() if retired == "alan" else text)
 
-    def test_controller_points_at_core_and_engineering_instead_of_restating_them(self) -> None:
-        text = " ".join((ROOT / "prompts" / "controller.md").read_text(encoding="utf-8").split())
-        self.assertIn("`CLAUDE.md` holds the invariants", text)
-        self.assertIn("`engineering` skill", text)
-        for restated in ("## Operating principles", "## Shape the work", "## Execute and verify"):
-            self.assertNotIn(restated, text)
+    def test_core_states_the_model_rule_and_points_at_engineering(self) -> None:
+        text = self.surface(CORE)
+        self.assertIn("our agents pin their model", text)
+        self.assertIn("built-in agents get `model` (`sonnet` unless escalating)", text)
+        self.assertIn("never inherit the main model", text)
+        self.assertIn("`engineering` routes agents", text)
 
-    def test_every_surface_requires_an_explicit_model_per_agent_call(self) -> None:
-        for relative_path in self.SURFACES:
-            text = self.surface(relative_path)
-            self.assertIn("a model on every agent call", text, relative_path)
+    def test_pinned_agents_are_called_without_a_downgrading_model(self) -> None:
+        text = self.surface(ENGINEERING)
+        self.assertIn("omit `model` for them, except to escalate a `worker`", text)
+        self.assertIn("the per-call `opus` alias resolves to an older opus", text)
 
-    def test_every_surface_reserves_fable_for_the_controller(self) -> None:
-        for relative_path in self.SURFACES:
-            text = self.surface(relative_path)
-            self.assertIn("fable", text, relative_path)
-            self.assertIn("never dispatch it as a worker", text, relative_path)
-
-    def test_every_surface_encodes_the_model_matrix(self) -> None:
-        for relative_path in self.SURFACES:
-            text = self.surface(relative_path)
-            for model in ("sonnet", "haiku", "opus"):
-                self.assertIn(model, text, f"{relative_path}: {model}")
-
-    def test_detailed_surfaces_pair_each_model_with_its_role(self) -> None:
+    def test_delegation_pairs_each_model_with_its_role(self) -> None:
+        text = self.surface(ENGINEERING)
         pairings = (
             r"`sonnet` — default worker for analysis, exploration",
             r"`haiku` — only mechanical, low-risk, non-code",
-            r"`opus` — (independent worker for )?architecture or "
-            r"public-interface trade-offs, security, concurrency",
-            r"`fable` — (the controller itself|main controller only)[;.] "
-            r"never dispatch it as a worker",
+            r"`opus` — architecture or public-interface trade-offs, security, concurrency",
+            r"`fable` — never dispatch it as a worker",
         )
-        for relative_path in self.DETAILED_SURFACES:
-            text = self.surface(relative_path)
-            for pattern in pairings:
-                self.assertRegex(text, pattern, relative_path)
-            self.assertIn(
-                "escalate because the decision is difficult or high-risk",
-                text,
-                relative_path,
-            )
+        for pattern in pairings:
+            self.assertRegex(text, pattern)
+        self.assertIn("escalate because the decision is difficult or high-risk", text)
+        self.assertIn("reviews go to `reviewer`, never a built-in agent", text)
+        self.assertNotIn("high-risk review", text)
 
-    def test_detailed_surfaces_forbid_model_inheritance(self) -> None:
-        for relative_path in self.DETAILED_SURFACES:
-            text = self.surface(relative_path)
-            self.assertRegex(
-                text,
-                r"(never rely on model inheritance|do not use `inherit`)",
-                relative_path,
-            )
-
-    def test_detailed_surfaces_route_built_in_agents_to_sonnet(self) -> None:
-        for relative_path in self.DETAILED_SURFACES:
-            text = self.surface(relative_path)
-            self.assertIn(
-                "pass `sonnet` explicitly when dispatching built-in agents",
-                text,
-                relative_path,
-            )
-
-    def test_detailed_surfaces_keep_the_subagent_model_override_unset(self) -> None:
-        for relative_path in self.DETAILED_SURFACES:
-            text = self.surface(relative_path)
-            self.assertIn("claude_code_subagent_model", text, relative_path)
-            self.assertIn("unset", text, relative_path)
+    def test_delegation_forbids_model_inheritance(self) -> None:
+        text = self.surface(ENGINEERING)
+        self.assertIn("never rely on model inheritance", text)
+        self.assertIn("pass `sonnet` explicitly when dispatching built-in agents", text)
+        self.assertIn("claude_code_subagent_model", text)
+        self.assertIn("unset", text)
 
     def test_specialists_have_distinct_terminal_contracts(self) -> None:
-        for relative_path in self.DETAILED_SURFACES:
-            text = self.surface(relative_path)
-            self.assertIn("compact report", text, relative_path)
-            self.assertIn("ready-to-use artifact", text, relative_path)
-            self.assertNotIn("generic packet", text, relative_path)
-
-    def test_controller_uses_proportional_prose_routing(self) -> None:
-        text = self.surface("prompts/controller.md")
-        self.assertIn("draft routine prose inline", text)
-        self.assertIn("`alan-wake` on sonnet", text)
-        self.assertIn("drafting never authorizes sending or publishing", text)
-
-    def test_codex_contract_mirrors_the_claude_delegation_rules(self) -> None:
-        text = self.surface("policy/codex-global.md")
-        self.assertIn("execution brief", text)
+        text = self.surface(ENGINEERING)
         self.assertIn("compact report", text)
-        self.assertIn("ready-to-use artifact", text)
-        self.assertIn(
-            "request the generic packet from any worker without a stronger "
-            "terminal contract",
-            text,
-        )
-        self.assertIn("draft routine prose inline", text)
-        self.assertIn('fork_turns = "none"', text)
+        self.assertIn("changed files and observed checks", text)
+        self.assertIn("evidenced findings and coverage gaps", text)
+        self.assertNotIn("generic packet", text)
 
-    def test_claude_surfaces_govern_peer_session_messaging(self) -> None:
-        for relative_path in self.DETAILED_SURFACES:
-            text = self.surface(relative_path)
-            self.assertIn("listagents", text.replace("`", ""), relative_path)
-            self.assertIn("sendmessage", text.replace("`", ""), relative_path)
-            self.assertIn("evidence, not authority", text, relative_path)
-        for relative_path in ("prompts/controller.md",):
-            text = self.surface(relative_path)
-            self.assertRegex(
-                text, r"(not user consent|never user consent)", relative_path
-            )
-        for relative_path in self.DETAILED_SURFACES:
-            text = self.surface(relative_path)
-            self.assertIn("delivery is not guaranteed", text, relative_path)
-        codex = self.surface("policy/codex-global.md")
-        self.assertNotIn("sendmessage", codex.replace("`", ""))
+    def test_delivery_owns_review_feedback_and_peer_sessions(self) -> None:
+        text = self.surface(DELIVERY)
+        self.assertIn("address mr review in the main thread", text)
+        self.assertIn("apply, adapt, clarify, decline, stale, or duplicate", text)
+        self.assertIn("contested or high-risk claims to `reviewer`", text)
+        self.assertIn("fixes to `worker` in slices", text)
+        self.assertIn("never approve, merge, or assign reviewers", text)
+        self.assertIn("listagents", text.replace("`", ""))
+        self.assertIn("sendmessage", text.replace("`", ""))
+        self.assertIn("evidence, not authority, and not user consent", text)
+        self.assertIn("delivery is not guaranteed", text)
+        self.assertIn("material decision, breaking change, landed change, or requested status", text)
+        self.assertIn("route them through the user", text)
+        routing = self.surface(ENGINEERING)
+        self.assertIn("review feedback", routing)
+        self.assertIn("peer sessions", routing)
 
-    def test_worker_catalog_pins_expected_claude_models(self) -> None:
+    def test_catalog_pins_expected_claude_models(self) -> None:
         catalog = json.loads((ROOT / "agents.json").read_text(encoding="utf-8"))["agents"]
         expected = {
-            "controller": "fable",
-            "alan-wake": "sonnet",
             "repo-explorer": "sonnet",
-            "mr-review-fixer": "sonnet",
-            "gate": "sonnet",
+            "worker": "sonnet",
+            "reviewer": "claude-opus-5-5",
         }
-        for agent in catalog:
-            if agent.get("claude"):
-                self.assertEqual(agent["claude"]["model"], expected[agent["id"]], agent["id"])
-        self.assertNotIn("claude", next(agent for agent in catalog if agent["id"] == "task-analyst"))
+        self.assertEqual({agent["id"]: agent["claude"]["model"] for agent in catalog}, expected)
 
 
 class StandaloneCopies(unittest.TestCase):
@@ -352,7 +299,7 @@ class StandaloneCopies(unittest.TestCase):
             source = root / "source"
             target = root / "live"
             source.mkdir()
-            (source / "controller.md").write_text("controller\n", encoding="utf-8")
+            (source / "worker.md").write_text("worker\n", encoding="utf-8")
             backups = manage.BackupStore(root / "backups" / "first")
             with mock.patch.multiple(
                 manage,
@@ -361,9 +308,9 @@ class StandaloneCopies(unittest.TestCase):
                 create=True,
             ):
                 changed = manage.install_claude_agents(backups)
-                self.assertEqual(changed, [target / "controller.md"])
-                self.assertFalse((target / "controller.md").is_symlink())
-                self.assertEqual((target / "controller.md").read_text(), "controller\n")
+                self.assertEqual(changed, [target / "worker.md"])
+                self.assertFalse((target / "worker.md").is_symlink())
+                self.assertEqual((target / "worker.md").read_text(), "worker\n")
                 self.assertEqual(manage.install_claude_agents(backups), [])
 
     def test_idempotent_install_reports_unchanged_agent_files(self) -> None:
@@ -373,8 +320,8 @@ class StandaloneCopies(unittest.TestCase):
             target = root / "live"
             source.mkdir()
             target.mkdir()
-            (source / "controller.md").write_text("controller\n", encoding="utf-8")
-            (target / "controller.md").write_text("controller\n", encoding="utf-8")
+            (source / "worker.md").write_text("worker\n", encoding="utf-8")
+            (target / "worker.md").write_text("worker\n", encoding="utf-8")
             output = StringIO()
             with (
                 mock.patch.multiple(
@@ -419,12 +366,12 @@ class StandaloneCopies(unittest.TestCase):
             target = root / "live"
             source.mkdir()
             target.mkdir()
-            (source / "mr-review-fixer.md").write_text("rendered\n", encoding="utf-8")
-            (target / "mr-review-fixer.md").write_text("hand-maintained\n", encoding="utf-8")
+            (source / "reviewer.md").write_text("rendered\n", encoding="utf-8")
+            (target / "reviewer.md").write_text("hand-maintained\n", encoding="utf-8")
             backups = manage.BackupStore(root / "backups" / "install")
             with mock.patch.multiple(manage, CLAUDE_SOURCE=source, CLAUDE_TARGET=target):
                 manage.install_claude_agents(backups)
-            self.assertEqual((target / "mr-review-fixer.md").read_text(), "rendered\n")
+            self.assertEqual((target / "reviewer.md").read_text(), "rendered\n")
             self.assertEqual(len(backups.created), 1)
             self.assertEqual(backups.created[0].read_text(), "hand-maintained\n")
 
@@ -435,25 +382,24 @@ class StandaloneCopies(unittest.TestCase):
             target = root / "live"
             source.mkdir()
             target.mkdir()
-            (source / "controller.md").write_text("managed\n", encoding="utf-8")
-            (target / "controller.md").write_text("user changed\n", encoding="utf-8")
+            (source / "worker.md").write_text("managed\n", encoding="utf-8")
+            (target / "worker.md").write_text("user changed\n", encoding="utf-8")
             with mock.patch.multiple(manage, CLAUDE_SOURCE=source, CLAUDE_TARGET=target):
                 self.assertEqual(manage.uninstall_claude_agents(), [])
-            self.assertTrue((target / "controller.md").exists())
+            self.assertTrue((target / "worker.md").exists())
 
 
 class Package(unittest.TestCase):
-    def test_shared_writer_reference_resolves_with_a_small_total_context(self) -> None:
-        prompt = ROOT / "prompts/alan-wake.md"
+    def test_shared_writer_reference_stays_small_and_owns_publishing(self) -> None:
         contract = ROOT.parent / "skills/engineering/references/writing.md"
-        self.assertIn("~/.claude/skills/engineering/references/writing.md", prompt.read_text())
-        self.assertTrue(contract.is_file())
-        self.assertLessEqual(prompt.stat().st_size + contract.stat().st_size, 5500)
+        self.assertIn("~/.claude/skills/engineering/references/writing.md", CORE.read_text())
+        self.assertIn("Drafting never authorizes sending or publishing.", contract.read_text())
+        self.assertLessEqual(contract.stat().st_size, 4500)
 
     def test_risk_reviewer_reference_resolves_without_preloading_a_fork(self) -> None:
         skill = ROOT.parent / "skills/mr-preflight/SKILL.md"
         self.assertTrue(skill.is_file())
-        self.assertIn("~/.claude/skills/mr-preflight/SKILL.md", (ROOT / "prompts/gate.md").read_text())
+        self.assertIn("~/.claude/skills/mr-preflight/SKILL.md", (ROOT / "prompts/reviewer.md").read_text())
         self.assertLessEqual(skill.stat().st_size, 5000)
 
     def test_package_validation_passes(self) -> None:
@@ -464,16 +410,10 @@ class Package(unittest.TestCase):
         for relative_path in (
             "../scripts/manage.py",
             "../README.md",
-            "policy/codex-global.md",
-            "codex/controller.config.toml",
         ):
             content = (ROOT / relative_path).read_text(encoding="utf-8")
             self.assertNotIn("codexd", content, relative_path)
             self.assertNotIn("FISH_", content, relative_path)
-
-    def test_codex_named_agent_route_uses_a_non_inheriting_fork(self) -> None:
-        policy = (ROOT / "policy" / "codex-global.md").read_text(encoding="utf-8")
-        self.assertIn('fork_turns = "none"', policy)
 
     def test_shared_agents_is_not_a_workspace_plugin(self) -> None:
         catalog = json.loads((ROOT.parents[1] / "plugins.json").read_text(encoding="utf-8"))
@@ -482,80 +422,39 @@ class Package(unittest.TestCase):
         self.assertFalse((ROOT.parent / "plugins" / "shared-agents").exists())
 
     def test_claude_routing_has_one_canonical_surface(self) -> None:
-        self.assertFalse((ROOT / "policy" / "claude-global.md").exists())
-        self.assertFalse((ROOT / "policy" / "claude-orchestration.md").exists())
-        controller = (ROOT / "prompts" / "controller.md").read_text(encoding="utf-8")
-        self.assertIn("`Explore` on Sonnet", controller)
-        self.assertNotIn("shared-agents:", controller)
+        for retired in ("policy", "codex", "docs/superpowers", "prompts/controller.md"):
+            self.assertFalse((ROOT / retired).exists(), retired)
+        self.assertIn("`Explore` on Sonnet", ENGINEERING.read_text(encoding="utf-8"))
 
-    def test_routing_evals_live_outside_the_plugin_tree(self) -> None:
-        path = ROOT / "evals" / "controller-routing.json"
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(payload["agent_name"], "controller")
+    def test_routing_evals_cover_each_route(self) -> None:
+        payload = json.loads((ROOT / "evals" / "routing.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["agent_name"], "main-thread")
         by_id = {case["id"]: case for case in payload["evals"]}
-        self.assertEqual(set(by_id), {1, 2, 3, 4, 5})
-        alan_case = " ".join(
-            [
-                by_id[4]["expected_output"],
-                *by_id[4]["expectations"],
-            ]
-        )
-        self.assertIn("alan-wake", alan_case)
-        self.assertIn("inline", alan_case)
-
-
-    def test_alan_wake_link_evals_cover_resource_contract(self) -> None:
-        payload = json.loads(
-            (ROOT / "evals" / "alan-wake-links.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual(payload["agent_name"], "alan-wake")
-        by_id = {case["id"]: case for case in payload["evals"]}
-        self.assertTrue(
-            set(by_id).issuperset(
-            {
-                "gitlab-native-mr",
-                "slack-named-mr",
-                "markdown-jenkins-build",
-                "markdown-labeled-document",
-                "deduplicate-resource-link",
-                "missing-url",
-                "plain-text-url",
-            }),
-        )
+        self.assertEqual(set(by_id), {1, 2, 3, 4, 5, 6, 7})
+        prose_case = " ".join([by_id[4]["expected_output"], *by_id[4]["expectations"]])
+        self.assertIn("inline", prose_case)
+        self.assertIn("worker", " ".join(by_id[6]["expectations"]))
+        self.assertIn("reviewer", " ".join(by_id[7]["expectations"]))
+        self.assertIn("without a model argument", " ".join(by_id[6]["expectations"]))
         for case in by_id.values():
-            with self.subTest(case=case["id"]):
-                self.assertTrue(case["destination"])
-                self.assertTrue(case["prompt"])
-                self.assertTrue(case["expected_output"])
-                self.assertGreaterEqual(len(case["expectations"]), 2)
-
+            self.assertNotIn("names the model", " ".join(case["expectations"]).lower())
 
     def test_each_specialist_has_one_terminal_contract(self) -> None:
-        alan = (ROOT / "prompts" / "alan-wake.md").read_text(encoding="utf-8")
-        analyst = (ROOT / "prompts" / "task-analyst.md").read_text(encoding="utf-8")
         explorer = (ROOT / "prompts" / "repo-explorer.md").read_text(encoding="utf-8")
-        self.assertIn("Return one finished artifact", alan)
-        self.assertIn("Return a concise execution brief", analyst)
+        worker = (ROOT / "prompts" / "worker.md").read_text(encoding="utf-8")
+        reviewer = (ROOT / "prompts" / "reviewer.md").read_text(encoding="utf-8")
         self.assertIn("Return a compact report", explorer)
-        self.assertNotIn("execution brief", explorer)
+        self.assertIn("Return, usually under 150 words: DONE, PARTIAL, or BLOCKED", " ".join(worker.split()))
+        self.assertIn("Return only actionable findings", reviewer)
+        for other in (explorer, reviewer):
+            self.assertNotIn("DONE, PARTIAL, or BLOCKED", other)
+        for other in (worker, reviewer):
+            self.assertNotIn("compact report", other)
 
-    def test_mr_review_fixer_has_its_own_terminal_contract(self) -> None:
-        controller = " ".join((ROOT / "prompts" / "controller.md").read_text(encoding="utf-8").split())
-        fixer = (ROOT / "prompts" / "mr-review-fixer.md").read_text(encoding="utf-8")
-        self.assertIn("`mr-review-fixer` on Sonnet: a completed or reviewed GitLab MR → a quality-gate report", controller)
-        self.assertIn("## Return", fixer)
-        self.assertIn("READY / CHANGES NEEDED / INCOMPLETE / NEEDS DECISION", fixer)
-        for restated in ("smallest change", "weaken assertions", "confirm the root cause", "narrowest tests first"):
-            self.assertNotIn(restated, fixer, restated)
-        self.assertIn("engineering debugging", fixer)
-        self.assertIn("verification references", fixer)
-
-    def test_controller_brief_contract_and_peer_triggers_survive_compression(self) -> None:
-        text = " ".join((ROOT / "prompts" / "controller.md").read_text(encoding="utf-8").split())
-        self.assertIn("one objective, the relevant paths and constraints, ownership, the expected output, and its verification", text)
-        self.assertIn("material decision, breaking change, landed change, or requested status", text)
-        self.assertIn("route them through the user", text)
-
+    def test_brief_contract_survives_compression(self) -> None:
+        delegation = " ".join(ENGINEERING.read_text(encoding="utf-8").split())
+        self.assertIn("one objective, the relevant paths and constraints, ownership, the expected output, and its verification", delegation)
+        self.assertIn("split long work into sequential slices", delegation)
 
     def test_check_command_runs_unit_suite(self) -> None:
         if os.environ.get("CLAUDE_CORE_CHECK_CHILD") == "1":

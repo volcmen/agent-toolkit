@@ -35,6 +35,8 @@ Project instructions override defaults except under `~/notraffic/`.
   require the user's named choice. Slack requires authorization per message.
 - Copy resolved links from the owning tool's URL field; never invent namespaces.
 - Keep context bounded; compact completed work and separate unrelated tasks.
+- Our agents pin their model; built-in agents get `model` (`sonnet` unless
+  escalating). Never inherit the main model; `engineering` routes agents.
 
 ## Delivery and memory
 

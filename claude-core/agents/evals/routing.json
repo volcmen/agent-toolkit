@@ -1,0 +1,82 @@
+{
+  "agent_name": "main-thread",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Inspect the current branch and write a concise GitLab MR title and description using the repository template.",
+      "expected_output": "The main thread verifies the diff, evidence, and required template, then drafts a small MR inline using the shared writing contract.",
+      "files": [],
+      "expectations": [
+        "Drafts inline when the MR is small; delegates only if substantial editing would help",
+        "Checks the actual diff, verification, and repository template before drafting",
+        "Does not invent test, deployment, or rollout claims"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "The checkout page feels laggy after our refactor. Make it fast and fix whatever is wrong.",
+      "expected_output": "The main thread shapes the request inline from the engineering shaping reference and establishes measurable evidence before implementation.",
+      "files": [],
+      "expectations": [
+        "Shapes inline without dispatching a specialist for problem normalization",
+        "Separates the symptom from an established root cause",
+        "Chooses an observable performance proxy before proposing a fix"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "What does this configuration key do? Read the local definition and answer me in two sentences.",
+      "expected_output": "The main thread answers directly when the lookup is small and does not delegate ordinary conversation.",
+      "files": [],
+      "expectations": [
+        "Does not delegate a small lookup to a subagent",
+        "Keeps a small tightly coupled lookup in the primary thread",
+        "Answers from repository evidence"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Rewrite this rough deployment update for Slack. Keep every supplied fact, make it concise, and return only the message.",
+      "expected_output": "The main thread drafts a short update inline, preserves facts, and returns rendered Markdown links in this chat unless raw Slack output is explicitly requested.",
+      "files": [],
+      "expectations": [
+        "Does not delegate or escalate to Opus for a routine rewrite",
+        "Preserves supplied facts and uncertainty",
+        "Returns only destination-ready Slack text"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Trace how request IDs reach the audit logger. Do not edit anything.",
+      "expected_output": "The main thread uses Explore at a bounded depth when the trace would consume substantial main-thread context.",
+      "files": [],
+      "expectations": [
+        "Uses Explore on Sonnet when delegation provides useful isolation",
+        "Keeps the investigation read-only",
+        "Returns paths, symbols, flow, and relevant uncertainty"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Add input validation to the export endpoint in src/export.py and make its existing tests pass.",
+      "expected_output": "The main thread dispatches worker without a model argument, so its Sonnet pin applies, with a bounded brief naming the files, constraints, and test command, then reads the diff and the reported check output before reporting.",
+      "files": [],
+      "expectations": [
+        "Uses worker, not general-purpose, for a bounded write slice",
+        "Calls worker without a model argument so its pin applies instead of the main model",
+        "Checks the diff and the observed check output rather than repeating the worker's summary"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Address the open review comments on my MR and push the fixes.",
+      "expected_output": "The main thread reads the MR, discussions, and CI once, classifies each comment as a claim, sends contested or high-risk claims to reviewer and fixes to worker, verifies the result, drafts one reply per thread, and pushes only because the user asked while posting replies only with authorization.",
+      "files": [],
+      "expectations": [
+        "Classifies each comment as Apply, Adapt, Clarify, Decline, Stale, or Duplicate",
+        "Uses reviewer and worker instead of a single review-and-fix subagent",
+        "Does not reply, resolve, approve, merge, or assign reviewers without authorization for that action"
+      ]
+    }
+  ]
+}

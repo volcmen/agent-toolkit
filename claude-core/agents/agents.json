@@ -1,43 +1,6 @@
 {
-  "$comment": "Canonical agent catalog. Edit this file or prompts/*.md, then run `python3 scripts/render.py`. Provider files are generated.",
+  "$comment": "Canonical agent catalog. Edit this file or prompts/*.md, then run `python3 scripts/render.py`. Rendered files are generated.",
   "agents": [
-    {
-      "id": "controller",
-      "description": "Main-thread Fable technical lead: clarifies outcomes, delegates bounded work, integrates and verifies. Primary agent only; never dispatch it as a worker.",
-      "prompt": "prompts/controller.md",
-      "claude": {
-        "model": "fable",
-        "effort": "medium"
-      }
-    },
-    {
-      "id": "alan-wake",
-      "description": "Engineering editor for substantial rewrites, delicate workplace wording, long documents, or an explicit Alan Wake request. Returns one finished draft with links for the actual output surface; never sends or publishes.",
-      "prompt": "prompts/alan-wake.md",
-      "claude": {
-        "model": "sonnet",
-        "effort": "medium",
-        "maxTurns": 8,
-        "permissionMode": "plan",
-        "disallowedTools": [
-          "Write",
-          "Edit",
-          "NotebookEdit",
-          "Agent"
-        ],
-        "tools": [
-          "Read",
-          "Grep",
-          "Glob"
-        ]
-      },
-      "codex": {
-        "name": "alan_wake",
-        "model": "gpt-5.6-terra",
-        "model_reasoning_effort": "medium",
-        "sandbox_mode": "read-only"
-      }
-    },
     {
       "id": "repo-explorer",
       "description": "Read-only repository explorer for one bounded question: file and symbol discovery, behavior and dependency tracing, architecture, tests, or implementation context. Supports quick, medium, and very thorough depth. Never edits.",
@@ -57,38 +20,21 @@
           "Edit",
           "NotebookEdit"
         ]
-      },
-      "codex": {
-        "name": "repo_explorer",
-        "model": "gpt-5.6-terra",
-        "model_reasoning_effort": "medium",
-        "sandbox_mode": "read-only"
       }
     },
     {
-      "id": "task-analyst",
-      "description": "Read-only task shaper for vague, symptom-based, conflicting, risky, or solution-first requests. Establishes evidence, scope, acceptance criteria, and the one decision needed before work. Never edits.",
-      "prompt": "prompts/task-analyst.md",
-      "codex": {
-        "name": "task_analyst",
-        "model": "gpt-5.6-sol",
-        "model_reasoning_effort": "high",
-        "sandbox_mode": "read-only"
-      }
-    },
-    {
-      "id": "mr-review-fixer",
-      "description": "Reviews and repairs a completed GitLab MR before, after, or between human reviews: audits the full diff for defects, regressions, security, performance, tests, and hygiene; validates open discussions; applies focused fixes; prepares replies. Not for feature development, approval, assignment, or merge.",
-      "prompt": "prompts/mr-review-fixer.md",
+      "id": "worker",
+      "description": "Default Sonnet worker for one bounded slice: implement, fix, test, refactor, or analyze named files, then return changed files and observed check results. Scoped tools with no web, MCP, skills, or publishing; prefer it over general-purpose unless the slice needs those.",
+      "prompt": "prompts/worker.md",
       "claude": {
         "model": "sonnet",
         "effort": "high",
         "maxTurns": 100,
-        "memory": "project",
         "tools": [
           "Read",
           "Grep",
           "Glob",
+          "LSP",
           "Edit",
           "Write",
           "Bash"
@@ -96,12 +42,12 @@
       }
     },
     {
-      "id": "gate",
-      "description": "Independent read-only review of a completed high-risk or unfamiliar change when existing review evidence is insufficient. Returns actionable findings and coverage gaps; never fixes or publishes.",
-      "prompt": "prompts/gate.md",
+      "id": "reviewer",
+      "description": "Independent read-only review on Opus 5.5 of one completed change: a base/head diff, an MR head, or review comments to confirm or refute. Returns evidenced findings and coverage gaps; never edits or publishes.",
+      "prompt": "prompts/reviewer.md",
       "claude": {
-        "model": "sonnet",
-        "effort": "medium",
+        "model": "claude-opus-5-5",
+        "effort": "high",
         "maxTurns": 20,
         "tools": [
           "Bash",

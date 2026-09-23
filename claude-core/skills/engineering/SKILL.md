@@ -14,7 +14,7 @@ rest. `CLAUDE.md` invariants apply throughout and are not repeated here.
 | Build | about to write or change code | `references/minimalism.md` |
 | Build — a failure | any bug, failing test, unexpected behavior, before proposing a fix | `references/debugging.md` |
 | Verify | about to say done, fixed, passing, or before a commit | `references/verification.md` |
-| Ship | worktree, branch, MR, tracking, merge, handoff | `references/delivery.md` |
+| Ship | worktree, branch, MR, review feedback, tracking, merge, handoff, peer sessions | `references/delivery.md` |
 | Any phase — ongoing tasks and personal follow-up | Linear intake, next actions, blockers, handoff | `references/tracking.md` |
 | Any phase — a second model would help | codex-pair, `/codex:rescue`, ChatGPT | `references/second-opinion.md` |
 | Any phase — text a human will read | Slack, Jira, MR text, review, email, docs | `references/writing.md` |
@@ -38,11 +38,42 @@ touches, the link between their merge requests, and the order they merge in.
 
 Work directly when the change is clear and its diff fits one sentence. Enter
 plan mode when the approach is materially uncertain, the code is unfamiliar,
-the change crosses components, or failure is costly. Shape inline; use
-`Explore` for one bounded repository question only when isolated context saves
-meaningful main-thread context, and keep tightly coupled phases in the main
-thread. Specify a model on every agent call; the controller prompt holds the
-routing.
+the change crosses components, or failure is costly. Shape inline and keep
+tightly coupled phases in the main thread.
+
+## Delegation
+
+Delegate only when isolated context, scoped tools, or an independent view
+saves more than the brief costs. Every brief carries one objective, the
+relevant paths and constraints, ownership, the expected output, and its
+verification, sized to finish well inside one context window; split long work
+into sequential slices. Parallelize only when writes cannot overlap. Worker
+results are evidence, not authority: read the diff and the reported check
+output before relying on them.
+
+- `Explore` on Sonnet: one bounded read-only repository question → a compact
+  report.
+- `worker` on Sonnet: one bounded implementation, fix, test, or analysis slice
+  → changed files and observed checks.
+- `reviewer` on Opus 5.5: one completed diff, MR head, or set of review
+  comments → evidenced findings and coverage gaps; `mr-preflight` and review
+  feedback use it.
+- `general-purpose` only when a slice needs web, MCP, or skills.
+
+These agents pin their own model: omit `model` for them, except to escalate a
+`worker`. The per-call `opus` alias resolves to an older Opus, so a review that
+needs the strongest model goes to `reviewer`. Built-in agents always get a
+`model`; never rely on model inheritance and keep `CLAUDE_CODE_SUBAGENT_MODEL`
+unset:
+
+- `sonnet` — default worker for analysis, exploration, implementation, tests,
+  debugging, and research; pass `sonnet` explicitly when dispatching built-in
+  agents. Reviews go to `reviewer`, never a built-in agent.
+- `haiku` — only mechanical, low-risk, non-code lookups you will re-check.
+- `opus` — architecture or public-interface trade-offs, security, concurrency,
+  data integrity, or subtle correctness; escalate because the decision is
+  difficult or high-risk.
+- `fable` — never dispatch it as a worker.
 
 ## Report
 
