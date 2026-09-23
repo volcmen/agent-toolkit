@@ -635,9 +635,9 @@ class WorkspaceProductPostcondition(unittest.TestCase):
             root = Path(tmp).resolve()
             workspace = root / "workspace"
             source = workspace / "project" / "plugins" / "demo"
-            codex_live = root / "codex-live" / "demo"
-            claude_live = root / "claude-live" / "demo"
             home = root / "home"
+            codex_live = home / ".codex" / "plugins" / "cache" / "ai-workspace" / "demo" / "1.0.0"
+            claude_live = root / "claude-live" / "demo"
             for directory in (source, codex_live, claude_live):
                 directory.mkdir(parents=True)
             payload = catalog()
@@ -701,7 +701,7 @@ class WorkspaceProductPostcondition(unittest.TestCase):
                     )
                     lines.append(
                         f"{'demo@ai-workspace':<28}{status:<20}{'1.0.0':<10}"
-                        f"{state['codex_live']}"
+                        f"{source}"
                     )
                 return "\n".join(lines) + "\n"
 

@@ -869,6 +869,14 @@ def plugin_live_state(
     return "ok"
 
 
+def codex_served_state(state: dict[str, Any] | None, pid: str) -> dict[str, Any] | None:
+    if not state:
+        return state
+    name, _, marketplace = pid.partition("@")
+    cache = Path.home() / ".codex" / "plugins" / "cache" / marketplace / name
+    return {**state, "path": str(cache / str(state.get("version") or ""))}
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     _ = args
     catalog = load_catalog()
@@ -946,7 +954,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         codex_state = plugin_live_state(
             available=codex_available,
             marketplace_current=codex_marketplace_ok,
-            state=codex_states.get(pid),
+            state=codex_served_state(codex_states.get(pid), pid),
             source=plugin_dir(entry),
         )
         if delivered_by_claude_core(entry):
