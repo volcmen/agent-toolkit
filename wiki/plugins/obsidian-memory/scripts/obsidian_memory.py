@@ -4,14 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import contextvars
 import datetime as dt
 import json
 import os
 import re
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -77,6 +81,16 @@ MAX_AUDIT_FINDINGS = 200
 MAX_AUDIT_HUMAN_PATH_CHARS = 180
 MAX_GLOBAL_FRONTMATTER_CHARS = 12_000
 MAX_QMD_REJECTION_TARGETS = 64
+COMMIT_TIMEOUT_SECONDS = 20.0
+GIT_LOCK_RETRY_SECONDS = 2.0
+GIT_TERMINATE_GRACE_SECONDS = 1.0
+COMMIT_DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "memory_commit_deadline", default=None
+)
+
+
+class CommitDeferred(RuntimeError):
+    pass
 
 
 class ConfigurationError(RuntimeError):
@@ -681,13 +695,113 @@ def json_output(payload: dict[str, Any]) -> None:
 
 
 def run_git(vault: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "--literal-pathspecs", "-C", str(vault), *args],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=25,
-    )
+    # Optional status refreshes must not compete with writers for index.lock.
+    command = ["git", "--no-optional-locks", "--literal-pathspecs", "-C", str(vault), *args]
+    deadline = COMMIT_DEADLINE.get() or (time.monotonic() + COMMIT_TIMEOUT_SECONDS)
+    retry_until = min(deadline, time.monotonic() + GIT_LOCK_RETRY_SECONDS)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(command, COMMIT_TIMEOUT_SECONDS)
+        with subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env={**os.environ, "LC_ALL": "C"},
+            start_new_session=os.name != "nt",
+        ) as process:
+            try:
+                stdout, stderr = process.communicate(timeout=remaining)
+            except BaseException:
+                # Git removes its own index.lock on SIGTERM but not on SIGKILL.
+                if os.name == "nt":
+                    process.terminate()
+                else:
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                try:
+                    process.communicate(timeout=GIT_TERMINATE_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    if os.name == "nt":
+                        process.kill()
+                    else:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    process.communicate(timeout=GIT_TERMINATE_GRACE_SECONDS)
+                raise
+        result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        index_busy = (
+            result.returncode != 0
+            and re.search(
+                r"(?m)^fatal: Unable to create '[^\r\n]*[/\\]index\.lock': File exists",
+                stderr,
+            ) is not None
+        )
+        if not index_busy:
+            return result
+        remaining_retry = retry_until - time.monotonic()
+        if remaining_retry <= 0:
+            raise CommitDeferred("Git index is busy; no memory commit was made; retry later")
+        time.sleep(min(0.1, remaining_retry))
+
+
+@contextlib.contextmanager
+def commit_signal_cleanup():
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def interrupted(signum, _frame):
+        raise SystemExit(128 + signum)
+
+    signal.signal(signal.SIGTERM, interrupted)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+@contextlib.contextmanager
+def memory_commit_lock(vault: Path):
+    common = run_git(vault, ["rev-parse", "--git-common-dir"])
+    if common.returncode != 0:
+        raise RuntimeError(common.stderr or "cannot locate Git metadata")
+    lock_path = (vault / common.stdout.strip()).resolve() / "obsidian-memory-commit.lock"
+    # Never unlink this file: a fresh inode would let a second writer lock concurrently.
+    with lock_path.open("a+b") as lock_file:
+        if os.name == "nt":
+            import msvcrt
+
+            if lock_file.tell() == 0:
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            try:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise CommitDeferred("another memory commit is in progress; retry later") from exc
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise CommitDeferred("another memory commit is in progress; retry later") from exc
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _tracked_deleted_markdown_paths(
@@ -881,6 +995,26 @@ def _commit_target_failure_message(
 def safe_commit_paths(
     config: dict[str, Any], config_file: Path, raw_path_override: list[str] | None = None
 ) -> tuple[bool, str]:
+    deadline = COMMIT_DEADLINE.set(time.monotonic() + COMMIT_TIMEOUT_SECONDS)
+    try:
+        vault: Path = config["vault"]
+        if shutil.which("git") is None or not (vault / ".git").exists():
+            return False, "vault is not a Git repository or git is unavailable"
+        with commit_signal_cleanup(), memory_commit_lock(vault):
+            return _commit_paths_locked(config, config_file, raw_path_override)
+    except CommitDeferred as exc:
+        return False, f"deferred: {exc}"
+    except subprocess.TimeoutExpired:
+        return False, "memory commit timed out; inspect Git status before retrying"
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+        return False, clipped_line(str(exc), 500)
+    finally:
+        COMMIT_DEADLINE.reset(deadline)
+
+
+def _commit_paths_locked(
+    config: dict[str, Any], config_file: Path, raw_path_override: list[str] | None = None
+) -> tuple[bool, str]:
     vault: Path = config["vault"]
     if shutil.which("git") is None or not (vault / ".git").exists():
         return False, "vault is not a Git repository or git is unavailable"
@@ -918,24 +1052,6 @@ def safe_commit_paths(
         allowed_roots.append(relative)
     if not allowed:
         return True, "no usable commit paths are configured"
-
-    state_dir = config_file.parent
-    state_dir.mkdir(parents=True, exist_ok=True)
-    lock_dir = state_dir / "commit.lock"
-    try:
-        lock_dir.mkdir()
-    except FileExistsError:
-        try:
-            age = time.time() - lock_dir.stat().st_mtime
-        except OSError:
-            age = 0
-        if age <= 300:
-            return True, "another memory commit is in progress"
-        try:
-            lock_dir.rmdir()
-            lock_dir.mkdir()
-        except OSError:
-            return True, "stale memory commit lock could not be recovered"
 
     try:
         dirty_paths: list[str] = []
@@ -1036,13 +1152,10 @@ def safe_commit_paths(
         if commit.returncode != 0:
             return False, clipped_line(commit.stderr or "git commit failed", 500)
         return True, message
+    except (CommitDeferred, subprocess.TimeoutExpired):
+        raise
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         return False, clipped_line(str(exc), 500)
-    finally:
-        try:
-            lock_dir.rmdir()
-        except OSError:
-            pass
 
 
 def session_start() -> int:
@@ -1068,6 +1181,8 @@ def stop_hook() -> int:
     ok, detail = safe_commit_paths(config, path)
     if ok:
         json_output({})
+    elif detail.startswith("deferred: "):
+        json_output({"systemMessage": f"Obsidian memory auto-commit {detail}"})
     else:
         json_output({"systemMessage": f"Obsidian memory auto-commit failed: {detail}"})
     return 0

@@ -57,6 +57,17 @@ python3 plugins/obsidian-memory/scripts/obsidian_memory.py commit \
   --path projects/acme/decision.md
 ```
 
+Parallel memory writers coordinate through a repository-local advisory lock.
+If another writer remains busy after bounded retries, the Stop hook reports
+that persistence was deferred; a later Stop or explicit `commit` can retry.
+The explicit command returns nonzero when deferred. Notes remain on disk.
+
+If `index.lock` remains after an interrupted Git operation, first check whether
+any Git process still owns it. Never remove an active lock or decide it is stale
+from age alone. Once the lock is confirmed abandoned, preserve a backup before
+removing it, then retry the commit. The hook does not remove Git-owned locks
+automatically.
+
 Start new Claude Code and Codex threads after installation.
 
 For an existing local configuration, refresh only the project-owned guidance

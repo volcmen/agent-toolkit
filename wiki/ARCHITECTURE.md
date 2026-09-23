@@ -32,6 +32,17 @@ unconditional source of instructions.
 8. `Stop` emits valid hook JSON. It commits only configured vault paths when
    the user explicitly enabled `auto_commit`; the default is off.
 
+Memory commits share a process-owned advisory lock in the repository's common
+Git directory, including when agents use different configuration files. The OS
+releases ownership when a process exits; the lock file remains in place. Git
+commands share a 20-second transaction budget below the 30-second Stop timeout.
+Read commands disable optional index refreshes, and transient `index.lock`
+contention receives bounded retries. A busy repository defers the commit with
+an explicit message; an explicit commit command exits unsuccessfully so callers
+cannot mistake deferral for persistence. On timeout or POSIX cancellation, the
+hook first terminates its owned Git process group gracefully so Git can clean
+up its own locks. The hook never deletes another Git writer's `index.lock`.
+
 ## Manual evaluation and audit
 
 The manual `evaluate FIXTURE [--json]` command passes every version-1 case

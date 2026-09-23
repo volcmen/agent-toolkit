@@ -5,9 +5,12 @@ import importlib.util
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -4484,6 +4487,221 @@ Prior: old unrelated outcome.
                 check=True,
             ).stdout
             self.assertIn(".obsidian/", status)
+
+    def test_external_index_lock_is_preserved_and_commit_is_deferred(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            self.init_git_vault(vault)
+            (vault / "wiki" / "hot.md").write_text("new memory\n", encoding="utf-8")
+            lock = vault / ".git" / "index.lock"
+            lock.write_bytes(b"owned by another writer")
+            before = lock.stat()
+            head = self.git_stdout(vault, "rev-parse", "HEAD")
+            config_path = self.write_config(root, vault, commit_paths=["wiki"])
+            with (
+                mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}),
+                mock.patch.object(MODULE, "GIT_LOCK_RETRY_SECONDS", 0.15),
+            ):
+                config, _ = MODULE.load_config()
+                ok, detail = MODULE.safe_commit_paths(config, config_path)
+            self.assertFalse(ok)
+            self.assertTrue(detail.startswith("deferred: "), detail)
+            self.assertEqual(lock.read_bytes(), b"owned by another writer")
+            self.assertEqual(lock.stat().st_ino, before.st_ino)
+            self.assertEqual(self.git_stdout(vault, "rev-parse", "HEAD"), head)
+
+    def test_index_lock_contention_retries_until_external_writer_finishes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            self.init_git_vault(vault)
+            (vault / "wiki" / "hot.md").write_text("new memory\n", encoding="utf-8")
+            lock = vault / ".git" / "index.lock"
+            lock.touch()
+            release = threading.Timer(0.25, lock.unlink)
+            config_path = self.write_config(root, vault, commit_paths=["wiki"])
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            release.start()
+            try:
+                ok, detail = MODULE.safe_commit_paths(config, config_path)
+            finally:
+                release.join()
+            self.assertTrue(ok, detail)
+            self.assertEqual(self.git_stdout(vault, "show", "HEAD:wiki/hot.md"), "new memory\n")
+            self.assertFalse(lock.exists())
+
+    def test_git_status_does_not_refresh_index_or_compete_for_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            vault = self.make_vault(Path(temp))
+            self.init_git_vault(vault)
+            (vault / "wiki" / "hot.md").touch()
+            index = vault / ".git" / "index"
+            before = index.stat().st_mtime_ns
+            lock = vault / ".git" / "index.lock"
+            lock.write_bytes(b"external writer")
+            result = MODULE.run_git(vault, ["status", "--porcelain"])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(index.stat().st_mtime_ns, before)
+            self.assertEqual(lock.read_bytes(), b"external writer")
+
+    def test_repository_lock_coordinates_different_configs_and_releases_on_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            self.init_git_vault(vault)
+            (vault / "wiki" / "hot.md").write_text("new memory\n", encoding="utf-8")
+            other_config_root = root / "other-config"
+            other_config_root.mkdir()
+            config_path = self.write_config(other_config_root, vault, commit_paths=["wiki"])
+            holder = subprocess.Popen(
+                [sys.executable, "-c",
+                 "import runpy,sys,time; from pathlib import Path; "
+                 "m=runpy.run_path(sys.argv[1]); "
+                 "lock=m['memory_commit_lock'](Path(sys.argv[2])); "
+                 "lock.__enter__(); print('locked',flush=True); time.sleep(60)",
+                 str(SCRIPT), str(vault)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                self.assertEqual(holder.stdout.readline().strip(), "locked")
+                with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                    config, _ = MODULE.load_config()
+                ok, detail = MODULE.safe_commit_paths(config, config_path)
+                self.assertFalse(ok)
+                self.assertIn("another memory commit", detail)
+            finally:
+                holder.kill()
+                holder.communicate(timeout=5)
+            ok, detail = MODULE.safe_commit_paths(config, config_path)
+            self.assertTrue(ok, detail)
+            self.assertEqual(self.git_stdout(vault, "show", "HEAD:wiki/hot.md"), "new memory\n")
+
+    def test_deferred_stop_is_valid_json_and_explicit_commit_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            self.init_git_vault(vault)
+            (vault / "wiki" / "hot.md").write_text("new memory\n", encoding="utf-8")
+            config_path = self.write_config(root, vault, auto_commit=True, commit_paths=["wiki"])
+            env = {**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)}
+            with MODULE.memory_commit_lock(vault):
+                stopped = subprocess.run(
+                    [sys.executable, str(SCRIPT), "stop"], input="{}", env=env,
+                    text=True, capture_output=True, check=False, timeout=5,
+                )
+                explicit = subprocess.run(
+                    [sys.executable, str(SCRIPT), "commit"], env=env,
+                    text=True, capture_output=True, check=False, timeout=5,
+                )
+            self.assertEqual(stopped.returncode, 0)
+            self.assertIn("auto-commit deferred", json.loads(stopped.stdout)["systemMessage"])
+            self.assertEqual(explicit.returncode, 1)
+            self.assertIn("deferred:", explicit.stderr)
+
+    @unittest.skipIf(os.name == "nt", "POSIX Git signal cleanup")
+    def test_timed_out_git_cleans_owned_locks_before_returning(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            self.init_git_vault(vault)
+            head = self.git_stdout(vault, "rev-parse", "HEAD")
+            (vault / "wiki" / "hot.md").write_text("new memory\n", encoding="utf-8")
+            hook = vault / ".git" / "hooks" / "pre-commit"
+            hook.write_text("#!/bin/sh\nexec sleep 10\n", encoding="utf-8")
+            hook.chmod(0o755)
+            config_path = self.write_config(root, vault, commit_paths=["wiki"])
+            with (
+                mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}),
+                mock.patch.object(MODULE, "COMMIT_TIMEOUT_SECONDS", 0.5),
+            ):
+                config, _ = MODULE.load_config()
+                started = time.monotonic()
+                ok, detail = MODULE.safe_commit_paths(config, config_path)
+            self.assertFalse(ok)
+            self.assertIn("timed out", detail)
+            self.assertLess(time.monotonic() - started, 3)
+            self.assertFalse((vault / ".git" / "index.lock").exists())
+            self.assertEqual(list((vault / ".git").glob("next-index-*.lock")), [])
+            self.assertEqual(self.git_stdout(vault, "rev-parse", "HEAD"), head)
+            self.assertIsNone(MODULE.COMMIT_DEADLINE.get())
+            hook.unlink()
+            ok, detail = MODULE.safe_commit_paths(config, config_path)
+            self.assertTrue(ok, detail)
+
+    def test_commit_timeout_budget_is_shared_across_git_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            self.init_git_vault(vault)
+            (vault / "wiki" / "hot.md").write_text("new memory\n", encoding="utf-8")
+            config_path = self.write_config(root, vault, commit_paths=["wiki"])
+            deadlines = []
+            original = MODULE.run_git
+
+            def delayed_git(*args):
+                deadlines.append(MODULE.COMMIT_DEADLINE.get())
+                time.sleep(0.1)
+                return original(*args)
+
+            with (
+                mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}),
+                mock.patch.object(MODULE, "COMMIT_TIMEOUT_SECONDS", 0.25),
+                mock.patch.object(MODULE, "run_git", side_effect=delayed_git),
+            ):
+                config, _ = MODULE.load_config()
+                ok, detail = MODULE.safe_commit_paths(config, config_path)
+            self.assertFalse(ok)
+            self.assertIn("timed out", detail)
+            self.assertGreaterEqual(len(deadlines), 2)
+            self.assertEqual(len(set(deadlines)), 1)
+            self.assertIsNone(MODULE.COMMIT_DEADLINE.get())
+
+    @unittest.skipIf(os.name == "nt", "POSIX host cancellation")
+    def test_host_sigterm_stops_owned_git_before_releasing_repository_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            self.init_git_vault(vault)
+            (vault / "wiki" / "hot.md").write_text("new memory\n", encoding="utf-8")
+            hook = vault / ".git" / "hooks" / "pre-commit"
+            marker = vault / ".git" / "interrupt-hook-started"
+            hook.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$PPID\" > .git/interrupt-hook-started\nexec sleep 10\n",
+                encoding="utf-8",
+            )
+            hook.chmod(0o755)
+            config_path = self.write_config(root, vault, commit_paths=["wiki"])
+            process = subprocess.Popen(
+                [sys.executable, str(SCRIPT), "commit"],
+                env={**os.environ, "OBSIDIAN_MEMORY_CONFIG": str(config_path)},
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            try:
+                deadline = time.monotonic() + 5
+                while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue(marker.exists(), "pre-commit hook did not start")
+                process.terminate()
+                process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 128 + signal.SIGTERM)
+                self.assertFalse((vault / ".git" / "index.lock").exists())
+                self.assertEqual(list((vault / ".git").glob("next-index-*.lock")), [])
+                git_pid = int(marker.read_text(encoding="utf-8").strip())
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(git_pid, 0)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate(timeout=5)
+            hook.unlink()
+            with mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}):
+                config, _ = MODULE.load_config()
+            previous = signal.getsignal(signal.SIGTERM)
+            ok, detail = MODULE.safe_commit_paths(config, config_path)
+            self.assertTrue(ok, detail)
+            self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
 
     def test_explicit_commit_accepts_uppercase_markdown_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
