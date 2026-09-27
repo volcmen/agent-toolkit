@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash): catch accidental git guard, identity, and remote-ref changes."""
+"""PreToolUse(Bash): ask the user before git guard, identity, and remote-ref changes."""
 import json
 import re
 import shlex
@@ -63,9 +63,9 @@ def command_reason(words):
     while words and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", words[0]):
         key = words[0].split("=", 1)[0]
         if re.fullmatch(r"GIT_(COMMITTER|AUTHOR)_(EMAIL|NAME)", key):
-            return "overriding git author/committer identity. Ask the user first."
-        if key in ("GIT_GUARD_OFF", "GIT_ALLOW_FOREIGN_HISTORY"):
-            return "turning off the git guard. Report what it blocked and why."
+            return "this command overrides the git author/committer identity."
+        if key == "GIT_GUARD_ALLOW":
+            return "this push waives the pre-push guard for " + words[0].split("=", 1)[1] + ". Allow only if the block it reported is acceptable."
         words = words[1:]
     if not words:
         return None
@@ -76,7 +76,7 @@ def command_reason(words):
             if option.startswith("-") and not option.startswith("--") and "c" in option[1:]:
                 return reason(args[index + 1]) if index + 1 < len(args) else None
     if program in ("rm", "mv", "chmod", "truncate") and any(".git/hooks/" in arg for arg in args):
-        return "deleting or disabling a git hook. Report what the guard blocked."
+        return "this command removes or disables a git hook."
     if program != "git":
         return None
     index = 0
@@ -85,30 +85,30 @@ def command_reason(words):
         if option in ("-c", "--config-env") and index + 1 < len(args):
             key = args[index + 1].split("=", 1)[0].lower()
             if key == "core.hookspath" or key in ("user.email", "user.name"):
-                return "overriding git hooks or commit identity. Ask the user first."
+                return "this command overrides git hooks or commit identity."
         if option in ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"):
             index += 2
         else:
             if option.startswith("-c") and option[2:].split("=", 1)[0].lower() in ("core.hookspath", "user.name", "user.email"):
-                return "overriding git hooks or commit identity. Ask the user first."
+                return "this command overrides git hooks or commit identity."
             index += 1
     if index >= len(args):
         return None
     subcommand, args = args[index], args[index + 1:]
     if subcommand == "send-pack" or (subcommand == "push" and "--mirror" in args):
-        return "a raw transport push that bypasses pre-push entirely."
+        return "this is a raw transport push that bypasses the pre-push guard entirely."
     if subcommand == "push":
         if "--no-verify" in args:
-            return "a push that skips the pre-push guard. Fix the guard or get explicit authorization."
+            return "this push skips the pre-push guard (--no-verify)."
         if any(arg == "--delete" or (arg.startswith("-") and not arg.startswith("--") and "d" in arg[1:]) or re.fullmatch(r":[A-Za-z0-9_./-]+", arg) for arg in args):
-            return "deleting a remote ref requires the user's explicit authorization naming that ref."
+            return "this push deletes a remote ref."
     if subcommand == "config":
         if any(arg in ("--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "-l", "get", "list") for arg in args):
             return None
         for position, arg in enumerate(args):
             if arg.lower() in ("user.email", "user.name", "core.hookspath"):
                 if position + 1 < len(args) or any(a.startswith("--unset") for a in args) or "unset" in args:
-                    return "rewriting git identity or hooks configuration. Ask the user first."
+                    return "this command rewrites git identity or hooks configuration."
     return None
 
 
@@ -145,7 +145,7 @@ def main(stdin=None):
         return 0
     why = reason(command)
     if why:
-        print(decision("deny", "Blocked by guard-red-write: " + why))
+        print(decision("ask", "guard-red-write needs your decision: " + why))
     return 0
 
 

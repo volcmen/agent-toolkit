@@ -112,21 +112,34 @@ defeat either, so the invariant above is what actually governs:
   `.git/hooks/pre-push` in every clone under `~/notraffic` (linked worktrees
   inherit it through the common git dir; a fresh clone needs
   `~/.config/git-guards/install`). It refuses, fail-closed: any remote ref
-  deletion; moving an existing tag; any update to a branch whose history carries
-  another author; a non-fast-forward update to a branch not exclusively mine;
-  publishing a commit authored by someone else with me as committer; and any
-  case it cannot verify. A backport branch of mine that legitimately carries
+  deletion; moving an existing tag; any update to a branch whose own commits
+  carry another author; a non-fast-forward update to a branch whose own commits
+  are not all mine; publishing a commit authored by someone else with me as
+  committer; and any case it cannot verify. A branch's own commits are those on
+  no other remote-tracking ref, so a branch cut from a release line or stacked
+  on a colleague's branch is judged by its own commits, not by everything since
+  the default branch. A backport branch of mine that legitimately carries
   cherry-picked foreign commits is opted in per branch with
   `git config --add guard.ownBranch <glob>`; extra identities of mine with
-  `git config --add guard.email <addr>`.
-- `~/.claude/hooks/guard-red-write.py` (PreToolUse on Bash), which denies the
-  command shapes that route around that hook, forge author/committer identity,
-  rewrite a clone's identity, or delete a remote ref. Matching ignores heredoc
-  bodies, so documenting these commands is not blocked.
+  `git config --global --add guard.email <addr>`. `git push --dry-run` runs the
+  guard without publishing, so it answers "would this be refused" first.
+  Every refusal names its single override, `GIT_GUARD_ALLOW=<ref-glob>`, which
+  waives the guard for the matching refs of one push and nothing else.
+- `~/.claude/hooks/guard-red-write.py` (PreToolUse on Bash), which turns the
+  command shapes that route around that hook, set `GIT_GUARD_ALLOW`, forge
+  author/committer identity, rewrite a clone's identity, or delete a remote ref
+  into a permission prompt. Matching ignores heredoc bodies, so documenting
+  these commands is not prompted.
+
+When the guard refuses a push: report the refusal verbatim, say whether the
+branch is mine, and if the push is still wanted rerun it with
+`GIT_GUARD_ALLOW=<branch>`; the prompt that raises is the user's decision, and
+a denied prompt ends the attempt. Never widen the glob beyond the refused ref
+and never restamp identities to satisfy the guard.
 
 Before any push touching a branch that is not certainly mine, compare identities
-over the branch's own range rather than a guessed one:
-`git log --format='%ae|%ce' $(git merge-base origin/HEAD HEAD)..HEAD | sort -u`.
+over the branch's own commits rather than a guessed range:
+`git log --format='%ae|%ce' HEAD --not --exclude=refs/remotes/origin/<branch> --glob='refs/remotes/origin/*' | sort -u`.
 
 ## Assignment
 

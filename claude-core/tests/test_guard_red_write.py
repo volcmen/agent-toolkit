@@ -16,6 +16,7 @@ class CommandGuard(unittest.TestCase):
             "git -c core.hooksPath=/tmp push",
             "git push origin :obsolete",
             "GIT_AUTHOR_NAME=someone git commit -m change",
+            "GIT_GUARD_ALLOW=feature/theirs git push --force origin feature/theirs",
             "bash -c 'git push --delete origin obsolete'",
             "bash -lc 'git push --no-verify origin main'",
             "env -i git push --no-verify origin main",
@@ -53,7 +54,7 @@ class CommandGuard(unittest.TestCase):
                     self.assertEqual(guard.main(io.StringIO(payload)), 0)
                 self.assertEqual(json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"], "ask")
 
-    def test_clean_payload_stays_silent_and_red_payload_denies(self):
+    def test_clean_payload_stays_silent_and_red_payload_asks(self):
         import contextlib, io, json
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -62,7 +63,7 @@ class CommandGuard(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             guard.main(io.StringIO('{"tool_input": {"command": "git push --no-verify origin main"}}'))
-        self.assertEqual(json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertEqual(json.loads(out.getvalue())["hookSpecificOutput"]["permissionDecision"], "ask")
 
 
 if __name__ == "__main__":

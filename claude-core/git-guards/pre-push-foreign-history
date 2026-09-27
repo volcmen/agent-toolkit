@@ -7,12 +7,14 @@
 # Blocks, fail-closed:
 #   R1  any remote ref deletion
 #   R2  any existing tag being moved
-#   R3  any update to a branch whose history carries another author
+#   R3  any update to a branch whose own commits carry another author
 #       (their MR branch: even a plain fast-forward commit of mine there makes
 #        me a committer on their MR and voids my approval eligibility)
-#   R4  a non-fast-forward update to a branch that is not exclusively mine
+#   R4  a non-fast-forward update to a branch whose own commits are not all mine
 #   R5  publishing a commit authored by someone else and committed by me
 #   R6  any case the guard cannot verify
+#   Any rule above is waived for one push by GIT_GUARD_ALLOW=<ref-glob>, which
+#   the agent may only set with the user's explicit approval for that ref.
 #   R7  a code change with no green, non-vacuous, current run recorded against
 #       the tree being pushed (advisory by default; blocking when
 #       `git config --bool guard.requireVerify true`)
@@ -21,17 +23,20 @@
 # user this guard protects, so R7 is evidence, not proof: it catches the stale
 # tree, the vacuous run, the red-then-green, and the suite that was never run.
 #
+# A branch's own commits are those reachable from its tip and from no other
+# remote-tracking ref of the remote being pushed to, so a branch cut from a
+# release line or stacked on a colleague's branch is judged by its own commits
+# rather than by everything since the default branch.
+#
 # My identities: user.email plus every `git config --add guard.email <addr>`.
 # A branch I legitimately own that carries foreign-authored commits (a
 # cherry-picked backport) is opted in with `git config --add guard.ownBranch <glob>`.
 set -eu
 
-[ "${GIT_GUARD_OFF:-0}" = "1" ] && exit 0
-
 remote_name="${1:-origin}"
 zero_re='^0*$'
 fail=0
-die_unverified() { fail=1; printf >&2 '\nBLOCKED %s — the guard could not verify this push: %s\n' "$1" "$2"; }
+die_unverified() { fail=1; printf >&2 '\nBLOCKED %s — the guard could not verify this push: %s\n' "$1" "$2"; how_to_authorize "${1#refs/heads/}"; }
 
 verify_run=$(git config guard.verifyRun 2>/dev/null || true)
 [ -n "$verify_run" ] || verify_run="$HOME/Personal/ai/claude-core/scripts/verify-run.py"
@@ -80,15 +85,37 @@ owned_pattern() {
     done
 }
 
+allowed_once() {
+    [ -n "${GIT_GUARD_ALLOW:-}" ] || return 1
+    case "$1" in ${GIT_GUARD_ALLOW}) return 0 ;; esac
+    return 1
+}
+
+how_to_authorize() {
+    printf >&2 '%s\n' "With the user's explicit approval for this ref, and only then:  GIT_GUARD_ALLOW='$1' git push ..."
+}
+
 base_ref=""
 for cand in "refs/remotes/$remote_name/HEAD" "refs/remotes/$remote_name/main" "refs/remotes/$remote_name/master"; do
     if git rev-parse --verify -q "$cand" >/dev/null 2>&1; then base_ref="$cand"; break; fi
 done
 
-foreign_authors() {   # foreign author emails in <base>..<tip>, one per line
-    _tip=$1
-    _base=$(git merge-base "$base_ref" "$_tip" 2>/dev/null) || return 1
-    git log --format='%ae' "$_base..$_tip" 2>/dev/null | sort -u | while IFS= read -r e; do
+own_commits() {   # commits reachable from <tip> and from no other remote-tracking ref
+    _tip=$1 _branch=$2
+    _others=$(git for-each-ref --format='^%(refname)' "refs/remotes/$remote_name/" 2>/dev/null \
+        | grep -vxF "^refs/remotes/$remote_name/$_branch" || true)
+    if [ -n "$_others" ]; then
+        printf '%s\n' "$_others" | git rev-list --stdin "$_tip" 2>/dev/null
+    else
+        _base=$(git merge-base "$base_ref" "$_tip" 2>/dev/null) || return 1
+        git rev-list "$_base..$_tip" 2>/dev/null
+    fi
+}
+
+foreign_authors() {   # foreign author emails among a branch's own commits, one per line
+    _commits=$(own_commits "$1" "$2") || return 1
+    [ -n "$_commits" ] || return 0
+    printf '%s\n' "$_commits" | git log --stdin --no-walk --format='%ae' 2>/dev/null | sort -u | while IFS= read -r e; do
         [ -n "$e" ] || continue
         is_mine "$e" || echo "$e"
     done
@@ -97,12 +124,17 @@ foreign_authors() {   # foreign author emails in <base>..<tip>, one per line
 while read -r local_ref local_sha remote_ref remote_sha; do
     [ -n "${remote_ref:-}" ] || continue
     branch=${remote_ref#refs/heads/}
+    if allowed_once "$branch" || allowed_once "$remote_ref"; then
+        printf >&2 '\nALLOWED by GIT_GUARD_ALLOW: %s\n' "$remote_ref"
+        continue
+    fi
 
     # R1 — deletion
     if is_zero "$local_sha"; then
         fail=1
         printf >&2 '\nBLOCKED deletion of %s on %s.\n' "$remote_ref" "$remote_name"
-        printf >&2 '%s\n' 'Deleting a remote ref is not recoverable from here. Do it deliberately, by hand.'
+        printf >&2 '%s\n' 'Deleting a remote ref is not recoverable from here.'
+        how_to_authorize "$branch"
         continue
     fi
 
@@ -111,6 +143,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         if ! is_zero "$remote_sha" && [ "$local_sha" != "$remote_sha" ]; then
             fail=1
             printf >&2 '\nBLOCKED tag move: %s (%s -> %s).\n' "$remote_ref" "$remote_sha" "$local_sha"
+            how_to_authorize "$remote_ref"
             continue
         fi ;;
     esac
@@ -123,7 +156,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 
     # R3 — the remote branch already carries someone else's work: it is theirs
     if ! is_zero "$remote_sha" && git rev-parse --verify -q "$remote_sha" >/dev/null 2>&1; then
-        if ! theirs=$(foreign_authors "$remote_sha"); then
+        if ! theirs=$(foreign_authors "$remote_sha" "$branch"); then
             die_unverified "$remote_ref" "cannot read the history of the remote tip"
             continue
         fi
@@ -133,6 +166,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
             printf >&2 '  %s\n' $theirs
             printf >&2 '%s\n' 'Any commit of mine there makes me a committer on their MR, which removes my'
             printf >&2 '%s\n' 'approval eligibility. Ask the branch owner to make the change.'
+            how_to_authorize "$branch"
             continue
         fi
     fi
@@ -149,13 +183,16 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     # R4 — non-fast-forward on a branch that is not exclusively mine
     if ! is_zero "$remote_sha"; then
         if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
-            if ! authors=$(foreign_authors "$local_sha"); then
+            if ! authors=$(foreign_authors "$local_sha" "$branch"); then
                 die_unverified "$remote_ref" "cannot establish who wrote this branch"; continue
             fi
             if [ -n "$authors" ]; then
                 fail=1
                 printf >&2 '\nBLOCKED non-fast-forward update to %s — it rewrites history containing another author:\n' "$remote_ref"
                 printf >&2 '  %s\n' $authors
+                printf >&2 '%s\n' 'Another address of mine:  git config --global --add guard.email <addr>'
+                printf >&2 '%s\n' 'A branch that is genuinely mine:  git config --add guard.ownBranch <branch-glob>'
+                how_to_authorize "$branch"
                 continue
             fi
         fi
@@ -204,6 +241,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         printf >&2 '%s\n' 'records me as a committer on their MR and voids my approval eligibility there.'
         printf >&2 '%s\n' 'The branch owner runs the rebase. For a backport branch that is genuinely mine:'
         printf >&2 '%s\n' '  git config --add guard.ownBranch <branch-glob>'
+        how_to_authorize "$branch"
     fi
 done
 
