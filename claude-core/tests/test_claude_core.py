@@ -513,7 +513,6 @@ class SettingsFragment(unittest.TestCase):
                     edges,
                     {
                         "hooks/f17-ticket-keys.sh",
-                        "hooks/guard-red-write.py",
                         "scripts/obsidian_memory.py",
                         "statusline.py",
                     },
