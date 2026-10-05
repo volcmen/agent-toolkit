@@ -14,7 +14,7 @@ proportional verification rules.
 | F4 | blast-radius-unmeasured | changed behavior affects a population or fan-out | establish the affected bound when material to correctness, cost, or rollout |
 | F5 | sibling-path-unswept | fix changes a repeated behavior or shared contract | search the fixed pattern for affected peers; justify relevant unchanged callers |
 | F6 | boundary-uncoerced | added `sorted(`/`min(`/`max(`/`.sort(` | iterable may mix int/float/str from JSON/API? needs `key=str`/canonical key or FAIL |
-| F7 | non-discriminating-test | test may pass without the production behavior | inspect its assertions; reuse observed failing-before/passing-after reproduction. Only if doubt remains, run one targeted mutation in isolation; setup/import failures are not proof |
+| F7 | non-discriminating-test | test may pass without the production behavior | inspect its assertions; reuse observed failing-before/passing-after reproduction. Only if doubt remains, run one targeted mutation in isolation; setup/import failures are not proof; a test that re-implements the expression under test instead of calling it = FAIL |
 | F8 | partial-function-misuse | added `parseInt`/`Number(`/`JSON.parse`/`int(`/`float(` | justify prefix-parse (`"12abc"`), undefined/NaN, `"1e5"` per call |
 | F9 | scope-rider | any src change | hunk not required by the ticket → split or name it in the description |
 | F10 | remediation-path-removed | added `disabled`/`readOnly`/`locked`, removed button/link | grep every flow routing users TO the affordance; each keeps a surviving path |
@@ -29,7 +29,7 @@ proportional verification rules.
 | F19 | example-only-test-for-contract-function | new test without hypothesis/fast-check; pinned seed is MECH FAIL | target is a pure/contract function? name the property class (round-trip/invariant/idempotence/oracle/metamorphic) or why none applies |
 | F20 | capability-duplicates-existing-validator | new validation capability | search existing validators for the same contract; reuse overlap before adding another mechanism |
 | F21 | session-link-leak | MECH | session URL / `Co-Authored-By: Claude` / `Generated with Claude` in commit bodies or MR description = FAIL |
-| F22 | test-unwired-from-runner | new test file with no CI/runner-config reference | name the CI job + discovery glob (paste line), or paste an OPEN ticket/MR URL that wires it; prose disclosure = FAIL |
+| F22 | test-unwired-from-runner | new test file with no CI/runner-config reference | name the CI job + discovery glob (paste line), or paste an OPEN ticket/MR URL that wires it; prose disclosure = FAIL. The runner list may live in a shared library outside the repo; read it there. The job's `changes:` filter must also cover each non-test file the test reads |
 | F23 | paginated-response-first-page-only | added API list read | endpoint paginates? loop follows `next` or passes a server-honoured filter (read the ViewSet) |
 | F24 | dead-code-left-by-fix | removed behavior may leave unused symbols | use existing lint evidence for affected files or inspect consumers; do not invoke an unrelated compiler on every change |
 | F25 | feedback-surface-occluded | added toast/snackbar/Alert/notify | rejection renders above its trigger (z-order, unmount); test asserts `toBeVisible` |
@@ -40,6 +40,7 @@ proportional verification rules.
 | F32 | mr-state-hygiene | MECH | `mr-doctor.sh` settles 12 MR-metadata invariants (stale diff refs after a retarget, phantom `changes_count`, head behind branch tip, merge conflict, missing/red pipeline on head, session-link leak, draft, unresolved threads, missing ticket key, no reviewer, an unresolvable GitLab link in the description). Paste its rows. Never expand them here — mechanical rules live in the script, not in this table |
 
 | F38 | verification-claimed-not-observed | MECH | `python3 ~/.claude/scripts/verify-run.py --gate HEAD` for the branch tip. Only PASS counts. MISSING = nothing ran against this tree; VACUOUS = a green command that counted no test (a typecheck, a zero-collection run, `echo`); FAIL = the scope's last authorized attempt failed; FLAKY = it passed only after failing, which is a finding not a pass; STALE = the lockfiles moved since the passing run; CHAIN BROKEN = the ledger was edited outside the wrapper. Paste the line. The verdict table names the scope that ran and every scope that did not; reused evidence is reported as reused, never as "ran this turn". The ledger is written by this user, so it is evidence against careless reasoning, not proof |
+| F39 | release-fix-without-main-twin | MR targets a release branch | paste `glab mr list --search <KEY>` showing an open or merged MR with the same change targeting the default branch, or the description says why the default branch must not get it; a missing twin regresses at the next cut |
 
 ## Out-of-gate checkpoints (not evaluated at ready-for-review)
 
