@@ -4632,6 +4632,30 @@ Prior: old unrelated outcome.
             self.assertEqual(MODULE.stop_hook(), 0)
         return json.loads(stdout.getvalue())
 
+    def test_stop_without_vault_access_leaves_the_shared_status_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            vault = self.make_vault(root)
+            self.init_git_vault(vault)
+            (vault / "wiki" / "hot.md").write_text("new memory\n", encoding="utf-8")
+            config_path = self.write_config(root, vault, auto_commit=True, commit_paths=["wiki"])
+            status_path = MODULE.stop_status_path(config_path)
+            earlier = {"run_id": "earlier", "ok": True, "detail": "vault is clean", "reported": False}
+            MODULE.write_stop_status(status_path, earlier)
+            spawn = mock.Mock()
+            with (
+                mock.patch.dict(os.environ, {"OBSIDIAN_MEMORY_CONFIG": str(config_path)}),
+                mock.patch.object(MODULE.os, "scandir", side_effect=PermissionError(1, "Operation not permitted")),
+                mock.patch.object(MODULE, "spawn_stop_commit", spawn),
+                mock.patch.object(MODULE.sys, "stdin", io.StringIO("{}")),
+                contextlib.redirect_stdout(io.StringIO()) as stdout,
+            ):
+                self.assertEqual(MODULE.stop_hook(), 0)
+            self.assertEqual(json.loads(stdout.getvalue()), {})
+            spawn.assert_not_called()
+            self.assertEqual(MODULE.read_stop_status(status_path), earlier)
+            self.assertEqual(self.git_stdout(vault, "status", "--short", "wiki"), " M wiki/hot.md\n")
+
     def test_an_unfinished_run_reports_an_earlier_background_failure_once(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

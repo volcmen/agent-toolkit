@@ -1339,6 +1339,17 @@ def spawn_stop_commit(run_id: str) -> subprocess.Popen[bytes]:
     )
 
 
+def vault_listable(vault: Path) -> bool:
+    try:
+        with os.scandir(vault) as entries:
+            next(entries, None)
+    except PermissionError:
+        return False
+    except OSError:
+        pass
+    return True
+
+
 def stop_hook() -> int:
     read_hook_input()
     try:
@@ -1346,7 +1357,7 @@ def stop_hook() -> int:
     except ConfigurationError:
         json_output({})
         return 0
-    if not config["auto_commit"]:
+    if not config["auto_commit"] or not vault_listable(config["vault"]):
         json_output({})
         return 0
     status_path = stop_status_path(path)
