@@ -14,6 +14,13 @@ No preamble, edit commentary, repeated summary, or empty template sections.
 - Longer document: a short opening summary, then useful sections. Keep needed
   detail; these defaults never truncate facts, warnings, or requested content.
 
+- Reply to the user in chat: the answer in the first line, then at most 5
+  short lines. Name each open decision once. Leave out how you got there.
+- Message sent as the user: a greeting line with the first name; "Thanks X!"
+  is enough inside a running thread. Then at most 3 short lines or bullets
+  (about 50 words), then a few-word polite close. Give the conclusion and the
+  ask, not the mechanism, and offer the details instead of writing them out.
+
 A short source stays short. Use bullets for parallel points, headings only
 when they help navigation. Optional emoji should convey status or intent
 (✅ done, 👀 review, ⚠️ blocker); usually zero or one. No decorative emoji in
