@@ -13,6 +13,8 @@
 #   R4  a non-fast-forward update to a branch whose own commits are not all mine
 #   R5  publishing a commit authored by someone else and committed by me
 #   R6  any case the guard cannot verify
+#   R8  creating a remote branch whose name carries no ticket key, on a
+#       notraffic GitLab remote or with guard.requireTicketBranch=true
 #   Any rule above is waived for one push by GIT_GUARD_ALLOW=<ref-glob>, which
 #   the agent may only set with the user's explicit approval for that ref.
 #   R7  a code change with no green, non-vacuous, current run recorded against
@@ -85,6 +87,22 @@ owned_pattern() {
     done
 }
 
+ticket_branch_required() {
+    case "$(git config --bool guard.requireTicketBranch 2>/dev/null || true)" in
+        true) return 0 ;;
+        false) return 1 ;;
+    esac
+    case "$(git remote get-url "$remote_name" 2>/dev/null || true)" in
+        *gitlab.com[:/]notraffic/*) return 0 ;;
+    esac
+    return 1
+}
+
+branch_has_ticket() {
+    case "$1" in main|master|develop|release|release/*|release-*) return 0 ;; esac
+    printf '%s' "$1" | grep -Eq '(^|[^A-Za-z0-9])[A-Z][A-Z0-9]+-[0-9]+'
+}
+
 allowed_once() {
     [ -n "${GIT_GUARD_ALLOW:-}" ] || return 1
     case "$1" in ${GIT_GUARD_ALLOW}) return 0 ;; esac
@@ -144,6 +162,17 @@ while read -r local_ref local_sha remote_ref remote_sha; do
             fail=1
             printf >&2 '\nBLOCKED tag move: %s (%s -> %s).\n' "$remote_ref" "$remote_sha" "$local_sha"
             how_to_authorize "$remote_ref"
+            continue
+        fi ;;
+    esac
+
+    # R8 — a new branch must carry its ticket key
+    case "$remote_ref" in refs/heads/*)
+        if is_zero "$remote_sha" && ticket_branch_required && ! branch_has_ticket "$branch"; then
+            fail=1
+            printf >&2 '\nBLOCKED new branch %s: the name carries no ticket key (<type>/<PROJECT>-<number>-<slug>).\n' "$branch"
+            printf >&2 '%s\n' 'Create or find the Jira task first, then: git branch -m <type>/<PROJECT>-<number>-<slug>'
+            how_to_authorize "$branch"
             continue
         fi ;;
     esac

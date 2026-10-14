@@ -142,6 +142,35 @@ class PrePushGuard(unittest.TestCase):
         self.assertRefused(self.me.push("origin", ":feature/theirs"), "deletion")
         self.assertAllowed(self.me.push("origin", ":feature/theirs", env={"GIT_GUARD_ALLOW": "feature/*"}))
 
+    def test_a_new_branch_without_a_ticket_key_is_refused_when_required(self) -> None:
+        self.me.git("config", "guard.requireTicketBranch", "true")
+        self.me.git("checkout", "-qb", "fix/token-size", "origin/main")
+        self.me.commit("m1")
+        self.assertRefused(self.me.push("origin", "fix/token-size"), "carries no ticket key")
+        self.me.git("branch", "-m", "fix/PROJ-42-token-size")
+        self.assertAllowed(self.me.push("origin", "fix/PROJ-42-token-size"))
+        self.assertAllowed(self.me.push("origin", "fix/PROJ-42-token-size:refs/heads/release/2610"))
+
+    def test_an_existing_branch_without_a_key_keeps_pushing(self) -> None:
+        self.me.git("checkout", "-qb", "legacy-branch", "origin/main")
+        self.me.commit("m1")
+        self.assertAllowed(self.me.push("origin", "legacy-branch"))
+        self.me.git("config", "guard.requireTicketBranch", "true")
+        self.me.commit("m2")
+        self.assertAllowed(self.me.push("origin", "legacy-branch"))
+
+    def test_the_ticket_rule_is_off_for_other_remotes_by_default(self) -> None:
+        self.me.git("checkout", "-qb", "scratch", "origin/main")
+        self.me.commit("m1")
+        self.assertAllowed(self.me.push("origin", "scratch"))
+
+    def test_guard_allow_waives_the_ticket_rule(self) -> None:
+        self.me.git("config", "guard.requireTicketBranch", "true")
+        self.me.git("checkout", "-qb", "spike", "origin/main")
+        self.me.commit("m1")
+        self.assertRefused(self.me.push("origin", "spike"), "GIT_GUARD_ALLOW='spike' git push")
+        self.assertAllowed(self.me.push("origin", "spike", env={"GIT_GUARD_ALLOW": "spike"}))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -32,6 +32,7 @@ MANAGED_FILES = (
     "hooks/f17-ticket-keys.sh",
     "hooks/f17-comment-count.sh",
     "hooks/guard-red-write.py",
+    "hooks/ticket-key-guard.sh",
     "scripts/verify-run.py",
     "scripts/test-quality-scan.py",
 )
@@ -88,6 +89,7 @@ REQUIRED_DIRECTORY_FILES = {
 }
 EXECUTABLES = (
     "hooks/f17-ticket-keys.sh",
+    "hooks/ticket-key-guard.sh",
     "hooks/f17-comment-count.sh",
     "statusline.py",
     "git-guards/install",

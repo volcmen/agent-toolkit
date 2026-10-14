@@ -6,6 +6,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash ~/.claude/hooks/ticket-key-guard.sh",
+            "timeout": 10,
+            "statusMessage": "Ticket key check"
+          },
+          {
+            "type": "command",
             "command": "rtk hook claude",
             "timeout": 5
           }
