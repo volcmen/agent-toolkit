@@ -32,6 +32,8 @@ class TicketKeyGuard(unittest.TestCase):
         self.assertIsNone(run(f"git -C {REPO} checkout -b fix/PROJ-42-token-size"))
         self.assertIsNone(run(f"git -C {REPO} switch -c release/2610 origin/main"))
         self.assertIsNone(run(f"git -C {REPO} checkout main"))
+        self.assertIsNone(run(f"git -C {REPO} worktree add -B ntst_8.0.0 .worktrees/x origin/ntst_8.0.0"))
+        self.assertTrue(denied(run(f"git -C {REPO} checkout -b ntst_joel_test")))
 
     def test_mr_create_needs_a_keyed_title_and_branch(self) -> None:
         base = f"cd {REPO} && glab mr create --source-branch fix/PROJ-42-x"

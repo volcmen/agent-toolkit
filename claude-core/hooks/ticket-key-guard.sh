@@ -4,7 +4,7 @@ cmd=$(printf '%s' "$payload" | jq -r '.tool_input.command // empty')
 [ -z "$cmd" ] && exit 0
 cwd=$(printf '%s' "$payload" | jq -r '.cwd // empty')
 key_re='(^|[^A-Za-z0-9])[A-Z][A-Z0-9]+-[0-9]+'
-exempt_re='^(main|master|develop|release|release/.*|release-.*)$'
+exempt_re='^(main|master|develop|release|release/.*|release-.*|ntst_[0-9]+(\.[0-9]+)*)$'
 
 block() {
   jq -n --arg r "$1" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
