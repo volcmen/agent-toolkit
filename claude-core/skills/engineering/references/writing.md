@@ -16,10 +16,50 @@ No preamble, edit commentary, repeated summary, or empty template sections.
 
 - Reply to the user in chat: the answer in the first line, then at most 5
   short lines. Name each open decision once. Leave out how you got there.
-- Message sent as the user: a greeting line with the first name; "Thanks X!"
-  is enough inside a running thread. Then at most 3 short lines or bullets
-  (about 50 words), then a few-word polite close. Give the conclusion and the
-  ask, not the mechanism, and offer the details instead of writing them out.
+- Message sent as the user: see the next section.
+
+## Slack and chat messages sent as the user
+
+Write the way the user types: compact, direct, friendly through plain
+helpfulness, not ceremony.
+
+- No opener. No "Good morning/afternoon/evening", "Hi X!", "Thanks X!",
+  "Sure, X." line, in a new DM, a thread, or a channel. Only when the other
+  person opened a DM with a greeting or "how are you", answer it in a few words
+  on the first line ("Hey Daniel, all good.") and go on.
+- The first line is the answer, the status, or the ask. Address someone in a
+  channel by @mention at the start of that line.
+- 1–3 short lines, one idea per line, about 40 words. Offer details or link
+  them instead of writing them out; a table or report only when asked for one.
+- Plain words and the cause stated plainly: "Tracker was out of date,
+  updating it now." No praise, apology, or agreeing back: never "you're right",
+  "good question", "great point", "sorry for the delay", "thanks for flagging".
+- Questions are direct and end with "?": "Pre jobs still running?"
+- Names, numbers, customer ids, MR refs, and links exactly as in the source.
+- No sign-off. "Thanks" only for something actually received, once, at the end.
+- No headings, bold labels, or bullets for two points. At most one emoji, and
+  only when it carries meaning (🙏 on a request, ✅ for done).
+- Match the thread's language and register; never more formal than the thread.
+
+Before → after:
+
+- "Good afternoon Marina! None of them are customer users: they're distributor
+  accounts (…), same as in the table this morning. They're missing from the Sep
+  27 export because …" → "None are customer users, all distributor accounts
+  (Orange Traffic on c454 and c534, TAPCO on c545). Not in the Sep 27 export;
+  we add them after cutover with create-client-user-v3."
+- "Good afternoon Daniel! For the remaining 2604 → 2606 client migrations, do
+  we have automation that opens the CR …? Could MOS-automation-prod be the
+  pre/post gate …? Thanks!" → "Need to migrate customers from 2604.* to
+  2604.8. Does the automation handle the migration checks?"
+- "Good evening Eliel! Approved !17341 ([BUGFIX] NTD-9900: Key …). Thanks!" →
+  "Approved !17341."
+- "Sorry for the delay, Marina! The Auth0 export file has no records at all for
+  c527 and c440 …" → "c527 and c440 are missing from the Auth0 export
+  entirely, so it isn't a date cut-off. Checking why on the Auth0 side."
+- "Thanks Marina! That 0 is a tracker bug: c216 has … and the count let the
+  inactive row win." → "That 0 is a tracker bug: c216 has 1 active user.
+  Fixing the count now."
 
 A short source stays short. Use bullets for parallel points, headings only
 when they help navigation. Optional emoji should convey status or intent
