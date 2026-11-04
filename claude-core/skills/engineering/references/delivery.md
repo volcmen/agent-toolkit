@@ -34,7 +34,10 @@ route.
   claim externally, before closing a ticket: the out-of-gate checkpoints F3,
   F26, F28, F29 in `~/.claude/skills/mr-preflight/failure-modes.md`.
 - Merge only when requested, after the full diff, the required approvals, and
-  CI have been inspected.
+  CI have been inspected. With desk's auto-merge on (`[gitlab].auto_merge`),
+  David's own MRs approved by someone else land through desk: never merge,
+  rebase, or push to one just to land it, because a changed patch clears the
+  approvals.
 
 ## Review feedback
 
