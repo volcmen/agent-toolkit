@@ -1,6 +1,9 @@
 """Hook entry point that feeds session-bg's per-pane control channel."""
 import os
 import sys
+import time
+
+STARTED = time.monotonic()
 
 if not os.environ.get("SBG_STATE"):
     sys.exit(0)
@@ -10,7 +13,6 @@ import hashlib
 import uuid
 import re
 import shlex
-import time
 from pathlib import Path
 from sbg_name import Names, apply_name, clean_name
 
@@ -496,7 +498,7 @@ def main():
     payload = read_payload() if sys.argv[1] != "end" else {}
     os.makedirs(state_dir, exist_ok=True)
     with open(os.path.join(state_dir, ".writer.lock"), "a", encoding="utf-8") as lock:
-        deadline = time.monotonic() + WRITER_LOCK_WAIT_SECONDS
+        deadline = STARTED + WRITER_LOCK_WAIT_SECONDS
         while True:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

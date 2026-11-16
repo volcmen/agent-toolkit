@@ -291,6 +291,23 @@ class SafetyTests(unittest.TestCase):
 
 
 class WriterContentionTests(unittest.TestCase):
+    def test_lock_wait_counts_from_start_so_a_slow_stdin_still_fits_the_host_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pane = Path(tmp)
+            env = dict(os.environ, SBG_STATE=str(pane))
+            with (pane / ".writer.lock").open("a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                start = time.monotonic()
+                proc = subprocess.Popen(
+                    [sys.executable, "-S", str(SCRIPT), "tool"],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                )
+                time.sleep(1.0)
+                proc.communicate(json.dumps({"session_id": "one"}).encode(), timeout=5)
+                elapsed = time.monotonic() - start
+            self.assertEqual(proc.returncode, 0)
+            self.assertLess(elapsed, 1.75, f"hook took {elapsed:.2f} s")
+
     def test_busy_writer_exits_before_host_timeout_and_next_event_recovers(self):
         with tempfile.TemporaryDirectory() as tmp:
             pane = Path(tmp)
@@ -472,6 +489,11 @@ class HooksManifestTests(unittest.TestCase):
         for hook in self._iter_hook_commands():
             self.assertLessEqual(hook["timeout"], 2)
             self.assertGreaterEqual(hook["timeout"], 1)
+
+    def test_prompt_hook_runs_in_background_so_it_never_holds_the_prompt(self):
+        for block in self.manifest["hooks"]["UserPromptSubmit"]:
+            for hook in block["hooks"]:
+                self.assertIs(hook.get("async"), True)
 
     def test_expected_events_are_present(self):
         expected = {

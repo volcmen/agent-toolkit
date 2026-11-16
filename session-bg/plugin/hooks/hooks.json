@@ -21,7 +21,8 @@
             "type": "command",
             "command": "python3 -S \"${CLAUDE_PLUGIN_ROOT}/scripts/sbg_state.py\" thinking",
             "commandWindows": "py -3 \"%CLAUDE_PLUGIN_ROOT%\\scripts\\sbg_state.py\" thinking",
-            "timeout": 2
+            "timeout": 2,
+            "async": true
           }
         ]
       }
